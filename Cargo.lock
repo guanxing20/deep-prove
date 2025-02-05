@@ -2771,6 +2771,7 @@ dependencies = [
 name = "zkml"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "ark-std",
  "ff",
  "ff_ext",

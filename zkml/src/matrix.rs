@@ -1,10 +1,13 @@
-use std::fmt::{Debug, Display, Write};
+use std::fmt::Write;
 
-use ark_std::rand::{self, RngCore};
-use ff_ext::{ExtensionField, ff::Field};
+use anyhow::ensure;
+use ark_std::rand::{self};
+use ff_ext::ExtensionField;
 use itertools::Itertools;
 use multilinear_extensions::mle::{DenseMultilinearExtension, MultilinearExtension};
-use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
+use rayon::iter::{
+    IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator, ParallelIterator,
+};
 
 #[derive(Clone)]
 pub struct Matrix<E> {
@@ -17,6 +20,17 @@ impl<E> Matrix<E>
 where
     E: ExtensionField,
 {
+    pub fn from_coeffs(coeffs: Vec<Vec<E>>) -> anyhow::Result<Self> {
+        let n_rows = coeffs.len();
+        let n_cols = coeffs.first().expect("at least one row in a matrix").len();
+        for row in &coeffs {
+            ensure!(n_cols == row.len());
+        }
+        Ok(Self {
+            dim: (n_rows, n_cols),
+            coeffs,
+        })
+    }
     /// From a given row and a given column, return the vector of field elements in the right
     /// format to evaluate the MLE.
     /// little endian so we need to read cols before rows
@@ -78,7 +92,7 @@ where
     pub fn random((rows, cols): (usize, usize)) -> Self {
         let coeffs = (0..rows * cols)
             .into_par_iter()
-            .map(|i| {
+            .map(|_| {
                 let mut rng = rand::thread_rng();
                 E::random(&mut rng)
                 // E::from(i as u64)
@@ -106,6 +120,24 @@ where
         }
         out
     }
+
+    /// Performs vector matrix multiplication in a school book naive way.
+    /// TODO: actually getting the result should be done via proper tensor-like libraries like
+    /// candle that can handle this algo much faster
+    pub fn matmul(&self, vec: Vec<E>) -> Vec<E> {
+        self.coeffs
+            .par_iter()
+            .map(|row| {
+                assert_eq!(row.len(), vec.len());
+                // dot product
+                row.clone()
+                    .into_iter()
+                    .zip(vec.iter())
+                    .map(|(a, b)| a * b)
+                    .sum()
+            })
+            .collect()
+    }
 }
 
 fn to_bit_sequence_le(num: usize, bit_length: usize) -> impl Iterator<Item = usize> {
@@ -119,13 +151,9 @@ fn to_bit_sequence_le(num: usize, bit_length: usize) -> impl Iterator<Item = usi
 #[cfg(test)]
 mod test {
     use ark_std::rand::{Rng, thread_rng};
-    use ff::Field;
     use ff_ext::ExtensionField;
-    use goldilocks::{Goldilocks, GoldilocksExt2};
-    use itertools::Itertools;
+    use goldilocks::GoldilocksExt2;
     use multilinear_extensions::mle::MultilinearExtension;
-
-    use crate::matrix::to_bit_sequence_le;
 
     use super::Matrix;
 
@@ -146,19 +174,19 @@ mod test {
         }
     }
 
-    pub fn to_bit_sequence_be(num: usize, bit_length: usize) -> impl Iterator<Item = usize> {
-        assert!(
-            bit_length as u32 <= usize::BITS,
-            "bit_length cannot exceed usize::BITS"
-        );
-        ((usize::BITS - bit_length as u32)..usize::BITS)
-            .rev()
-            .map(move |i| ((num >> i) & 1) as usize)
+    type E = GoldilocksExt2;
+    #[test]
+    fn test_matrix_matmul() {
+        let mat = vec![vec![E::from(1), E::from(2)], vec![E::from(3), E::from(4)]];
+        let x = vec![E::from(5), E::from(6)];
+        let out = vec![E::from(17), E::from(39)];
+        let mat = Matrix::<E>::from_coeffs(mat).unwrap();
+        let res = mat.matmul(x);
+        assert_eq!(out, res);
     }
 
     #[test]
     fn test_matrix_mle() {
-        type E = GoldilocksExt2;
         let mat = Matrix::<E>::random((4, 4)).pad_next_power_of_two();
         println!("matrix: {}", mat.fmt_integer());
         let mle = mat.clone().to_mle();
