@@ -1,4 +1,4 @@
-use std::fmt::{Debug, Display};
+use std::fmt::{Debug, Display, Write};
 
 use ark_std::rand::{self, RngCore};
 use ff_ext::{ExtensionField, ff::Field};
@@ -27,6 +27,7 @@ where
             .collect_vec()
     }
 
+    /// Returns a MLE of the matrix that can be evaluated.
     pub fn to_mle(self) -> impl MultilinearExtension<E> {
         assert!(
             self.nrows().is_power_of_two(),
@@ -78,9 +79,9 @@ where
         let coeffs = (0..rows * cols)
             .into_par_iter()
             .map(|i| {
-                // let mut rng = rand::thread_rng();
-                // E::random(&mut rng)
-                E::from(i as u64)
+                let mut rng = rand::thread_rng();
+                E::random(&mut rng)
+                // E::from(i as u64)
             })
             .chunks(cols)
             .collect();
@@ -95,16 +96,15 @@ where
     pub fn ncols(&self) -> usize {
         self.dim.1
     }
-}
 
-impl<E: ExtensionField> Debug for Matrix<E> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Matrix({},{})\n", self.nrows(), self.ncols())?;
+    pub fn fmt_integer(&self) -> String {
+        let mut out = String::new();
+        write!(out, "Matrix({},{})\n", self.nrows(), self.ncols()).expect("...");
         for (i, row) in self.coeffs.iter().enumerate() {
             let row_int = row.iter().map(|c| c.to_canonical_u64_vec()).collect_vec();
-            write!(f, "{}: {:?}\n", i, row_int)?;
+            write!(out, "{}: {:?}\n", i, row_int).expect("..");
         }
-        Ok(())
+        out
     }
 }
 
@@ -160,7 +160,7 @@ mod test {
     fn test_matrix_mle() {
         type E = GoldilocksExt2;
         let mat = Matrix::<E>::random((4, 4)).pad_next_power_of_two();
-        println!("matrix: {:?}", mat);
+        println!("matrix: {}", mat.fmt_integer());
         let mle = mat.clone().to_mle();
         let (elem_x, elem_y) = (
             thread_rng().gen_range(0..mat.dim.0),
