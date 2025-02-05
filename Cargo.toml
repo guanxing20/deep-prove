@@ -13,7 +13,7 @@ members = [
   "sumcheck",
   "transcript",
   "simple-frontend",
-  "gkr",
+  "gkr", "zkml",
 ]
 resolver = "2"
 
