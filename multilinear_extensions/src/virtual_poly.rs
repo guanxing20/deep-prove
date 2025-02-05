@@ -143,6 +143,46 @@ impl<'a, E: ExtensionField> VirtualPolynomial<'a, E> {
         self.products.push((coefficient, indexed_product));
     }
 
+    /// Multiple the current VirtualPolynomial by an MLE:
+    /// - add the MLE to the MLE list;
+    /// - multiple each product by MLE and its coefficient.
+    /// Returns an error if the MLE has a different `num_vars()` from self.
+    pub fn mul_by_mle(&mut self, mle: ArcMultilinearExtension<'a, E>, coefficient: E::BaseField) {
+        let start = start_timer!(|| "mul by mle");
+
+        assert_eq!(
+            mle.num_vars(),
+            self.aux_info.max_num_variables,
+            "product has a multiplicand with wrong number of variables {} vs {}",
+            mle.num_vars(),
+            self.aux_info.max_num_variables
+        );
+
+        let mle_ptr = Arc::as_ptr(&mle) as *const () as usize;
+
+        // check if this mle already exists in the virtual polynomial
+        let mle_index = match self.raw_pointers_lookup_table.get(&mle_ptr) {
+            Some(&p) => p,
+            None => {
+                self.raw_pointers_lookup_table
+                    .insert(mle_ptr, self.flattened_ml_extensions.len());
+                self.flattened_ml_extensions.push(mle);
+                self.flattened_ml_extensions.len() - 1
+            }
+        };
+
+        for (prod_coef, indices) in self.products.iter_mut() {
+            // - add the MLE to the MLE list;
+            // - multiple each product by MLE and its coefficient.
+            indices.push(mle_index);
+            *prod_coef *= coefficient;
+        }
+
+        // increase the max degree by one as the MLE has degree 1.
+        self.aux_info.max_degree += 1;
+        end_timer!(start);
+    }
+
     /// in-place merge with another virtual polynomial
     pub fn merge(&mut self, other: &VirtualPolynomial<'a, E>) {
         let start = start_timer!(|| "virtual poly add");
