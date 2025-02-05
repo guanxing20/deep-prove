@@ -12,6 +12,7 @@ members = [
   "poseidon",
   "sumcheck",
   "transcript",
+  "simple-frontend",
 ]
 resolver = "2"
 
