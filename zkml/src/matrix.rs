@@ -124,10 +124,11 @@ where
     /// Performs vector matrix multiplication in a school book naive way.
     /// TODO: actually getting the result should be done via proper tensor-like libraries like
     /// candle that can handle this algo much faster
-    pub fn matmul(&self, vec: Vec<E>) -> Vec<E> {
+    pub fn matmul(&self, vec: &[E]) -> Vec<E> {
         self.coeffs
             .par_iter()
             .map(|row| {
+                // check the number of columns correspond to the length of the vector
                 assert_eq!(row.len(), vec.len());
                 // dot product
                 row.clone()
@@ -175,19 +176,20 @@ mod test {
     }
 
     type E = GoldilocksExt2;
+
     #[test]
     fn test_matrix_matmul() {
         let mat = vec![vec![E::from(1), E::from(2)], vec![E::from(3), E::from(4)]];
         let x = vec![E::from(5), E::from(6)];
         let out = vec![E::from(17), E::from(39)];
         let mat = Matrix::<E>::from_coeffs(mat).unwrap();
-        let res = mat.matmul(x);
+        let res = mat.matmul(&x);
         assert_eq!(out, res);
     }
 
     #[test]
     fn test_matrix_mle() {
-        let mat = Matrix::<E>::random((4, 4)).pad_next_power_of_two();
+        let mat = Matrix::<E>::random((3, 5)).pad_next_power_of_two();
         println!("matrix: {}", mat.fmt_integer());
         let mle = mat.clone().to_mle();
         let (elem_x, elem_y) = (

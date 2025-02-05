@@ -1,11 +1,6 @@
 [workspace]
 members = [
-  "ceno_emul",
-  "ceno_host",
-  "ceno_rt",
-  "ceno_zkvm",
-  "examples-builder",
-  "examples",
+  "ff_ext",
   "mpcs",
   "multilinear_extensions",
   "sumcheck_macro",
