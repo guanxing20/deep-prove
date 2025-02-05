@@ -1,0 +1,18 @@
+[package]
+name = "zkml"
+categories.workspace = true
+edition.workspace = true
+keywords.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+version.workspace = true
+
+[dependencies]
+ark-std.workspace = true
+ff.workspace = true
+ff_ext = { version = "0.1.0", path = "../ff_ext" }
+itertools.workspace = true
+rayon.workspace = true
+goldilocks.workspace = true
+multilinear_extensions = { version = "0.1.0", path = "../multilinear_extensions" , features = ["parallel"]}
