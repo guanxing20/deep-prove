@@ -180,9 +180,12 @@ mod test {
         /// Returns a random model with specified number of dense layers and a matching input.
         pub fn random(num_dense_layers: usize) -> (Self, Vec<E>) {
             let mut model = Model::new();
+            let mut rng = thread_rng();
+            let mut last_row = rng.gen_range(3..15);
             for _ in 0..num_dense_layers {
-                let mut rng = thread_rng();
-                let (nrows, ncols) = (rng.gen_range(3..15), rng.gen_range(3..15));
+                // last row becomes new column
+                let (nrows, ncols) = (rng.gen_range(3..15), last_row);
+                last_row = nrows;
                 let mat = Matrix::<E>::random((nrows, ncols)).pad_next_power_of_two();
                 model.add_layer(Layer::Dense(mat));
             }
@@ -191,6 +194,12 @@ mod test {
             let input = random_vector(input_dims.1);
             (model, input)
         }
+    }
+
+    #[test]
+    fn test_model_long() {
+        let (model, input) = Model::<F>::random(15);
+        model.run(input);
     }
 
     #[test]
@@ -203,7 +212,7 @@ mod test {
 
         let mut model = Model::<F>::new();
         model.add_layer(Layer::Dense(mat1));
-        model.add_layer(Layer::Dense(mat2));
+        model.add_layer(Layer::Dense(mat2.clone()));
 
         let trace = model.run(input.clone());
         assert_eq!(trace.steps.len(), 2);
@@ -213,6 +222,8 @@ mod test {
 
         // Verify second step
         assert_eq!(trace.steps[1].output, final_output);
+        let (nrow, ncol) = (mat2.nrows(), mat2.ncols());
+        assert_eq!(final_output.len(), nrow);
     }
 
     #[test]

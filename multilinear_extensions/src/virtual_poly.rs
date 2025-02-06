@@ -121,7 +121,10 @@ impl<'a, E: ExtensionField> VirtualPolynomial<'a, E> {
             mle_list
                 .iter()
                 .map(|m| {
-                    assert!(m.num_vars() <= self.aux_info.max_num_variables);
+                    assert!(
+                        m.num_vars() <= self.aux_info.max_num_variables,
+                        "invalid max num vars"
+                    );
                     m.num_vars()
                 })
                 .all_equal()

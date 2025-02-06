@@ -3,6 +3,7 @@ use std::cmp::max;
 use ark_std::rand::random;
 use ff_ext::ExtensionField;
 use itertools::Itertools;
+use log::info;
 use multilinear_extensions::{mle::MultilinearExtension, virtual_poly::VirtualPolynomial};
 use sumcheck::structs::{IOPProof, IOPProverState, IOPVerifierState};
 use transcript::{BasicTranscript, Transcript};
@@ -51,16 +52,25 @@ where
         output: &[E],
         matrix: &Matrix<E>,
     ) {
-        let (nrows, ncols) = matrix.num_vars();
-        assert_eq!(ncols, output.len(), "something's wrong in the proof step");
+        let (nrows, ncols) = (matrix.nrows(), matrix.ncols());
+        assert_eq!(nrows, output.len(), "something's wrong with the output");
+        assert_eq!(
+            nrows.ilog2() as usize,
+            random_vars_to_fix.len(),
+            "something's wrong with the randomness"
+        );
+        assert_eq!(ncols, input.len(), "something's wrong with the input");
         // contruct the MLE combining the input and the matrix
         let mut mat_mle = matrix.to_mle();
         // fix the variables from the random input
         // NOTE: here we must fix the HIGH variables because the MLE is addressing in little
         // endian so (rows,cols) is actually given in (cols, rows)
         // mat_mle.fix_variables_in_place_parallel(partial_point);
+        println!("mat_mle before fixing: {}", mat_mle.num_vars());
         mat_mle.fix_high_variables_in_place(&random_vars_to_fix);
+        println!("mat_mle after fixing: {}", mat_mle.num_vars());
         let input_mle = vector_to_mle(input.to_vec());
+        println!("INPUT num vars {}", input_mle.num_vars());
         let max_var = max(mat_mle.num_vars(), input_mle.num_vars());
         let mut vp = VirtualPolynomial::<E>::new(max_var);
         // TODO: remove the clone once prover+verifier are working
@@ -109,12 +119,19 @@ where
         // For the first step, so before the first sumcheck, we generate it from FS.
         // The dimension is simply the number of variables needed to address all the space of the
         // input vector.
-        let mut randomness_to_fix = (0..trace.input().len().ilog2() as usize)
+        let mut randomness_to_fix = (0..trace.final_output().len().ilog2() as usize)
             .map(|_| self.transcript.read_challenge().elements)
             .collect_vec();
 
         // we start by the output to prove up to the input, GKR style
-        for (input, step) in trace.iter().rev() {
+        for (i, (input, step)) in trace.iter().rev().enumerate() {
+            info!(
+                "step {}: input.len = {:?}, step.matrix {:?}, step.output.len() = {:?}",
+                i,
+                input.len(),
+                step.layer.dim(),
+                step.output.len()
+            );
             self.prove_step(randomness_to_fix, input, step);
             // this point is the last random point over which to evaluate the original polynomial.
             // In our case, the polynomial is actually 2 for dense layer: the matrix MLE and the
@@ -139,10 +156,12 @@ mod test {
     use super::Prover;
 
     type F = GoldilocksExt2;
+    use tracing_subscriber;
 
     #[test]
     fn test_prover_steps() {
-        let (model, input) = Model::<F>::random(1);
+        tracing_subscriber::fmt::init();
+        let (model, input) = Model::<F>::random(2);
         let trace = model.run(input);
         let mut prover = Prover::new();
         prover.prove(trace);
