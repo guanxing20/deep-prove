@@ -9,6 +9,8 @@ use rayon::iter::{
     IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator, ParallelIterator,
 };
 
+use crate::to_bit_sequence_le;
+
 #[derive(Clone)]
 pub struct Matrix<E> {
     dim: (usize, usize),
@@ -139,14 +141,6 @@ where
             })
             .collect()
     }
-}
-
-fn to_bit_sequence_le(num: usize, bit_length: usize) -> impl Iterator<Item = usize> {
-    assert!(
-        bit_length as u32 <= usize::BITS,
-        "bit_length cannot exceed usize::BITS"
-    );
-    (0..bit_length).map(move |i| ((num >> i) & 1) as usize)
 }
 
 #[cfg(test)]
