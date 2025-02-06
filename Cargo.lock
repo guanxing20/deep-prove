@@ -2766,3 +2766,17 @@ dependencies = [
  "quote",
  "syn 2.0.90",
 ]
+
+[[package]]
+name = "zkml"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "ark-std",
+ "ff",
+ "ff_ext",
+ "goldilocks",
+ "itertools 0.13.0",
+ "multilinear_extensions",
+ "rayon",
+]
