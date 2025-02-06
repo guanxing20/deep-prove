@@ -78,10 +78,11 @@ where
             vec![mat_mle.clone().into(), input_mle.clone().into()],
             E::ONE,
         );
+        let tmp_transcript = self.transcript.clone();
         let (proof, _) = IOPProverState::<E>::prove_parallel(vp, &mut self.transcript);
 
         debug_assert!({
-            let mut t = default_transcript::<E>();
+            let mut t = tmp_transcript;
             // asserted_sum in this case is the output MLE evaluated at the random point
             let mle_output = vector_to_mle(output.to_vec());
             let claimed_sum = mle_output.evaluate(&random_vars_to_fix);
@@ -161,7 +162,7 @@ mod test {
     #[test]
     fn test_prover_steps() {
         tracing_subscriber::fmt::init();
-        let (model, input) = Model::<F>::random(2);
+        let (model, input) = Model::<F>::random(4);
         let trace = model.run(input);
         let mut prover = Prover::new();
         prover.prove(trace);
