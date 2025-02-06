@@ -48,6 +48,12 @@ fn test_sumcheck<E: ExtensionField>(
         ) == subclaim.expected_evaluation,
         "wrong subclaim"
     );
+    // The point given in the proof is the same as the point returned by the verifier method
+    // It is the point over which to evaluate the original polynomial over
+    assert_eq!(
+        proof.point,
+        subclaim.point.iter().map(|c| c.elements).collect_vec()
+    );
 }
 
 fn test_sumcheck_internal<E: ExtensionField>(

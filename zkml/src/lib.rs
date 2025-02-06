@@ -12,7 +12,7 @@ mod prover;
 struct Tensor<E>(Vec<E>);
 
 // TODO : make that part of tensor somehow?
-pub(crate) fn vector_to_mle<E: ExtensionField>(mut v: Vec<E>) -> impl MultilinearExtension<E> {
+pub(crate) fn vector_to_mle<E: ExtensionField>(mut v: Vec<E>) -> DenseMultilinearExtension<E> {
     v.resize(v.len().next_power_of_two(), E::ZERO);
     DenseMultilinearExtension::from_evaluation_vec_smart(v.len().ilog2() as usize, v)
 }

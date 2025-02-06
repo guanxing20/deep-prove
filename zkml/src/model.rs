@@ -77,6 +77,20 @@ impl<'a, E> InferenceTrace<'a, E> {
         }
     }
 
+    /// Returns the input that led to this inference trace
+    pub fn input(&self) -> &[E] {
+        &self.input
+    }
+
+    /// Returns the final output of the whole trace
+    pub fn final_output(&self) -> &[E] {
+        &self
+            .steps
+            .last()
+            .expect("can't call final_output on empty trace")
+            .output
+    }
+
     fn push_step(&mut self, step: InferenceStep<'a, E>) {
         self.steps.push(step);
     }
@@ -86,6 +100,7 @@ impl<'a, E> InferenceTrace<'a, E> {
         InferenceTraceIterator {
             trace: self,
             current_idx: 0,
+            end_idx: self.steps.len(),
         }
     }
 }
@@ -94,13 +109,15 @@ impl<'a, E> InferenceTrace<'a, E> {
 pub struct InferenceTraceIterator<'t, 'a, E> {
     trace: &'t InferenceTrace<'a, E>,
     current_idx: usize,
+    /// For double-ended iteration
+    end_idx: usize,
 }
 
 impl<'t, 'a, E> Iterator for InferenceTraceIterator<'t, 'a, E> {
     type Item = (&'t [E], &'t InferenceStep<'a, E>);
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.current_idx >= self.trace.steps.len() {
+        if self.current_idx >= self.end_idx {
             return None;
         }
 
@@ -116,6 +133,24 @@ impl<'t, 'a, E> Iterator for InferenceTraceIterator<'t, 'a, E> {
     }
 }
 
+impl<'t, 'a, E> DoubleEndedIterator for InferenceTraceIterator<'t, 'a, E> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        if self.current_idx >= self.end_idx {
+            return None;
+        }
+
+        self.end_idx -= 1;
+        let step = &self.trace.steps[self.end_idx];
+        let input = if self.end_idx == 0 {
+            &self.trace.input
+        } else {
+            &self.trace.steps[self.end_idx - 1].output
+        };
+
+        Some((input, step))
+    }
+}
+
 pub struct InferenceStep<'a, E> {
     /// Reference to the layer that produced this step
     pub layer: &'a Layer<E>,
@@ -125,27 +160,48 @@ pub struct InferenceStep<'a, E> {
 
 #[cfg(test)]
 mod test {
-    use ark_std::rand::thread_rng;
+    use ark_std::rand::{Rng, thread_rng};
     use goldilocks::GoldilocksExt2;
     use itertools::Itertools;
 
     use crate::{matrix::Matrix, model::Layer};
 
     use super::Model;
-    use ff_ext::ff::Field;
+    use ff_ext::{ExtensionField, ff::Field};
 
-    type E = GoldilocksExt2;
+    type F = GoldilocksExt2;
+
+    pub fn random_vector<E: ExtensionField>(n: usize) -> Vec<E> {
+        let mut rng = thread_rng();
+        (0..n).map(|_| E::random(&mut rng)).collect_vec()
+    }
+
+    impl<E: ExtensionField> Model<E> {
+        /// Returns a random model with specified number of dense layers and a matching input.
+        pub fn random(num_dense_layers: usize) -> (Self, Vec<E>) {
+            let mut model = Model::new();
+            for _ in 0..num_dense_layers {
+                let mut rng = thread_rng();
+                let (nrows, ncols) = (rng.gen_range(3..15), rng.gen_range(3..15));
+                let mat = Matrix::<E>::random((nrows, ncols)).pad_next_power_of_two();
+                model.add_layer(Layer::Dense(mat));
+            }
+            let input_dims = model.layers.first().unwrap().dim();
+            // ncols since matrix2vector is summing over the columns
+            let input = random_vector(input_dims.1);
+            (model, input)
+        }
+    }
+
     #[test]
     fn test_model_run() {
-        let mat1 = Matrix::<E>::random((10, 11)).pad_next_power_of_two();
-        let mat2 = Matrix::<E>::random((7, mat1.ncols())).pad_next_power_of_two();
-        let input = (0..mat1.ncols())
-            .map(|_| E::random(&mut thread_rng()))
-            .collect_vec();
+        let mat1 = Matrix::<F>::random((10, 11)).pad_next_power_of_two();
+        let mat2 = Matrix::<F>::random((7, mat1.ncols())).pad_next_power_of_two();
+        let input = random_vector(mat1.ncols());
         let output1 = mat1.matmul(&input);
         let final_output = mat2.matmul(&output1);
 
-        let mut model = Model::<E>::new();
+        let mut model = Model::<F>::new();
         model.add_layer(Layer::Dense(mat1));
         model.add_layer(Layer::Dense(mat2));
 
@@ -161,13 +217,11 @@ mod test {
 
     #[test]
     fn test_inference_trace_iterator() {
-        let mat1 = Matrix::<E>::random((10, 11)).pad_next_power_of_two();
-        let mat2 = Matrix::<E>::random((7, mat1.ncols())).pad_next_power_of_two();
-        let input = (0..mat1.ncols())
-            .map(|_| E::random(&mut thread_rng()))
-            .collect_vec();
+        let mat1 = Matrix::<F>::random((10, 11)).pad_next_power_of_two();
+        let mat2 = Matrix::<F>::random((7, mat1.ncols())).pad_next_power_of_two();
+        let input = random_vector(mat1.ncols());
 
-        let mut model = Model::<E>::new();
+        let mut model = Model::<F>::new();
         model.add_layer(Layer::Dense(mat1));
         model.add_layer(Layer::Dense(mat2));
 
@@ -188,5 +242,34 @@ mod test {
 
         // Iterator should be exhausted
         assert!(iter.next().is_none());
+    }
+
+    #[test]
+    fn test_inference_trace_reverse_iterator() {
+        let mat1 = Matrix::<F>::random((10, 11)).pad_next_power_of_two();
+        let mat2 = Matrix::<F>::random((7, mat1.ncols())).pad_next_power_of_two();
+        let input = random_vector(mat1.ncols());
+
+        let mut model = Model::<F>::new();
+        model.add_layer(Layer::Dense(mat1));
+        model.add_layer(Layer::Dense(mat2));
+
+        let trace = model.run(input.clone());
+
+        // Test reverse iteration
+        let mut rev_iter = trace.iter().rev();
+
+        // Last step should come first in reverse
+        let (last_input, last_step) = rev_iter.next().unwrap();
+        assert_eq!(last_input, trace.steps[0].output);
+        assert_eq!(last_step.output, trace.steps[1].output);
+
+        // First step should come last in reverse
+        let (first_input, first_step) = rev_iter.next().unwrap();
+        assert_eq!(first_input, trace.input);
+        assert_eq!(first_step.output, trace.steps[0].output);
+
+        // Iterator should be exhausted
+        assert!(rev_iter.next().is_none());
     }
 }

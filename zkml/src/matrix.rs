@@ -36,15 +36,31 @@ where
     /// From a given row and a given column, return the vector of field elements in the right
     /// format to evaluate the MLE.
     /// little endian so we need to read cols before rows
-    pub fn xy_to_boolean(&self, row: usize, col: usize) -> Vec<E> {
-        to_bit_sequence_le(col, self.ncols().ilog2() as usize)
-            .chain(to_bit_sequence_le(row, self.nrows().ilog2() as usize))
-            .map(|bit| E::from(bit as u64))
+    pub fn position_to_boolean(&self, row: usize, col: usize) -> Vec<E> {
+        self.col_to_boolean(col)
+            .chain(self.row_to_boolean(row))
             .collect_vec()
+    }
+    /// Returns the boolean iterator indicating the given row in the right endianness to be
+    /// evaluated by an MLE
+    pub fn row_to_boolean(&self, row: usize) -> impl Iterator<Item = E> {
+        let (nvars_rows, _) = self.num_vars();
+        to_bit_sequence_le(row, nvars_rows).map(|b| E::from(b as u64))
+    }
+    /// Returns the boolean iterator indicating the given row in the right endianness to be
+    /// evaluated by an MLE
+    pub fn col_to_boolean(&self, col: usize) -> impl Iterator<Item = E> {
+        let (_, nvars_col) = self.num_vars();
+        to_bit_sequence_le(col, nvars_col).map(|b| E::from(b as u64))
+    }
+
+    /// Returns the number of boolean variables needed to address any row, and any columns
+    pub fn num_vars(&self) -> (usize, usize) {
+        (self.nrows().ilog2() as usize, self.ncols().ilog2() as usize)
     }
 
     /// Returns a MLE of the matrix that can be evaluated.
-    pub fn to_mle(self) -> impl MultilinearExtension<E> {
+    pub fn to_mle(&self) -> DenseMultilinearExtension<E> {
         assert!(
             self.nrows().is_power_of_two(),
             "number of rows {} is not a power of two",
@@ -59,7 +75,7 @@ where
         let num_vars = self.nrows().ilog2() + self.ncols().ilog2();
         DenseMultilinearExtension::from_evaluation_vec_smart(
             num_vars as usize,
-            self.coeffs.into_par_iter().flatten().collect(),
+            self.coeffs.par_iter().flatten().cloned().collect(),
         )
     }
     pub fn pad_next_power_of_two(mut self) -> Self {
@@ -148,6 +164,7 @@ mod test {
     use ark_std::rand::{Rng, thread_rng};
     use ff_ext::ExtensionField;
     use goldilocks::GoldilocksExt2;
+    use itertools::Itertools;
     use multilinear_extensions::mle::MultilinearExtension;
 
     use super::Matrix;
@@ -185,21 +202,29 @@ mod test {
     fn test_matrix_mle() {
         let mat = Matrix::<E>::random((3, 5)).pad_next_power_of_two();
         println!("matrix: {}", mat.fmt_integer());
-        let mle = mat.clone().to_mle();
-        let (elem_x, elem_y) = (
+        let mut mle = mat.clone().to_mle();
+        let (chosen_row, chosen_col) = (
             thread_rng().gen_range(0..mat.dim.0),
             thread_rng().gen_range(0..mat.dim.1),
         );
-        let elem = mat.get(elem_x, elem_y);
+        let elem = mat.get(chosen_row, chosen_col);
         println!(
             "(x,y) = ({},{}) ==> {:?} ({:?})",
-            elem_x,
-            elem_y,
+            chosen_row,
+            chosen_col,
             elem.to_canonical_u64_vec(),
             elem
         );
-        let inputs = mat.xy_to_boolean(elem_x, elem_y);
+        let inputs = mat.position_to_boolean(chosen_row, chosen_col);
         let output = mle.evaluate(&inputs);
+        assert_eq!(elem, output);
+
+        // now try to address one at a time, and starting by the row, which is the opposite order
+        // of the boolean variables expected by the MLE API, given it's expecting in LE format.
+        let row_input = mat.row_to_boolean(chosen_row);
+        mle.fix_high_variables_in_place(&row_input.collect_vec());
+        let col_input = mat.col_to_boolean(chosen_col);
+        let output = mle.evaluate(&col_input.collect_vec());
         assert_eq!(elem, output);
     }
 
