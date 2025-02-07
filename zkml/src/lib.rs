@@ -3,7 +3,7 @@
 use derive_more::From;
 use ff_ext::ExtensionField;
 use itertools::Itertools;
-use multilinear_extensions::mle::{DenseMultilinearExtension, MultilinearExtension};
+use multilinear_extensions::mle::DenseMultilinearExtension;
 use transcript::Transcript;
 mod matrix;
 mod model;

@@ -4,7 +4,7 @@ use anyhow::ensure;
 use ark_std::rand::{self};
 use ff_ext::ExtensionField;
 use itertools::Itertools;
-use multilinear_extensions::mle::{DenseMultilinearExtension, MultilinearExtension};
+use multilinear_extensions::mle::DenseMultilinearExtension;
 use rayon::iter::{
     IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator, ParallelIterator,
 };

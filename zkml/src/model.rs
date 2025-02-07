@@ -1,5 +1,3 @@
-use std::{default, sync::Arc};
-
 use ff_ext::ExtensionField;
 use multilinear_extensions::mle::DenseMultilinearExtension;
 
@@ -173,7 +171,7 @@ pub struct InferenceStep<'a, E> {
 }
 
 #[cfg(test)]
-mod test {
+pub(crate) mod test {
     use ark_std::rand::{Rng, thread_rng};
     use goldilocks::GoldilocksExt2;
     use itertools::Itertools;
@@ -181,7 +179,7 @@ mod test {
     use crate::{matrix::Matrix, model::Layer};
 
     use super::Model;
-    use ff_ext::{ExtensionField, ff::Field};
+    use ff_ext::ExtensionField;
 
     type F = GoldilocksExt2;
 
@@ -236,7 +234,7 @@ mod test {
 
         // Verify second step
         assert_eq!(trace.steps[1].output, final_output);
-        let (nrow, ncol) = (mat2.nrows(), mat2.ncols());
+        let (nrow, _) = (mat2.nrows(), mat2.ncols());
         assert_eq!(final_output.len(), nrow);
     }
 

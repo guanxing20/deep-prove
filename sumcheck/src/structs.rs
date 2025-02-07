@@ -64,6 +64,7 @@ pub struct SumCheckSubClaim<E: ExtensionField> {
 }
 
 impl<E: ExtensionField> SumCheckSubClaim<E> {
+    /// Returns the last random point of the sumcheck as a vector (instead of "challenge")
     pub fn point_flat(&self) -> Vec<E> {
         self.point.iter().map(|p| p.elements).collect_vec()
     }
