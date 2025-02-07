@@ -1,4 +1,5 @@
 use ff_ext::ExtensionField;
+use itertools::Itertools;
 use multilinear_extensions::virtual_poly::VirtualPolynomial;
 use serde::{Deserialize, Serialize};
 use transcript::Challenge;
@@ -60,4 +61,10 @@ pub struct SumCheckSubClaim<E: ExtensionField> {
     pub point: Vec<Challenge<E>>,
     /// the expected evaluation
     pub expected_evaluation: E,
+}
+
+impl<E: ExtensionField> SumCheckSubClaim<E> {
+    pub fn point_flat(&self) -> Vec<E> {
+        self.point.iter().map(|p| p.elements).collect_vec()
+    }
 }

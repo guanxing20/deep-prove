@@ -2139,6 +2139,7 @@ dependencies = [
  "log",
  "multilinear_extensions",
  "rayon",
+ "serde",
  "sumcheck",
  "tracing-subscriber",
  "transcript",

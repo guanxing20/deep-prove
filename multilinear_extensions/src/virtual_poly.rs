@@ -68,6 +68,29 @@ pub struct VPAuxInfo<E> {
     pub phantom: PhantomData<E>,
 }
 
+impl<E> VPAuxInfo<E> {
+    /// List of list of MLEs num_vars (f1*f2 + f1*f3*f4 + ... )
+    pub fn from_mle_list_dimensions(product_list: &[Vec<usize>]) -> Self {
+        let mut max_num_vars = 0;
+        let mut max_degree = 0;
+        for product in product_list {
+            max_degree = max(max_degree, product.len());
+            max_num_vars = max(
+                max_num_vars,
+                *product
+                    .iter()
+                    .max()
+                    .expect("At least one MLE in the product is required"),
+            );
+        }
+        Self {
+            max_degree,
+            max_num_variables: max_num_vars,
+            phantom: PhantomData,
+        }
+    }
+}
+
 impl<'a, E: ExtensionField> VirtualPolynomial<'a, E> {
     /// Creates an empty virtual polynomial with `max_num_variables`.
     pub fn new(max_num_variables: usize) -> Self {

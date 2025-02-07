@@ -11,7 +11,7 @@ use rayon::iter::{
 
 use crate::to_bit_sequence_le;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Matrix<E> {
     dim: (usize, usize),
     // dimension is [n_rows,n_cols]

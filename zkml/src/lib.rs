@@ -2,7 +2,9 @@
 
 use derive_more::From;
 use ff_ext::ExtensionField;
+use itertools::Itertools;
 use multilinear_extensions::mle::{DenseMultilinearExtension, MultilinearExtension};
+use transcript::Transcript;
 mod matrix;
 mod model;
 mod prover;
@@ -11,18 +13,30 @@ mod prover;
 #[derive(Debug, Clone, From)]
 struct Tensor<E>(Vec<E>);
 
+/// Returns a MLE out of the given vector, of the right length
 // TODO : make that part of tensor somehow?
 pub(crate) fn vector_to_mle<E: ExtensionField>(mut v: Vec<E>) -> DenseMultilinearExtension<E> {
     v.resize(v.len().next_power_of_two(), E::ZERO);
     DenseMultilinearExtension::from_evaluation_vec_smart(v.len().ilog2() as usize, v)
 }
 
+/// Returns the bit sequence of num of bit_length length.
 pub(crate) fn to_bit_sequence_le(num: usize, bit_length: usize) -> impl Iterator<Item = usize> {
     assert!(
         bit_length as u32 <= usize::BITS,
         "bit_length cannot exceed usize::BITS"
     );
     (0..bit_length).map(move |i| ((num >> i) & 1) as usize)
+}
+
+pub trait VectorTranscript<E: ExtensionField> {
+    fn read_challenges(&mut self, n: usize) -> Vec<E>;
+}
+
+impl<T: Transcript<E>, E: ExtensionField> VectorTranscript<E> for T {
+    fn read_challenges(&mut self, n: usize) -> Vec<E> {
+        (0..n).map(|_| self.read_challenge().elements).collect_vec()
+    }
 }
 
 #[cfg(test)]

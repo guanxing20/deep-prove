@@ -1,9 +1,11 @@
 use std::{default, sync::Arc};
 
 use ff_ext::ExtensionField;
+use multilinear_extensions::mle::DenseMultilinearExtension;
 
 use crate::matrix::Matrix;
 
+#[derive(Clone, Debug)]
 pub enum Layer<E> {
     // TODO: replace this with a Tensor based implementation
     Dense(Matrix<E>),
@@ -15,17 +17,26 @@ impl<E: ExtensionField> Layer<E> {
             Layer::Dense(ref matrix) => (matrix.nrows(), matrix.ncols()),
         }
     }
+
+    /// Run the operation associated with that layer with the given input
     // TODO: move to tensor library : right now it works because we assume there is only Dense
     // layer which is matmul
-    pub fn eval(&self, input: &[E]) -> Vec<E> {
+    pub fn op(&self, input: &[E]) -> Vec<E> {
         match self {
             Layer::Dense(ref matrix) => matrix.matmul(input),
+        }
+    }
+
+    pub fn mle(&self) -> DenseMultilinearExtension<E> {
+        match self {
+            Layer::Dense(ref matrix) => matrix.to_mle(),
         }
     }
 }
 
 /// NOTE: this doesn't handle dynamism in the model with loops for example for LLMs where it
 /// produces each token one by one.
+#[derive(Clone, Debug)]
 pub struct Model<E> {
     layers: Vec<Layer<E>>,
 }
@@ -43,11 +54,14 @@ impl<E: ExtensionField> Model<E> {
         let mut trace = InferenceTrace::new(input);
         for layer in &self.layers {
             let input = trace.last_input();
-            let output = layer.eval(input);
+            let output = layer.op(input);
             let step = InferenceStep { layer, output };
             trace.push_step(step);
         }
         trace
+    }
+    pub fn layers(&self) -> &[Layer<E>] {
+        &self.layers
     }
 }
 
