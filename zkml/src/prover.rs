@@ -334,7 +334,8 @@ pub fn verify<E: ExtensionField>(
         //         .collect_vec()
         //         .as_ref(),
         //
-        // We compute the evaluation directly from the individual evaluation the prover's giving
+        // We compute the evaluation directly from the individual final evaluations of each polynomial
+        // involved in the sumcheck the prover's giving,e.g. y(res) = SUM f_i(res)
         ensure!(
             step.individual_to_virtual_claim() == subclaim.expected_evaluation,
             "step {}: sumcheck claim failed",
@@ -347,8 +348,18 @@ pub fn verify<E: ExtensionField>(
         // random point. 1 because vector is secondary.
         claimed_sum = step.individual_claims[1];
     }
-
+    // 3. input verification: evaluating the input at the random evaluation point from the sumcheck
     let input_mle = vector_to_mle(io.input);
+    let computed_randomized_input = input_mle.evaluate(&randomness_to_fix);
+    let given_randomized_input = proof
+        .steps
+        .last()
+        .expect("at least one layer")
+        .individual_claims[1];
+    ensure!(
+        computed_randomized_input == given_randomized_input,
+        "input not valid from proof"
+    );
     Ok(())
 }
 
