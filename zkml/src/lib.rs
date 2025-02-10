@@ -7,6 +7,7 @@ use multilinear_extensions::mle::DenseMultilinearExtension;
 use transcript::Transcript;
 mod matrix;
 mod model;
+mod onnx_parse;
 mod prover;
 
 // TODO: use a real tensor

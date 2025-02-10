@@ -160,6 +160,22 @@ where
             })
             .collect()
     }
+
+    pub fn transpose(&self) -> Matrix<E> {
+        let (rows, cols) = self.dim;
+        let mut transposed_coeffs = vec![vec![self.coeffs[0][0].clone(); rows]; cols];
+
+        for i in 0..rows {
+            for j in 0..cols {
+                transposed_coeffs[j][i] = self.coeffs[i][j].clone();
+            }
+        }
+
+        Matrix {
+            dim: (cols, rows),
+            coeffs: transposed_coeffs,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -245,5 +261,37 @@ mod test {
         let (new_rows, new_cols) = (n_rows.next_power_of_two(), n_cols.next_power_of_two());
         let new_mat = mat.pad_next_power_of_two();
         new_mat.assert_structure((new_rows, new_cols));
+    }
+
+    impl<E> Matrix<E>
+    where
+        E: ExtensionField + PartialEq,
+    {
+        pub fn is_equal(&self, other: &Matrix<E>) -> bool {
+            if self.dim != other.dim {
+                return false;
+            }
+
+            self.coeffs == other.coeffs
+        }
+    }
+    #[test]
+    fn test_matrix_transpose() {
+        let mat = vec![
+            vec![E::from(1), E::from(2)],
+            vec![E::from(3), E::from(4)],
+            vec![E::from(5), E::from(6)],
+        ];
+        let mat = Matrix::<E>::from_coeffs(mat).unwrap();
+
+        let trans_mat = vec![vec![E::from(1), E::from(3), E::from(5)], vec![
+            E::from(2),
+            E::from(4),
+            E::from(6),
+        ]];
+        let trans_mat = Matrix::<E>::from_coeffs(trans_mat).unwrap();
+        let res = mat.transpose();
+        let result = trans_mat.is_equal(&res);
+        assert!(result == true);
     }
 }
