@@ -1,7 +1,9 @@
 use ff_ext::ExtensionField;
-use multilinear_extensions::mle::DenseMultilinearExtension;
 
 use crate::matrix::Matrix;
+
+/// A layer has a unique ID associated to it in the model
+pub type PolyID = usize;
 
 #[derive(Clone, Debug)]
 pub enum Layer<E> {
@@ -25,9 +27,9 @@ impl<E: ExtensionField> Layer<E> {
         }
     }
 
-    pub fn mle(&self) -> DenseMultilinearExtension<E> {
+    pub fn evals(&self) -> Vec<E> {
         match self {
-            Layer::Dense(ref matrix) => matrix.to_mle(),
+            Layer::Dense(ref matrix) => matrix.evals(),
         }
     }
 }
@@ -45,21 +47,23 @@ impl<E: ExtensionField> Model<E> {
             layers: Default::default(),
         }
     }
-    pub fn add_layer(&mut self, l: Layer<E>) {
+    fn add_layer(&mut self, l: Layer<E>) {
         self.layers.push(l);
     }
+
     pub fn run<'a>(&'a self, input: Vec<E>) -> InferenceTrace<'a, E> {
         let mut trace = InferenceTrace::new(input);
-        for layer in &self.layers {
+        for (id, layer) in self.layers() {
             let input = trace.last_input();
             let output = layer.op(input);
-            let step = InferenceStep { layer, output };
+            let step = InferenceStep { layer, output, id };
             trace.push_step(step);
         }
         trace
     }
-    pub fn layers(&self) -> &[Layer<E>] {
-        &self.layers
+
+    pub fn layers(&self) -> impl DoubleEndedIterator<Item = (PolyID, &Layer<E>)> {
+        self.layers.iter().enumerate()
     }
 }
 
@@ -87,11 +91,6 @@ impl<'a, E> InferenceTrace<'a, E> {
             // safe unwrap since it's not empty
             &self.steps.last().unwrap().output
         }
-    }
-
-    /// Returns the input that led to this inference trace
-    pub fn input(&self) -> &[E] {
-        &self.input
     }
 
     /// Returns the final output of the whole trace
@@ -164,6 +163,7 @@ impl<'t, 'a, E> DoubleEndedIterator for InferenceTraceIterator<'t, 'a, E> {
 }
 
 pub struct InferenceStep<'a, E> {
+    pub id: PolyID,
     /// Reference to the layer that produced this step
     pub layer: &'a Layer<E>,
     /// Output produced by this layer
@@ -186,6 +186,13 @@ pub(crate) mod test {
     pub fn random_vector<E: ExtensionField>(n: usize) -> Vec<E> {
         let mut rng = thread_rng();
         (0..n).map(|_| E::random(&mut rng)).collect_vec()
+    }
+
+    pub fn random_bool_vector<E: ExtensionField>(n: usize) -> Vec<E> {
+        let mut rng = thread_rng();
+        (0..n)
+            .map(|_| E::from(rng.gen_bool(0.5) as u64))
+            .collect_vec()
     }
 
     impl<E: ExtensionField> Model<E> {

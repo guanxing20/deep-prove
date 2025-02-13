@@ -24,3 +24,6 @@ sumcheck = { version = "0.1.0", path = "../sumcheck" }
 tracing-subscriber.workspace = true
 tract-onnx = "0.21.9"
 transcript = { version = "0.1.0", path = "../transcript" }
+log = "0.4.25"
+serde.workspace = true
+mpcs = { version = "0.1.0", path = "../mpcs" }

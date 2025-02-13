@@ -1203,6 +1203,7 @@ dependencies = [
  "rand_chacha",
  "rayon",
  "serde",
+ "thiserror 2.0.11",
  "transcript",
 ]
 
@@ -1220,6 +1221,7 @@ dependencies = [
  "rayon",
  "serde",
  "tracing",
+ "transcript",
 ]
 
 [[package]]
@@ -2824,6 +2826,7 @@ dependencies = [
  "goldilocks",
  "itertools 0.13.0",
  "log",
+ "mpcs",
  "multilinear_extensions",
  "rayon",
  "serde",
