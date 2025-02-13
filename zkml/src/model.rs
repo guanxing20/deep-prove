@@ -86,6 +86,9 @@ impl<'a, E> InferenceTrace<'a, E> {
             input,
         }
     }
+    pub fn last_step(&self) -> &InferenceStep<'a,E> {
+        self.steps.last().expect("can't call last_step on empty inferece")
+    }
 
     /// Useful when building the trace. The next input is either the first input or the last
     /// output.

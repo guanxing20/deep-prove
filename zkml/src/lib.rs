@@ -11,6 +11,7 @@ mod matrix;
 mod model;
 mod onnx_parse;
 mod prover;
+mod lookup;
 
 // TODO: use a real tensor
 #[derive(Debug, Clone, From, Deref)]
