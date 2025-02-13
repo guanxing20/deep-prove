@@ -65,6 +65,11 @@ impl<E: ExtensionField> Model<E> {
     pub fn layers(&self) -> impl DoubleEndedIterator<Item = (PolyID, &Layer<E>)> {
         self.layers.iter().enumerate()
     }
+
+    pub fn input_shape(&self) -> Vec<usize> {
+        let (row,col) = self.layers[0].dim();
+        vec![col]
+    }
 }
 
 /// Keeps track of all input and outputs of each layer, with a reference to the layer.

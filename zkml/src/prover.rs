@@ -128,7 +128,7 @@ where
 }
 
 /// Prover generates a series of sumcheck proofs to prove the inference of a model
-struct Prover<'a, E: ExtensionField, T: Transcript<E>> {
+pub struct Prover<'a, E: ExtensionField, T: Transcript<E>> {
     // proofs for each layer being filled
     proofs: Vec<StepProof<E>>,
     transcript: &'a mut T,

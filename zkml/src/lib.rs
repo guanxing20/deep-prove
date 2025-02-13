@@ -69,10 +69,40 @@ mod test {
     use itertools::Itertools;
     use multilinear_extensions::mle::MultilinearExtension;
 
-    use crate::{Tensor, model::test::random_vector, to_bit_sequence_le, vector_to_mle};
+    use crate::{model::test::random_vector, onnx_parse::load_mlp, prover::{default_transcript, verify, Context, Prover, IO}, to_bit_sequence_le, vector_to_mle, Tensor};
     use ff_ext::ff::Field;
 
     type E = GoldilocksExt2;
+
+    #[test]
+    fn test_model_run() {
+        let filepath = "assets/model.onnx";
+        let model = load_mlp::<E>(&filepath).unwrap();
+        println!("[+] Loaded onnx file");
+        let ctx = Context::generate(&model).expect("unable to generate context");
+        println!("[+] Setup parameters");
+
+        let shape = model.input_shape();
+        assert_eq!(shape.len(),1);
+        let input = random_vector(shape[0]);
+
+        let trace = model.run(input.clone());
+        let output = trace.final_output().to_vec();
+        println!("[+] Run inference. Result: {:?}",output); 
+
+        let mut prover_transcript = default_transcript();
+        let prover = Prover::new(&mut prover_transcript);
+        println!("[+] Run prover");
+        let proof = prover.prove(&ctx, trace).expect("unable to generate proof");
+
+        let mut verifier_transcript = default_transcript();
+        let io = IO::new(input, output.to_vec());
+        verify(ctx, proof, io, &mut verifier_transcript).expect("invalid proof");
+        println!("[+] Verify proof: valid");
+    }
+
+
+    // TODO: move below code to a vector module
 
     #[test]
     fn test_vector_mle() {

@@ -163,7 +163,7 @@ where
                     })
                     .collect_vec();
                 let matrix = reshape(tensor_f, tensor.shape()[0], tensor.shape()[1]).unwrap();
-                let matrix = Matrix::<F>::from_coeffs(matrix).unwrap();
+                let matrix = Matrix::<F>::from_coeffs(matrix).unwrap().pad_next_power_of_two();
                 // let matrix = matrix.transpose();
                 layers.push(Layer::Dense(matrix));
             }
@@ -181,7 +181,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ark_std::rand::{Rng, thread_rng};
+    use ark_std::rand::{thread_rng};
 
     use goldilocks::GoldilocksExt2;
 
