@@ -6,7 +6,7 @@ use itertools::Itertools;
 use multilinear_extensions::mle::DenseMultilinearExtension;
 use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
 use transcript::Transcript;
-mod commit;
+mod claims;
 mod matrix;
 mod model;
 mod onnx_parse;

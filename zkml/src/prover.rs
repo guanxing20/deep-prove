@@ -13,7 +13,7 @@ use sumcheck::structs::{IOPProof, IOPProverState, IOPVerifierState};
 use transcript::{BasicTranscript, Transcript};
 
 use crate::{
-    VectorTranscript, commit,
+    VectorTranscript, claims::precommit,
     matrix::Matrix,
     model::{InferenceStep, InferenceTrace, Layer, Model, PolyID},
     vector_to_mle,
@@ -36,7 +36,7 @@ where
 {
     /// The successive sumchecks proofs. From output layer to input.
     steps: Vec<StepProof<E>>,
-    commit: commit::CommitProof<E>,
+    commit: precommit::CommitProof<E>,
 }
 
 /// Contains proof material related to one step of the inference
@@ -83,7 +83,7 @@ where
     /// Dimensions of the polynomials necessary to verify the sumcheck proofs
     /// in REVERSED order already since proving goes from last layer to first layer.
     polys_aux: Vec<(PolyID, VPAuxInfo<E>)>,
-    commit: commit::Context<E>,
+    commit: precommit::Context<E>,
 }
 
 impl<E: ExtensionField> Context<E>
@@ -116,7 +116,7 @@ where
             })
             .rev()
             .collect_vec();
-        let commit_ctx = commit::Context::generate_from_model(model)
+        let commit_ctx = precommit::Context::generate_from_model(model)
             .context("can't generate context for commitment part")?;
         Ok(Self {
             polys_aux: auxs,
@@ -139,7 +139,7 @@ pub struct Prover<'a, E: ExtensionField, T: Transcript<E>> {
     // proofs for each layer being filled
     proofs: Vec<StepProof<E>>,
     transcript: &'a mut T,
-    commit_prover: commit::CommitProver<E>,
+    commit_prover: precommit::CommitProver<E>,
 }
 
 /// Returns the default transcript the prover and verifier must instantiate to validate a proof.
@@ -158,7 +158,7 @@ where
         Self {
             transcript,
             proofs: Default::default(),
-            commit_prover: commit::CommitProver::new(),
+            commit_prover: precommit::CommitProver::new(),
         }
     }
     fn prove_step<'b>(
@@ -318,7 +318,7 @@ where
     E::BaseField: Serialize + DeserializeOwned,
     E: Serialize + DeserializeOwned,
 {
-    let mut commit_verifier = commit::CommitVerifier::new();
+    let mut commit_verifier = precommit::CommitVerifier::new();
     ctx.write_to_transcript(transcript)?;
     // 0. Derive the first randomness
     let mut randomness_to_fix = transcript.read_challenges(io.output.len().ilog2() as usize);

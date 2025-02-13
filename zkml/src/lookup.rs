@@ -27,5 +27,4 @@ trait LookupProtocol<E: ExtensionField> {
     
     // commitments to the lookups, one commitment per "column"
     fn verify<T: Transcript<E>>(ctx: Context<E>, proof: Proof<E>, t: &mut T) -> anyhow::Result<()>;
-    
 }
