@@ -11,7 +11,7 @@ use crate::{
 };
 
 #[derive(Debug, Clone)]
-pub struct Gemm {
+struct Gemm {
     name: String,
     alpha: f32,
     beta: f32,
@@ -19,7 +19,7 @@ pub struct Gemm {
     trans_b: bool,
 }
 
-pub fn build_gemm(node: &NodeProto) -> Result<Gemm> {
+fn build_gemm(node: &NodeProto) -> Result<Gemm> {
     let name = node.name.to_string();
     let alpha = node.get_attr_opt("alpha")?.unwrap_or(1.);
     let beta = node.get_attr_opt("beta")?.unwrap_or(1.);
@@ -36,7 +36,7 @@ pub fn build_gemm(node: &NodeProto) -> Result<Gemm> {
 }
 
 // Assumes values are between [-1, 1]
-pub fn quantize_to_goldilocks(elem: f64) -> Result<u64> {
+fn quantize_to_goldilocks(elem: f64) -> Result<u64> {
     assert!(
         elem >= -1.0 && elem <= 1.0,
         "Value {} is out of range [-1, 1]",
@@ -51,7 +51,7 @@ pub fn quantize_to_goldilocks(elem: f64) -> Result<u64> {
     Ok(scaled)
 }
 
-pub fn create_tensor(shape: Vec<usize>, dt: DatumType, data: &[u8]) -> TractResult<Tensor> {
+fn create_tensor(shape: Vec<usize>, dt: DatumType, data: &[u8]) -> TractResult<Tensor> {
     unsafe {
         match dt {
             DatumType::U8 => Tensor::from_raw::<u8>(&shape, data),
@@ -74,7 +74,7 @@ pub fn create_tensor(shape: Vec<usize>, dt: DatumType, data: &[u8]) -> TractResu
     }
 }
 
-pub fn is_mlp(filepath: &str) -> Result<bool> {
+fn is_mlp(filepath: &str) -> Result<bool> {
     let activation_functions = ["Relu", "Sigmoid", "Tanh", "LeakyRelu", "Elu", "Selu"];
 
     let mut is_mlp = true;
@@ -107,7 +107,7 @@ pub fn is_mlp(filepath: &str) -> Result<bool> {
     Ok(is_mlp)
 }
 
-pub fn reshape<T: Clone>(flat_vec: Vec<T>, rows: usize, cols: usize) -> Option<Vec<Vec<T>>> {
+fn reshape<T: Clone>(flat_vec: Vec<T>, rows: usize, cols: usize) -> Option<Vec<Vec<T>>> {
     if flat_vec.len() != rows * cols {
         return None; // Return None if dimensions don't match the number of elements
     }

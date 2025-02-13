@@ -47,7 +47,7 @@ impl<E: ExtensionField> Model<E> {
             layers: Default::default(),
         }
     }
-    fn add_layer(&mut self, l: Layer<E>) {
+    pub fn add_layer(&mut self, l: Layer<E>) {
         self.layers.push(l);
     }
 
