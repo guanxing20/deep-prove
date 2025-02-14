@@ -160,7 +160,7 @@ mod test {
     use mpcs::PolynomialCommitmentScheme;
     use multilinear_extensions::mle::MultilinearExtension;
 
-    use crate::{claims::Pcs, model::test::random_vector, prover::default_transcript, vector_to_mle};
+    use crate::{claims::Pcs, testing::random_field_vector, prover::default_transcript, vector_to_mle};
     use itertools::Itertools;
 
     use super::{Context, Prover, Verifier};
@@ -179,12 +179,12 @@ mod test {
         // number of vars
         let num_vars = 10 as usize;
         let poly_len = 1 << num_vars;
-        let poly = random_vector::<F>(poly_len);
+        let poly = random_field_vector::<F>(poly_len);
         let poly_mle = vector_to_mle(poly.clone());
         // number of clains
         let m = 14;
         let claims = (0..m).map(|_| {
-            let r_i = random_vector(num_vars);
+            let r_i = random_field_vector(num_vars);
             let y_i = poly_mle.evaluate(&r_i);
             (r_i,y_i)
         }).collect_vec();

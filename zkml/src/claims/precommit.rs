@@ -11,7 +11,7 @@ use crate::{
 use anyhow::{Context as CC, ensure};
 use ff_ext::ExtensionField;
 use itertools::Itertools;
-use mpcs::{Basefold, BasefoldBasecodeParams, PolynomialCommitmentScheme};
+use mpcs::PolynomialCommitmentScheme;
 use multilinear_extensions::{
     mle::{DenseMultilinearExtension, MultilinearExtension},
     virtual_poly::{VPAuxInfo, VirtualPolynomial},
@@ -57,7 +57,7 @@ where
     E: Serialize + DeserializeOwned,
 {
     /// NOTE: it assumes the model's layers are already padded to power of two
-    pub fn generate_from_model(m: &Model<E>) -> anyhow::Result<Self> {
+    pub fn generate_from_model(m: &Model) -> anyhow::Result<Self> {
         Self::generate(m.layers().map(|(id, l)| (id, l.evals())).collect_vec())
     }
 
@@ -384,7 +384,7 @@ mod test {
     use super::compute_betas_eval;
     use crate::{
         matrix::Matrix,
-        model::test::{random_bool_vector, random_vector},
+        testing::{random_bool_vector, random_field_vector},
         pad_vector,
         prover::default_transcript,
         vector_to_mle,
@@ -401,7 +401,7 @@ mod test {
         // let range = thread_rng().gen_range(3..15);
         let matrices = (0..n_poly)
             .map(|_| {
-                Matrix::<F>::random((rng.gen_range(3..24), rng.gen_range(3..24)))
+                Matrix::random((rng.gen_range(3..24), rng.gen_range(3..24)))
                     .pad_next_power_of_two()
             })
             .enumerate()
@@ -444,7 +444,7 @@ mod test {
         let n_poly = 7;
         // let range = thread_rng().gen_range(3..15);
         let polys = (0..n_poly)
-            .map(|_| pad_vector(random_vector::<F>(thread_rng().gen_range(3..24))))
+            .map(|_| pad_vector(random_field_vector::<F>(thread_rng().gen_range(3..24))))
             .enumerate()
             .collect_vec();
         let ctx = Context::generate(polys.clone())?;

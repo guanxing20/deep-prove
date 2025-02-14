@@ -1,13 +1,11 @@
 use anyhow::{Error, Result};
-use ff::{Field, PrimeField};
-use ff_ext::ExtensionField;
 use itertools::Itertools;
 use std::{collections::HashMap, path::Path};
 use tract_onnx::{pb::NodeProto, prelude::*};
 
 use crate::{
     matrix::Matrix,
-    model::{Layer, Model},
+    model::{Layer, Model}, Element,
 };
 
 #[derive(Debug, Clone)]
@@ -35,21 +33,8 @@ fn build_gemm(node: &NodeProto) -> Result<Gemm> {
     Ok(gemm)
 }
 
-// Assumes values are between [-1, 1]
-fn quantize_to_goldilocks(elem: f64) -> Result<u64> {
-    assert!(
-        elem >= -1.0 && elem <= 1.0,
-        "Value {} is out of range [-1, 1]",
-        elem
-    );
-    let max_goldilocks = 0xffffffff00000001 as u64;
-    let scale = 2.0 / max_goldilocks as f64;
-    let zero_point = (max_goldilocks >> 1) as f64;
 
-    let scaled = (elem / scale + zero_point).round() as u64;
 
-    Ok(scaled)
-}
 
 fn create_tensor(shape: Vec<usize>, dt: DatumType, data: &[u8]) -> TractResult<Tensor> {
     unsafe {
@@ -115,9 +100,7 @@ fn reshape<T: Clone>(flat_vec: Vec<T>, rows: usize, cols: usize) -> Option<Vec<V
     Some(flat_vec.chunks(cols).map(|chunk| chunk.to_vec()).collect())
 }
 
-pub fn load_mlp<F>(filepath: &str) -> Result<Model<F>>
-where
-    F: ExtensionField,
+pub fn load_mlp<Q: Quantizer<Element>>(filepath: &str) -> Result<Model>
 {
     if !Path::new(filepath).exists() {
         return Err(Error::msg(format!("File '{}' does not exist", filepath)));
@@ -142,7 +125,7 @@ where
         initializers.insert(key, value);
     }
 
-    let mut layers: Vec<Layer<F>> = Vec::new();
+    let mut layers: Vec<Layer> = Vec::new();
     for node in graph.node.iter() {
         match node.op_type.as_str() {
             "Gemm" => {
@@ -157,20 +140,17 @@ where
                 let tensor_f32 = tensor.as_slice::<f32>().unwrap().to_vec();
                 let tensor_f = tensor_f32
                     .iter()
-                    .map(|z| {
-                        let v = quantize_to_goldilocks(*z as f64).unwrap();
-                        F::from(v)
-                    })
+                    .map(Q::from_f32_unsafe)
                     .collect_vec();
                 let matrix = reshape(tensor_f, tensor.shape()[0], tensor.shape()[1]).unwrap();
-                let matrix = Matrix::<F>::from_coeffs(matrix).unwrap().pad_next_power_of_two();
+                let matrix = Matrix::<Element>::from_coeffs(matrix).unwrap().pad_next_power_of_two();
                 // let matrix = matrix.transpose();
                 layers.push(Layer::Dense(matrix));
             }
             _ => (),
         };
     }
-    let mut sumcheck_model = Model::<F>::new();
+    let mut sumcheck_model = Model::new();
     for layer in layers {
         sumcheck_model.add_layer(layer); // Insert each layer
     }
@@ -178,25 +158,39 @@ where
     Ok(sumcheck_model)
 }
 
+trait Quantizer<Output> {
+    fn from_f32_unsafe(e: &f32) -> Output;
+}
+
+impl Quantizer<Element> for Element {
+    fn from_f32_unsafe(e: &f32) -> Self {
+        let max_u8 = 255u32;
+        let scale = 2.0 / max_u8 as f64;
+        let zero_point = (max_u8 as f64) / 2.0;
+
+        let scaled = (*e as f64 / scale + zero_point).round() as u32;
+        scaled as Element
+    }
+}
+
 #[cfg(test)]
 mod tests {
+
+    use crate::testing::random_vector;
+
     use super::*;
-    use ark_std::rand::{thread_rng};
 
     use goldilocks::GoldilocksExt2;
 
     // cargo test --release --package zkml -- onnx_parse::tests::test_tract --nocapture
 
+
     type F = GoldilocksExt2;
 
-    pub fn random_vector<E: ExtensionField>(n: usize) -> Vec<E> {
-        let mut rng = thread_rng();
-        (0..n).map(|_| E::random(&mut rng)).collect_vec()
-    }
     #[test]
     fn test_tract() {
         let filepath = "assets/model.onnx";
-        let result = load_mlp::<F>(&filepath);
+        let result = load_mlp::<Element>(&filepath);
 
         assert!(result.is_ok(), "Failed: {:?}", result.unwrap_err());
     }
@@ -205,10 +199,10 @@ mod tests {
     fn test_model_run() {
         let filepath = "assets/model.onnx";
 
-        let model = load_mlp::<F>(&filepath).unwrap();
+        let model = load_mlp::<Element>(&filepath).unwrap();
         let input = random_vector(4);
 
-        let trace = model.run(input.clone());
+        let trace = model.run::<F>(input.clone());
         println!("Result: {:?}", trace.final_output());
     }
 
@@ -219,27 +213,27 @@ mod tests {
         println!(
             "Result: {} => {:?}",
             input[0],
-            quantize_to_goldilocks(input[0]).unwrap()
+            <Element as Quantizer<Element>>::from_f32_unsafe(&input[0])
         );
         println!(
             "Result: {} => {:?}",
             input[1],
-            quantize_to_goldilocks(input[1]).unwrap()
+            <Element as Quantizer<Element>>::from_f32_unsafe(&input[1])
         );
         println!(
             "Result: {} => {:?}",
             0,
-            quantize_to_goldilocks(0.0).unwrap()
+            <Element as Quantizer<Element>>::from_f32_unsafe(&0.0)
         );
         println!(
             "Result: {} => {:?}",
             -1.0,
-            quantize_to_goldilocks(-1.0).unwrap()
+            <Element as Quantizer<Element>>::from_f32_unsafe(&-1.0)
         );
         println!(
             "Result: {} => {:?}",
             1.0,
-            quantize_to_goldilocks(1.0).unwrap()
+            <Element as Quantizer<Element>>::from_f32_unsafe(&1.0)
         );
     }
 }

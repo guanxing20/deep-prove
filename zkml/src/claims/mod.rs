@@ -139,7 +139,7 @@ pub(crate) fn get_offset_product<E: ExtensionField>(claim_size: usize, mut pos: 
 mod test {
     use goldilocks::GoldilocksExt2;
 
-    use crate::{claims::{get_offset_product, identity_eval}, model::test::random_bool_vector};
+    use crate::{claims::{get_offset_product, identity_eval}, testing::random_bool_vector};
     use ff::Field;
     type F = GoldilocksExt2;
 

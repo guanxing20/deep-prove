@@ -1,10 +1,9 @@
 #![feature(iter_next_chunk)]
 
-use derive_more::{Deref, From};
 use ff_ext::ExtensionField;
 use itertools::Itertools;
 use multilinear_extensions::mle::DenseMultilinearExtension;
-use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
+use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator,  ParallelIterator};
 use transcript::Transcript;
 mod claims;
 mod matrix;
@@ -12,6 +11,8 @@ mod model;
 mod onnx_parse;
 mod prover;
 mod lookup;
+mod testing;
+mod activation;
 
 /// Claim type to accumulate in this protocol, for a certain polynomial, known in the context.
 /// f(point) = eval
@@ -19,14 +20,14 @@ pub struct Claim<E> {
     point: Vec<E>,
     eval: E,
 }
-// TODO: use a real tensor
-#[derive(Debug, Clone, From, Deref)]
-struct Tensor<E>(Vec<E>);
 
-impl<E: ExtensionField> Tensor<E> {
-    pub fn scale_inplace(&mut self, scaling: E) {
-        self.0.par_iter_mut().for_each(|v_i| *v_i = *v_i * scaling);
-    }
+type Element = u64;
+
+pub fn vector_to_field_par<E: ExtensionField>(v: &[Element]) -> Vec<E> {
+    v.par_iter().map(|v| E::from(*v as u64)).collect::<Vec<_>>()
+}
+pub fn vector_to_field_par_into<E: ExtensionField>(v: Vec<Element>) -> Vec<E> {
+    v.into_par_iter().map(|v| E::from(v as u64)).collect::<Vec<_>>()
 }
 
 pub fn pad_vector<E: ExtensionField>(mut v: Vec<E>) -> Vec<E> {
@@ -43,7 +44,7 @@ pub(crate) fn vector_to_mle<E: ExtensionField>(v: Vec<E>) -> DenseMultilinearExt
 }
 
 /// Returns the bit sequence of num of bit_length length.
-pub(crate) fn to_bit_sequence_le(num: usize, bit_length: usize) -> impl Iterator<Item = usize> {
+pub(crate) fn to_bit_sequence_le(num: usize, bit_length: usize) -> impl DoubleEndedIterator<Item = usize> {
     assert!(
         bit_length as u32 <= usize::BITS,
         "bit_length cannot exceed usize::BITS"
@@ -76,7 +77,7 @@ mod test {
     use itertools::Itertools;
     use multilinear_extensions::mle::MultilinearExtension;
 
-    use crate::{model::test::random_vector, onnx_parse::load_mlp, prover::{default_transcript, verify, Context, Prover, IO}, to_bit_sequence_le, vector_to_mle, Tensor};
+    use crate::{onnx_parse::load_mlp, prover::{default_transcript, verify, Context, Prover, IO}, testing::random_vector, to_bit_sequence_le, vector_to_field_par, vector_to_mle, Element};
     use ff_ext::ff::Field;
 
     type E = GoldilocksExt2;
@@ -84,9 +85,9 @@ mod test {
     #[test]
     fn test_model_run() {
         let filepath = "assets/model.onnx";
-        let model = load_mlp::<E>(&filepath).unwrap();
+        let model = load_mlp::<Element>(&filepath).unwrap();
         println!("[+] Loaded onnx file");
-        let ctx = Context::generate(&model).expect("unable to generate context");
+        let ctx = Context::<E>::generate(&model).expect("unable to generate context");
         println!("[+] Setup parameters");
 
         let shape = model.input_shape();
@@ -103,7 +104,7 @@ mod test {
         let proof = prover.prove(&ctx, trace).expect("unable to generate proof");
 
         let mut verifier_transcript = default_transcript();
-        let io = IO::new(input, output.to_vec());
+        let io = IO::new(vector_to_field_par(&input), output.to_vec());
         verify(ctx, proof, io, &mut verifier_transcript).expect("invalid proof");
         println!("[+] Verify proof: valid");
     }
@@ -122,15 +123,5 @@ mod test {
             .collect_vec();
         let output = mle.evaluate(&eval);
         assert_eq!(output, v[random_index]);
-    }
-    #[test]
-    fn test_vector_scale() {
-        let v = random_vector(10);
-        let e = E::random(&mut thread_rng());
-        let mut scaled = Tensor(v.clone());
-        scaled.scale_inplace(e);
-        for (o, n) in v.iter().zip(scaled.iter()) {
-            assert_eq!(*o * e, *n);
-        }
     }
 }
