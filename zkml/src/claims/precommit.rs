@@ -20,7 +20,8 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sumcheck::structs::{IOPProof, IOPProverState, IOPVerifierState};
 use transcript::Transcript;
 
-type Pcs<E> = Basefold<E, BasefoldBasecodeParams>;
+use super::Pcs;
+
 
 // TODO: separate context into verifier and prover ctx once thing is working
 #[derive(Clone, Debug, Serialize, Deserialize)]

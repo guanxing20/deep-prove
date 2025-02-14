@@ -1,8 +1,11 @@
 use ff_ext::ExtensionField;
+use mpcs::{Basefold, BasefoldBasecodeParams};
+use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
 
 pub mod precommit;
 pub mod same_poly;
 
+pub(crate) type Pcs<E> = Basefold<E, BasefoldBasecodeParams>;
 /// Compute the vector (beta(r,1), ... ,beta(r,2^{|r|}))
 /// This function uses the dynamic programing technique of Libra
 pub fn compute_betas_eval<E: ExtensionField>(r: &[E]) -> Vec<E> {
@@ -29,9 +32,10 @@ pub fn compute_betas_eval<E: ExtensionField>(r: &[E]) -> Vec<E> {
 pub fn aggregated_rlc<E: ExtensionField>(claims: &[E], challenges: &[E]) -> E {
     assert_eq!(claims.len(), challenges.len());
     claims
-        .iter()
+        .par_iter()
         .zip(challenges)
-        .fold(E::ZERO, |acc, (claim, r)| acc + *claim * r)
+        .fold(|| E::ZERO, |acc, (claim, r)| acc + *claim * r)
+        .reduce(|| E::ZERO, |res, acc| res + acc)
 }
 
 /// Verifier logic to cheaply compute the evaluation of a matrix of betas vector at a given point.
@@ -45,8 +49,8 @@ pub fn compute_beta_eval_poly<E: ExtensionField>(
         ris: &[Vec<E>], 
         point: &[E]) -> E {
     let mut beta_evals = fs_challenges
-            .into_iter()
-            .zip(ris.into_iter())
+            .into_par_iter()
+            .zip(ris.into_par_iter())
             .map(|(x_i, r_i)| *x_i * identity_eval(&r_i, &point))
             .collect::<Vec<_>>();
 
@@ -57,7 +61,7 @@ pub fn compute_beta_eval_poly<E: ExtensionField>(
             beta_evals[idx] *= prod;
         }
 
-    beta_evals.iter().fold(E::ZERO, |acc, &eval| acc + eval)
+    beta_evals.par_iter().fold(|| E::ZERO, |acc, &eval| acc + eval).reduce(|| E::ZERO, |res,acc| res + acc)
 }
 
 /// Compute multilinear identity test between two points: returns 1 if points are equal, 0 if different.
