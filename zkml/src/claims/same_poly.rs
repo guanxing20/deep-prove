@@ -1,57 +1,45 @@
 //! This module contains logic to prove the opening of several claims related to the _same_ polynomial.
-//! e.g. a set of (r_i,y_i) such that f(r_i) = y_i for all i's. That polynomial is committed during 
-//! proving time (not at setup time).
+//! e.g. a set of (r_i,y_i) such that f(r_i) = y_i for all i's. 
 //! a_i = randomness() for i:0 -> |r_i|
 //! for r_i, compute Beta_{r_i} = [beta_{r_i}(0),(1),...(2^|r_i|)]
 //! then Beta_j = SUM_j a_i * Beta_{r_i}
+//! 
+//! Note the output of the verifier is a claim that needs to be verified outside of this protocol. 
+//! It could be via an opening directly OR via an accumulation scheme.
 
 use anyhow::{ensure, Context as CC, Ok};
+use itertools::Itertools;
 use ff_ext::ExtensionField;
 use mpcs::PolynomialCommitmentScheme;
 use multilinear_extensions::virtual_poly::{VPAuxInfo, VirtualPolynomial};
+use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 use serde::{de::DeserializeOwned, Serialize};
 use sumcheck::structs::{IOPProof, IOPProverState, IOPVerifierState};
-use crate::{claims::identity_eval, vector_to_mle, VectorTranscript};
+use crate::{claims::identity_eval, vector_to_mle, Claim, VectorTranscript};
 use multilinear_extensions::mle::{DenseMultilinearExtension, MultilinearExtension};
 use transcript::Transcript;
 
-use super::{aggregated_rlc, compute_beta_eval_poly, compute_betas_eval, Pcs};
+use super::{aggregated_rlc, compute_betas_eval, Pcs};
 
 pub struct Context<E: ExtensionField> 
-where
-    E::BaseField: Serialize + DeserializeOwned,
-    E: Serialize + DeserializeOwned,
 {
     vp_info: VPAuxInfo<E>,
-    pp: <Pcs<E> as PolynomialCommitmentScheme<E>>::ProverParam,
-    vp: <Pcs<E> as PolynomialCommitmentScheme<E>>::VerifierParam,
 }
 
 impl<E: ExtensionField> Context<E> 
-where
-    E::BaseField: Serialize + DeserializeOwned,
-    E: Serialize + DeserializeOwned,
 {
     /// number of variables of the poly in question
-    pub fn new(num_vars: usize,pcs_params: <Pcs<E> as PolynomialCommitmentScheme<E>>::Param) -> Self {
-        let (pp, vp) = Pcs::trim(pcs_params, 1 << num_vars).expect("setup too small");
+    pub fn new(num_vars: usize) -> Self {
         Self {
             vp_info: VPAuxInfo::from_mle_list_dimensions(&[vec![num_vars, num_vars]]),
-            pp,
-            vp,
         }
     }
 }
-struct Proof<E: ExtensionField> where 
-E::BaseField: Serialize + DeserializeOwned,
-E: Serialize + DeserializeOwned
+struct Proof<E: ExtensionField> 
 {
     sumcheck: IOPProof<E>,
     // [0] about the betas, [1] about the poly
     evals: Vec<E>,
-    poly_comm: <Pcs<E> as PolynomialCommitmentScheme<E>>::Commitment,
-    poly_open: <Pcs<E> as PolynomialCommitmentScheme<E>>::Proof,
-
 }
 
 struct Prover<E: ExtensionField> {
@@ -76,46 +64,31 @@ impl<E> Prover<E> where
             format!("Invalid claim length: input.len() = {} vs poly.num_vars = {} ",
             input.len(),self.poly.num_vars()));
         self.claims.push(Claim {
-            input,
-            output,
+            point: input,
+            eval: output,
         });
         Ok(())
     }
     pub fn prove<T: Transcript<E>>(self,ctx: &Context<E>, t: &mut T) -> anyhow::Result<Proof<E>> {
         let challenges = t.read_challenges(self.claims.len());
-        //#[cfg(test)]
-        //{
-        //    let inputs = self.claims.into_iter().map(|c| (c.input,c.output)).unzip();
-        //    let y_res = aggregated_rlc(&outputs, &challenges);
-        //}
 
-        let mut final_beta = vec![E::ZERO; 1 << self.poly.num_vars()];
-        // TODO: see if this methods could run faster with multiple threads instead using matmul in parallel
-        for (a_i,c_i) in challenges.into_iter().zip(self.claims) {
+        let beta_evals = challenges.into_par_iter().zip(self.claims.into_par_iter()).map(|(a_i, c_i)| {
             // c_i.input = r_i
-            let beta_i = compute_betas_eval(&c_i.input);
-            // beta_i(j)
-            for (j,beta_i_j) in beta_i.into_iter().enumerate() {
-                final_beta[j] += a_i * beta_i_j;
-            }
-        }
+            compute_betas_eval(&c_i.point).into_iter().map(|b_i| a_i * b_i).collect_vec()
+        }).collect::<Vec<_>>();
+        let final_beta = (0..1 << ctx.vp_info.max_num_variables).into_par_iter().map(|i| {
+            beta_evals.iter().map(|beta_for_r_i| beta_for_r_i[i]).fold(E::ZERO, |acc, b| acc + b)
+        }).collect::<Vec<_>>();
+
         // then run the sumcheck on it
         let mut vp = VirtualPolynomial::new(self.poly.num_vars());
-        vp.add_mle_list(vec![vector_to_mle(final_beta).into(),self.poly.clone().into()], E::ONE);
+        vp.add_mle_list(vec![vector_to_mle(final_beta).into(),self.poly.into()], E::ONE);
          #[allow(deprecated)]
         let (sumcheck_proof, state) = IOPProverState::<E>::prove_parallel(vp, t);
 
-        // prove the opening for the polynomial at the random point from the sumcheck
-        let poly_evaluation = state.get_mle_final_evaluations()[1];
-        let poly_point = sumcheck_proof.point.clone();
-        let comm = Pcs::commit(&ctx.pp, &self.poly).context("unable to commit")?;
-        let vcomm = Pcs::get_pure_commitment(&comm);
-        let pcs_proof = Pcs::open(&ctx.pp, &self.poly, &comm, &poly_point, &poly_evaluation, t)?;
         Ok(Proof{
             sumcheck: sumcheck_proof,
             evals: state.get_mle_final_evaluations(),
-            poly_comm: vcomm,
-            poly_open: pcs_proof,
         })
     }
 }
@@ -144,15 +117,15 @@ where
     pub fn add_claim(&mut self, input: Vec<E>, output: E) -> anyhow::Result<()> {
         ensure!(input.len() == self.ctx.vp_info.max_num_variables,"invalid input len wrt to poly in ctx");
         self.claims.push(Claim {
-            input,
-            output,
+            point: input,
+            eval: output,
         });
         Ok(())
     }
 
-    pub fn verify<T: Transcript<E>>(self, proof: Proof<E>, t: &mut T) -> anyhow::Result<()> {
+    pub fn verify<T: Transcript<E>>(self, proof: Proof<E>, t: &mut T) -> anyhow::Result<Claim<E>> {
         let fs_challenges = t.read_challenges(self.claims.len()) ;
-        let (rs,ys) :(Vec<_>,Vec<_>)= self.claims.into_iter().map(|c| (c.input,c.output)).unzip();
+        let (rs,ys) :(Vec<_>,Vec<_>)= self.claims.into_iter().map(|c| (c.point,c.eval)).unzip();
         let y_res = aggregated_rlc(&ys, &fs_challenges);
         // check sumcheck proof
         let subclaim = IOPVerifierState::<E>::verify(y_res, &proof.sumcheck, &self.ctx.vp_info, t);
@@ -163,25 +136,23 @@ where
         });
         let given_y = proof.evals[0];
         ensure!(computed_y == given_y,"beta evaluation do not match");
-        // then check opening proof for the part about the poly
+        // here instead of checking this claim via PCS, we actually put it in the output of the verify function.
+        // That claims will be accumulated and verified elsewhere in the protocol.
         let point = proof.sumcheck.point.clone();
         let eval = proof.evals[1];
-        Pcs::verify(&self.ctx.vp, &proof.poly_comm, &point, &eval, &proof.poly_open, t)
-            .context("invalid pcs opening")?;
+        let claim = Claim {
+            point,
+            eval,
+        };
 
         // then check that both betas and poly evaluation lead to the outcome of the sumcheck, e.g. the sum
         let expected = proof.evals[0] * proof.evals[1];
         let computed = subclaim.expected_evaluation;
         ensure!(expected == computed,"final evals of sumcheck is not valid");
-        Ok(())
+        Ok(claim)
     }
 }
 
-/// Claim type to accumulate in this protocol
-struct Claim<E> {
-    input: Vec<E>,
-    output: E,
-}
 
 #[cfg(test)]
 mod test {
@@ -219,11 +190,10 @@ mod test {
         }).collect_vec();
         // COMMON PART
         assert_eq!(poly.len(), 1 << num_vars);
-        let param = Pcs::setup(poly_len)?;
-        let ctx = Context::new(num_vars,param);
+        let ctx = Context::new(num_vars);
         // PROVER PART
         let mut t = default_transcript();
-        let mut prover = Prover::new(poly_mle);
+        let mut prover = Prover::new(poly_mle.clone());
         for (r_i,y_i) in claims.clone().into_iter() {
             prover.add_claim(r_i, y_i)?;
         }
@@ -234,7 +204,9 @@ mod test {
         for (r_i, y_i) in claims.into_iter() {
             verifier.add_claim(r_i, y_i)?;
         }
-        verifier.verify(proof, &mut t)?;
+        let claim = verifier.verify(proof, &mut t)?;
+        let expected = poly_mle.evaluate(&claim.point);
+        assert_eq!(claim.eval,expected);
         Ok(())
     }
 }

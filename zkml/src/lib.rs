@@ -13,6 +13,12 @@ mod onnx_parse;
 mod prover;
 mod lookup;
 
+/// Claim type to accumulate in this protocol, for a certain polynomial, known in the context.
+/// f(point) = eval
+pub struct Claim<E> {
+    point: Vec<E>,
+    eval: E,
+}
 // TODO: use a real tensor
 #[derive(Debug, Clone, From, Deref)]
 struct Tensor<E>(Vec<E>);
