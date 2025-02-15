@@ -16,11 +16,23 @@ mod activation;
 
 /// Claim type to accumulate in this protocol, for a certain polynomial, known in the context.
 /// f(point) = eval
+#[derive(Clone,Debug)]
 pub struct Claim<E> {
     point: Vec<E>,
     eval: E,
 }
 
+impl<E> Claim<E> {
+    pub fn from(point: Vec<E>,eval:E) -> Self {
+        Self {
+            point,
+            eval,
+        }
+    }
+}
+
+/// Element is u64 right now to withstand the overflow arithmetics when running inference for any kinds of small models.
+/// With quantization this is not needed anymore and we can try changing back to u16 or u32 but perf gains should be minimal.
 type Element = u64;
 
 pub fn vector_to_field_par<E: ExtensionField>(v: &[Element]) -> Vec<E> {
@@ -99,9 +111,9 @@ mod test {
         println!("[+] Run inference. Result: {:?}",output); 
 
         let mut prover_transcript = default_transcript();
-        let prover = Prover::new(&mut prover_transcript);
+        let prover = Prover::new(&ctx,&mut prover_transcript);
         println!("[+] Run prover");
-        let proof = prover.prove(&ctx, trace).expect("unable to generate proof");
+        let proof = prover.prove(trace).expect("unable to generate proof");
 
         let mut verifier_transcript = default_transcript();
         let io = IO::new(vector_to_field_par(&input), output.to_vec());

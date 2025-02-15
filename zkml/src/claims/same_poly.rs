@@ -35,14 +35,23 @@ impl<E: ExtensionField> Context<E>
         }
     }
 }
-struct Proof<E: ExtensionField> 
+pub struct Proof<E: ExtensionField> 
 {
     sumcheck: IOPProof<E>,
     // [0] about the betas, [1] about the poly
     evals: Vec<E>,
 }
 
-struct Prover<E: ExtensionField> {
+impl<E: ExtensionField> Proof<E> {
+    pub fn extract_claim(&self) -> Claim<E> {
+        Claim {
+            point: self.sumcheck.point.clone(),
+            eval: self.evals[1],
+        }
+    }
+}
+
+pub struct Prover<E: ExtensionField> {
     claims: Vec<Claim<E>>,
     poly: DenseMultilinearExtension<E>,
 }
@@ -59,14 +68,11 @@ impl<E> Prover<E> where
             poly,
         }
     }
-    pub fn add_claim(&mut self,input: Vec<E>, output: E) -> anyhow::Result<()> {
-        ensure!(input.len() == self.poly.num_vars(),
+    pub fn add_claim(&mut self,claim: Claim<E>) -> anyhow::Result<()> {
+        ensure!(claim.point.len() == self.poly.num_vars(),
             format!("Invalid claim length: input.len() = {} vs poly.num_vars = {} ",
-            input.len(),self.poly.num_vars()));
-        self.claims.push(Claim {
-            point: input,
-            eval: output,
-        });
+            claim.point.len(),self.poly.num_vars()));
+        self.claims.push(claim); 
         Ok(())
     }
     pub fn prove<T: Transcript<E>>(self,ctx: &Context<E>, t: &mut T) -> anyhow::Result<Proof<E>> {
@@ -93,7 +99,7 @@ impl<E> Prover<E> where
     }
 }
 
-struct Verifier<'a, E: ExtensionField> 
+pub struct Verifier<'a, E: ExtensionField> 
 where
     E::BaseField: Serialize + DeserializeOwned,
     E: Serialize + DeserializeOwned,
@@ -114,12 +120,9 @@ where
         }
     }
     
-    pub fn add_claim(&mut self, input: Vec<E>, output: E) -> anyhow::Result<()> {
-        ensure!(input.len() == self.ctx.vp_info.max_num_variables,"invalid input len wrt to poly in ctx");
-        self.claims.push(Claim {
-            point: input,
-            eval: output,
-        });
+    pub fn add_claim(&mut self, claim: Claim<E>) -> anyhow::Result<()> {
+        ensure!(claim.point.len() == self.ctx.vp_info.max_num_variables,"invalid input len wrt to poly in ctx");
+        self.claims.push(claim);
         Ok(())
     }
 
@@ -138,12 +141,8 @@ where
         ensure!(computed_y == given_y,"beta evaluation do not match");
         // here instead of checking this claim via PCS, we actually put it in the output of the verify function.
         // That claims will be accumulated and verified elsewhere in the protocol.
-        let point = proof.sumcheck.point.clone();
-        let eval = proof.evals[1];
-        let claim = Claim {
-            point,
-            eval,
-        };
+        // Note the claim is only about the actual poly, not the betas since it has been verified just ^
+        let claim = proof.extract_claim();
 
         // then check that both betas and poly evaluation lead to the outcome of the sumcheck, e.g. the sum
         let expected = proof.evals[0] * proof.evals[1];
@@ -160,7 +159,7 @@ mod test {
     use mpcs::PolynomialCommitmentScheme;
     use multilinear_extensions::mle::MultilinearExtension;
 
-    use crate::{claims::Pcs, testing::random_field_vector, prover::default_transcript, vector_to_mle};
+    use crate::{claims::Pcs, prover::default_transcript, testing::random_field_vector, vector_to_mle, Claim};
     use itertools::Itertools;
 
     use super::{Context, Prover, Verifier};
@@ -195,14 +194,14 @@ mod test {
         let mut t = default_transcript();
         let mut prover = Prover::new(poly_mle.clone());
         for (r_i,y_i) in claims.clone().into_iter() {
-            prover.add_claim(r_i, y_i)?;
+            prover.add_claim(Claim::from(r_i, y_i))?;
         }
         let proof = prover.prove(&ctx,&mut t)?;
         // VERIFIER PART
         let mut t = default_transcript();
         let mut verifier = Verifier::new(&ctx);
         for (r_i, y_i) in claims.into_iter() {
-            verifier.add_claim(r_i, y_i)?;
+            verifier.add_claim(Claim::from(r_i, y_i))?;
         }
         let claim = verifier.verify(proof, &mut t)?;
         let expected = poly_mle.evaluate(&claim.point);

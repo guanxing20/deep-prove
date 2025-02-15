@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 
 use crate::{
-    claims::{aggregated_rlc, compute_beta_eval_poly, compute_betas_eval}, model::{Model, PolyID}, VectorTranscript
+    claims::{aggregated_rlc, compute_beta_eval_poly, compute_betas_eval}, model::{Layer, Model}, Claim, VectorTranscript
 };
 use anyhow::{Context as CC, ensure};
 use ff_ext::ExtensionField;
@@ -22,6 +22,8 @@ use transcript::Transcript;
 
 use super::Pcs;
 
+/// A polynomial has an unique ID associated to it.
+pub type PolyID = usize;
 
 // TODO: separate context into verifier and prover ctx once thing is working
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -58,7 +60,10 @@ where
 {
     /// NOTE: it assumes the model's layers are already padded to power of two
     pub fn generate_from_model(m: &Model) -> anyhow::Result<Self> {
-        Self::generate(m.layers().map(|(id, l)| (id, l.evals())).collect_vec())
+        Self::generate(m.layers().flat_map(|(id, l)| match l {
+            Layer::Dense(m) => Some((id, m.evals())),
+            _ => None,
+        }).collect_vec())
     }
 
     /// Generates the context given the set of individual polys that we need to commit to.
@@ -133,7 +138,7 @@ where
                 .poly_info
                 .get(&claim.poly_id)
                 .context("claim refers to unknown poly")?;
-            let given_size = 1 << claim.point.len() as usize;
+            let given_size = 1 << claim.claim.point.len() as usize;
             // verify the consistency of the individual polys lens with the claims
             ensure!(
                 *poly_size == given_size,
@@ -169,17 +174,15 @@ where
     /// Add a claim to be accumulated and checked via PCS
     /// The layer must be existing in the context, i.e. the setup phase must have processed the
     /// corresponding poly.
+    /// TODO: add context so it can check the correct shape of the claim
     pub fn add_claim(
         &mut self,
         id: PolyID,
-        point: Vec<E>,
-        // Note this one is not necessary and should be removed down the line for the prover
-        eval: E,
+        claim: Claim<E>,
     ) -> anyhow::Result<()> {
         let claim = IndividualClaim {
             poly_id: id,
-            point,
-            eval,
+            claim,
         };
         self.claims.push(claim);
         Ok(())
@@ -197,7 +200,7 @@ where
         let fs_challenges = t.read_challenges(sorted_claims.len());
         let (full_r, full_y): (Vec<Vec<_>>, Vec<_>) = sorted_claims
             .into_iter()
-            .map(|c| (c.point, c.eval))
+            .map(|c| (c.claim.point, c.claim.eval))
             .multiunzip();
 
         // construct the matrix with the betas scaled
@@ -254,12 +257,8 @@ where
             claims: Default::default(),
         }
     }
-    pub fn add_claim(&mut self, id: PolyID, point: Vec<E>, eval: E) -> anyhow::Result<()> {
-        let claim = IndividualClaim {
-            poly_id: id,
-            point,
-            eval,
-        };
+    pub fn add_claim(&mut self, id: PolyID, claim: Claim<E>) -> anyhow::Result<()> {
+        let claim = IndividualClaim { poly_id: id, claim };
         self.claims.push(claim);
         Ok(())
     }
@@ -279,7 +278,7 @@ where
         let (full_r, full_y): (Vec<Vec<_>>, Vec<_>) = sorted_claims
             .iter()
             .cloned()
-            .map(|c| (c.point, c.eval))
+            .map(|c| (c.claim.point, c.claim.eval))
             .multiunzip();
         let y_agg = aggregated_rlc(&full_y, &fs_challenges);
         let subclaim = IOPVerifierState::<E>::verify(y_agg, &proof.sumcheck, &ctx.poly_aux, t);
@@ -340,8 +339,7 @@ where
 #[derive(Clone, Debug)]
 struct IndividualClaim<E> {
     poly_id: PolyID,
-    point: Vec<E>,
-    eval: E,
+    claim: Claim<E>,
 }
 
 /// compute the beta matrix from individual challenges and betas.
@@ -383,11 +381,7 @@ mod test {
 
     use super::compute_betas_eval;
     use crate::{
-        matrix::Matrix,
-        testing::{random_bool_vector, random_field_vector},
-        pad_vector,
-        prover::default_transcript,
-        vector_to_mle,
+        matrix::Matrix, pad_vector, prover::default_transcript, testing::{random_bool_vector, random_field_vector}, vector_to_mle, Claim
     };
 
     use super::{CommitProver, CommitVerifier, Context};
@@ -422,7 +416,7 @@ mod test {
 
         let mut prover = CommitProver::new();
         for (id, point, eval) in claims.iter() {
-            prover.add_claim(*id, point.clone(), eval.clone())?;
+            prover.add_claim(*id, Claim::from(point.clone(), eval.clone()))?;
         }
 
         let mut t = default_transcript();
@@ -432,7 +426,7 @@ mod test {
         let mut verifier = CommitVerifier::new();
         let mut t = default_transcript();
         for (id, point, eval) in claims {
-            verifier.add_claim(id, point, eval)?;
+            verifier.add_claim(id, Claim::from(point, eval))?;
         }
         verifier.verify(&ctx, proof, &mut t)?;
 
@@ -455,7 +449,7 @@ mod test {
             let p = random_bool_vector(poly.len().ilog2() as usize);
             let eval = vector_to_mle(poly.clone()).evaluate(&p);
             claims.push((id, p.clone(), eval.clone()));
-            prover.add_claim(id, p, eval)?;
+            prover.add_claim(id, Claim::from(p, eval))?;
         }
 
         let mut t = default_transcript();
@@ -465,7 +459,7 @@ mod test {
         let mut verifier = CommitVerifier::new();
         let mut t = default_transcript();
         for (id, point, eval) in claims {
-            verifier.add_claim(id, point, eval)?;
+            verifier.add_claim(id, Claim::from(point, eval))?;
         }
         verifier.verify(&ctx, proof, &mut t)?;
 

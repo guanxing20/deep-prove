@@ -2,10 +2,11 @@ use ff_ext::ExtensionField;
 use rayon::iter::ParallelIterator;
 use rayon::iter::IntoParallelRefIterator;
 
+use crate::activation::Relu;
 use crate::{activation::Activation, matrix::Matrix, vector_to_field_par, vector_to_field_par_into, Element};
 
-/// A layer has a unique ID associated to it in the model
-pub type PolyID = usize;
+// The index of the step, starting from the input layer. (proving is done in the opposite flow)
+pub type StepIdx = usize;
 
 #[derive(Clone, Debug)]
 pub enum Layer {
@@ -15,12 +16,6 @@ pub enum Layer {
 }
 
 impl Layer {
-    pub fn dim(&self) -> (usize, usize) {
-        match self {
-            Layer::Dense(ref matrix) => (matrix.nrows(), matrix.ncols()),
-            _ => unimplemented!(),
-        }
-    }
 
     /// Run the operation associated with that layer with the given input
     // TODO: move to tensor library : right now it works because we assume there is only Dense
@@ -32,10 +27,10 @@ impl Layer {
         }
     }
 
-    pub fn evals<F: ExtensionField>(&self) -> Vec<F> {
+    pub fn shape(&self) -> Vec<usize> {
         match self {
-            Layer::Dense(ref matrix) => matrix.evals(),
-            _ => unimplemented!(),
+            Layer::Dense(ref matrix) => vec![matrix.nrows(),matrix.ncols()],
+            Layer::Activation(Activation::Relu(_)) => Relu::shape(),
         }
     }
 }
@@ -68,13 +63,15 @@ impl Model {
         trace.to_field()
     }
 
-    pub fn layers(&self) -> impl DoubleEndedIterator<Item = (PolyID, &Layer)> {
+    pub fn layers(&self) -> impl DoubleEndedIterator<Item = (StepIdx, &Layer)> {
         self.layers.iter().enumerate()
     }
 
     pub fn input_shape(&self) -> Vec<usize> {
-        let (row,col) = self.layers[0].dim();
-        vec![col]
+        let Layer::Dense(mat)= &self.layers[0] else {
+            panic!("layer is not starting with a dense layer?");
+        };
+        vec![mat.ncols()]
     }
 }
 
@@ -192,7 +189,7 @@ impl<'t, 'a, E> DoubleEndedIterator for InferenceTraceIterator<'t, 'a, E> {
 }
 
 pub struct InferenceStep<'a, E> {
-    pub id: PolyID,
+    pub id: StepIdx,
     /// Reference to the layer that produced this step
     pub layer: &'a Layer,
     /// Output produced by this layer
@@ -203,12 +200,10 @@ pub struct InferenceStep<'a, E> {
 pub(crate) mod test {
     use ark_std::rand::{Rng, thread_rng};
     use goldilocks::GoldilocksExt2;
-    use itertools::Itertools;
 
-    use crate::{matrix::Matrix, model::Layer, testing::random_vector, vector_to_field_par, Element};
+    use crate::{activation::{Activation, Relu}, matrix::Matrix, model::Layer, testing::random_vector, vector_to_field_par, Element};
 
     use super::Model;
-    use ff_ext::ExtensionField;
 
     type F = GoldilocksExt2;
 
@@ -226,10 +221,11 @@ pub(crate) mod test {
                 last_row = nrows;
                 let mat = Matrix::random((nrows, ncols)).pad_next_power_of_two();
                 model.add_layer(Layer::Dense(mat));
+                //model.add_layer(Layer::Activation(Activation::Relu(Relu)));
             }
-            let input_dims = model.layers.first().unwrap().dim();
+            let input_dims = model.layers.first().unwrap().shape();
             // ncols since matrix2vector is summing over the columns
-            let input = random_vector(input_dims.1);
+            let input = random_vector(input_dims[1]);
             (model, input)
         }
     }
@@ -267,7 +263,9 @@ pub(crate) mod test {
     #[test]
     fn test_inference_trace_iterator() {
         let mat1 = Matrix::random((10, 11)).pad_next_power_of_two();
+        let relu1 = Activation::Relu(Relu);
         let mat2 = Matrix::random((7, mat1.ncols())).pad_next_power_of_two();
+        let relu2 = Activation::Relu(Relu);
         let input = random_vector(mat1.ncols());
 
         let mut model = Model::new();
