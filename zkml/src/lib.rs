@@ -4,19 +4,20 @@ use ff_ext::ExtensionField;
 use itertools::Itertools;
 use multilinear_extensions::mle::DenseMultilinearExtension;
 use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator,  ParallelIterator};
-use transcript::Transcript;
-mod claims;
+use serde::{Deserialize, Serialize};
+use transcript::{BasicTranscript, Transcript};
+mod commit;
 mod matrix;
 mod model;
 mod onnx_parse;
-mod prover;
 mod lookup;
 mod testing;
 mod activation;
+mod iop;
 
 /// Claim type to accumulate in this protocol, for a certain polynomial, known in the context.
 /// f(point) = eval
-#[derive(Clone,Debug)]
+#[derive(Clone,Debug,Serialize,Deserialize)]
 pub struct Claim<E> {
     point: Vec<E>,
     eval: E,
@@ -34,6 +35,11 @@ impl<E> Claim<E> {
 /// Element is u64 right now to withstand the overflow arithmetics when running inference for any kinds of small models.
 /// With quantization this is not needed anymore and we can try changing back to u16 or u32 but perf gains should be minimal.
 type Element = u64;
+
+/// Returns the default transcript the prover and verifier must instantiate to validate a proof.
+pub fn default_transcript<E: ExtensionField>() -> BasicTranscript<E> {
+    BasicTranscript::new(b"m2vec")
+}
 
 pub fn vector_to_field_par<E: ExtensionField>(v: &[Element]) -> Vec<E> {
     v.par_iter().map(|v| E::from(*v as u64)).collect::<Vec<_>>()
@@ -89,7 +95,7 @@ mod test {
     use itertools::Itertools;
     use multilinear_extensions::mle::MultilinearExtension;
 
-    use crate::{onnx_parse::load_mlp, prover::{default_transcript, verify, Context, Prover, IO}, testing::random_vector, to_bit_sequence_le, vector_to_field_par, vector_to_mle, Element};
+    use crate::{default_transcript, iop::{prover::Prover, verifier::{verify, IO}, Context}, onnx_parse::load_mlp, testing::random_vector, to_bit_sequence_le, vector_to_field_par, vector_to_mle, Element};
     use ff_ext::ff::Field;
 
     type E = GoldilocksExt2;

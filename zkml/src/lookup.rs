@@ -4,11 +4,13 @@ use ark_std::rand::thread_rng;
 use ff_ext::ExtensionField;
 use itertools::Itertools;
 use multilinear_extensions::mle::{DenseMultilinearExtension, MultilinearExtension};
+use serde::{Deserialize, Serialize};
 use transcript::Transcript;
 
 use crate::{testing::random_field_vector, Claim};
 
 type MLE<E> = DenseMultilinearExtension<E>;
+#[derive(Clone,Serialize,Deserialize)]
 pub struct Proof<E> {
     // one commitment per "column" in the lookups
     //lookups_C: Vec<(Commitment<E>,Opening,Claim)>,
