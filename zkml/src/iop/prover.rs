@@ -201,7 +201,7 @@ where
             eval: state.get_mle_final_evaluations()[1],
         };
         self.proofs.push(StepProof::M2V(Matrix2VecProof {
-            proof: proof,
+            sumcheck: proof,
             individual_claims: state.get_mle_final_evaluations(),
         }));
         Ok(claim)
