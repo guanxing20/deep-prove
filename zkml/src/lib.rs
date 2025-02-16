@@ -3,32 +3,29 @@
 use ff_ext::ExtensionField;
 use itertools::Itertools;
 use multilinear_extensions::mle::DenseMultilinearExtension;
-use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator,  ParallelIterator};
+use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use serde::{Deserialize, Serialize};
 use transcript::{BasicTranscript, Transcript};
+mod activation;
 mod commit;
+mod iop;
+mod lookup;
 mod matrix;
 mod model;
 mod onnx_parse;
-mod lookup;
 mod testing;
-mod activation;
-mod iop;
 
 /// Claim type to accumulate in this protocol, for a certain polynomial, known in the context.
 /// f(point) = eval
-#[derive(Clone,Debug,Serialize,Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Claim<E> {
     point: Vec<E>,
     eval: E,
 }
 
 impl<E> Claim<E> {
-    pub fn from(point: Vec<E>,eval:E) -> Self {
-        Self {
-            point,
-            eval,
-        }
+    pub fn from(point: Vec<E>, eval: E) -> Self {
+        Self { point, eval }
     }
 }
 
@@ -45,7 +42,9 @@ pub fn vector_to_field_par<E: ExtensionField>(v: &[Element]) -> Vec<E> {
     v.par_iter().map(|v| E::from(*v as u64)).collect::<Vec<_>>()
 }
 pub fn vector_to_field_par_into<E: ExtensionField>(v: Vec<Element>) -> Vec<E> {
-    v.into_par_iter().map(|v| E::from(v as u64)).collect::<Vec<_>>()
+    v.into_par_iter()
+        .map(|v| E::from(v as u64))
+        .collect::<Vec<_>>()
 }
 
 pub fn pad_vector<E: ExtensionField>(mut v: Vec<E>) -> Vec<E> {
@@ -62,7 +61,10 @@ pub(crate) fn vector_to_mle<E: ExtensionField>(v: Vec<E>) -> DenseMultilinearExt
 }
 
 /// Returns the bit sequence of num of bit_length length.
-pub(crate) fn to_bit_sequence_le(num: usize, bit_length: usize) -> impl DoubleEndedIterator<Item = usize> {
+pub(crate) fn to_bit_sequence_le(
+    num: usize,
+    bit_length: usize,
+) -> impl DoubleEndedIterator<Item = usize> {
     assert!(
         bit_length as u32 <= usize::BITS,
         "bit_length cannot exceed usize::BITS"
@@ -95,7 +97,17 @@ mod test {
     use itertools::Itertools;
     use multilinear_extensions::mle::MultilinearExtension;
 
-    use crate::{default_transcript, iop::{prover::Prover, verifier::{verify, IO}, Context}, onnx_parse::load_mlp, testing::random_vector, to_bit_sequence_le, vector_to_field_par, vector_to_mle, Element};
+    use crate::{
+        Element, default_transcript,
+        iop::{
+            Context,
+            prover::Prover,
+            verifier::{IO, verify},
+        },
+        onnx_parse::load_mlp,
+        testing::random_vector,
+        to_bit_sequence_le, vector_to_field_par, vector_to_mle,
+    };
     use ff_ext::ff::Field;
 
     type E = GoldilocksExt2;
@@ -109,15 +121,15 @@ mod test {
         println!("[+] Setup parameters");
 
         let shape = model.input_shape();
-        assert_eq!(shape.len(),1);
+        assert_eq!(shape.len(), 1);
         let input = random_vector(shape[0]);
 
         let trace = model.run(input.clone());
         let output = trace.final_output().to_vec();
-        println!("[+] Run inference. Result: {:?}",output); 
+        println!("[+] Run inference. Result: {:?}", output);
 
         let mut prover_transcript = default_transcript();
-        let prover = Prover::new(&ctx,&mut prover_transcript);
+        let prover = Prover::new(&ctx, &mut prover_transcript);
         println!("[+] Run prover");
         let proof = prover.prove(trace).expect("unable to generate proof");
 
@@ -126,7 +138,6 @@ mod test {
         verify(ctx, proof, io, &mut verifier_transcript).expect("invalid proof");
         println!("[+] Verify proof: valid");
     }
-
 
     // TODO: move below code to a vector module
 

@@ -1,25 +1,32 @@
-use std::cmp::max;
-use crate::{activation::Activation, VectorTranscript};
+use super::{Context, Proof, StepProof};
+use crate::{
+    Claim, Element, VectorTranscript,
+    activation::Activation,
+    iop::{Matrix2VecProof, precommit, precommit::PolyID, same_poly},
+    lookup,
+    lookup::LookupProtocol,
+    matrix::Matrix,
+    model::{InferenceStep, InferenceTrace, Layer, StepIdx},
+    vector_to_mle,
+};
 use anyhow::Context as CC;
 use ff_ext::ExtensionField;
 use itertools::Itertools;
 use log::debug;
+use multilinear_extensions::{
+    mle::{IntoMLE, IntoMLEs, MultilinearExtension},
+    virtual_poly::VirtualPolynomial,
+};
+use serde::{Serialize, de::DeserializeOwned};
+use std::cmp::max;
 use sumcheck::structs::{IOPProverState, IOPVerifierState};
-use crate::{iop::{same_poly, Matrix2VecProof}, matrix::Matrix, model::InferenceTrace, vector_to_mle, Element};
-use multilinear_extensions::{mle::{IntoMLE, IntoMLEs, MultilinearExtension}, virtual_poly::VirtualPolynomial};
-use crate::{iop::precommit::PolyID, lookup::LookupProtocol};
-use serde::{de::DeserializeOwned, Serialize};
 use transcript::Transcript;
-use crate::{iop::precommit, lookup, model::{InferenceStep, Layer, StepIdx}, Claim};
-use super::{Context, Proof, StepProof};
-
-
 
 /// Prover generates a series of sumcheck proofs to prove the inference of a model
-pub struct Prover<'a, E: ExtensionField, T: Transcript<E>> 
+pub struct Prover<'a, E: ExtensionField, T: Transcript<E>>
 where
     E::BaseField: Serialize + DeserializeOwned,
-    E: Serialize + DeserializeOwned
+    E: Serialize + DeserializeOwned,
 {
     ctx: &'a Context<E>,
     // proofs for each layer being filled
@@ -28,7 +35,7 @@ where
     commit_prover: precommit::CommitProver<E>,
     /// the context of the witness part (IO of lookups, linked with matrix2vec for example)
     /// is generated during proving time. It is first generated and then the fiat shamir starts.
-    /// The verifier doesn't know about the individual polys (otherwise it beats the purpose) so 
+    /// The verifier doesn't know about the individual polys (otherwise it beats the purpose) so
     /// that's why it is generated at proof time.
     witness_ctx: Option<precommit::Context<E>>,
     /// The prover related to proving multiple claims about different witness polyy (io of lookups etc)
@@ -42,7 +49,7 @@ where
     E::BaseField: Serialize + DeserializeOwned,
     E: Serialize + DeserializeOwned,
 {
-    pub fn new(ctx: &'a Context<E>,transcript: &'a mut T) -> Self {
+    pub fn new(ctx: &'a Context<E>, transcript: &'a mut T) -> Self {
         Self {
             ctx,
             transcript,
@@ -66,38 +73,45 @@ where
                 // This is the case here since we treat each matrix as a different poly
                 self.prove_dense_step(last_claim, input, &step.output, (step.id as PolyID, matrix))
             }
-            Layer::Activation(crate::activation::Activation::Relu(relu)) => self.prove_relu(last_claim, input, &step.output, step.id)
+            Layer::Activation(crate::activation::Activation::Relu(relu)) => {
+                self.prove_relu(last_claim, input, &step.output, step.id)
+            }
         }
     }
 
-    fn prove_relu(&mut self,
+    fn prove_relu(
+        &mut self,
         last_claim: Claim<E>,
         // input to the relu
         input: &[E],
         // output of the relu
         output: &[E],
         // the step_id is used to associate the polys to accumulate for this lookup argument
-        step_id: StepIdx) -> anyhow::Result<Claim<E>> {
-            // First call the lookup with the right arguments:
-            // * table mle: one mle per column
-            // * lookup mle: one mle per column, where the evals are just the list of inputs and output ordered by access
-            let table_mles = self.ctx.activation.relu_polys().into_mles();
-            let lookup_mles = vec![input.to_vec(),output.to_vec()].into_mles();
-            // TODO: replace via proper lookup protocol
-            let mut lookup_proof = lookup::DummyLookup::prove(table_mles,lookup_mles,self.transcript)?;
-             // in our case, the output of the RELU is ALSO the same poly that previous proving
-            // step (likely dense) has "outputted" to evaluate at a random point. So here we accumulate the two claims,
-            // the one from previous proving step and the one given by the lookup protocol into one. Since they're claims
-            // about the same poly, we can use the "same_poly" protocol.
-            let same_poly_ctx = same_poly::Context::<E>::new(output.len()) ;
-            let mut same_poly_prover = same_poly::Prover::<E>::new(output.to_vec().into_mle());
-            same_poly_prover.add_claim(last_claim)?;
-            let (input_claim,output_claim) = (lookup_proof.claims.remove(0),lookup_proof.claims.remove(0));
-            same_poly_prover.add_claim(output_claim)?;
-            let claim_acc_proof = same_poly_prover.prove(&same_poly_ctx, self.transcript)?;
-            // order is (output,mult)
-            // TODO: add multiplicities, etc...
-            self.witness_prover.add_claim(step_id * 3, claim_acc_proof.extract_claim())?;
+        step_id: StepIdx,
+    ) -> anyhow::Result<Claim<E>> {
+        // First call the lookup with the right arguments:
+        // * table mle: one mle per column
+        // * lookup mle: one mle per column, where the evals are just the list of inputs and output ordered by access
+        let table_mles = self.ctx.activation.relu_polys().into_mles();
+        let lookup_mles = vec![input.to_vec(), output.to_vec()].into_mles();
+        // TODO: replace via proper lookup protocol
+        let mut lookup_proof =
+            lookup::DummyLookup::prove(table_mles, lookup_mles, self.transcript)?;
+        // in our case, the output of the RELU is ALSO the same poly that previous proving
+        // step (likely dense) has "outputted" to evaluate at a random point. So here we accumulate the two claims,
+        // the one from previous proving step and the one given by the lookup protocol into one. Since they're claims
+        // about the same poly, we can use the "same_poly" protocol.
+        let same_poly_ctx = same_poly::Context::<E>::new(output.len());
+        let mut same_poly_prover = same_poly::Prover::<E>::new(output.to_vec().into_mle());
+        same_poly_prover.add_claim(last_claim)?;
+        let (input_claim, output_claim) =
+            (lookup_proof.claims.remove(0), lookup_proof.claims.remove(0));
+        same_poly_prover.add_claim(output_claim)?;
+        let claim_acc_proof = same_poly_prover.prove(&same_poly_ctx, self.transcript)?;
+        // order is (output,mult)
+        // TODO: add multiplicities, etc...
+        self.witness_prover
+            .add_claim(step_id * 3, claim_acc_proof.extract_claim())?;
         // the next step is gonna take care of proving the next claim
         Ok(input_claim)
     }
@@ -180,24 +194,21 @@ where
             .add_claim(id, Claim::from(point, eval))
             .context("unable to add claim")?;
 
-        // the claim that this proving step outputs is the claim about not the matrix but the vector poly. 
+        // the claim that this proving step outputs is the claim about not the matrix but the vector poly.
         // at next step, that claim will be proven over this vector poly (either by the next dense layer proving, or RELU etc).
         let claim = Claim {
             point: proof.point.clone(),
             eval: state.get_mle_final_evaluations()[1],
         };
-        self.proofs.push(StepProof::M2V(Matrix2VecProof { 
-            proof:proof, 
+        self.proofs.push(StepProof::M2V(Matrix2VecProof {
+            proof: proof,
             individual_claims: state.get_mle_final_evaluations(),
-         }));
+        }));
         Ok(claim)
     }
 
-    pub fn prove<'b>(
-        mut self,
-        trace: InferenceTrace<'b, E>,
-    ) -> anyhow::Result<Proof<E>> {
-        // First, create the context for the witness polys - 
+    pub fn prove<'b>(mut self, trace: InferenceTrace<'b, E>) -> anyhow::Result<Proof<E>> {
+        // First, create the context for the witness polys -
         self.instantiate_witness_ctx(&trace)?;
         // write commitments and polynomials info to transcript
         self.ctx.write_to_transcript(self.transcript)?;
@@ -219,7 +230,9 @@ where
             last_claim = self.prove_step(last_claim, input, step)?;
         }
         // now provide opening proofs for all claims accumulated during the proving steps
-        let commit_proof = self.commit_prover.prove(&self.ctx.weights, self.transcript)?;
+        let commit_proof = self
+            .commit_prover
+            .prove(&self.ctx.weights, self.transcript)?;
         Ok(Proof {
             steps: self.proofs,
             commit: commit_proof,
@@ -227,25 +240,31 @@ where
     }
 
     /// Looks at all the individual polys to accumulate from the witnesses and create the context from that.
-    fn instantiate_witness_ctx<'b>(&mut self, trace: &InferenceTrace<'b,E>) -> anyhow::Result<()> {
-        let polys = trace.iter().rev().filter_map(|(input,step)| {
-            match step.layer {
-                Layer::Activation(Activation::Relu(_)) =>  {
-                    // TODO: right now we accumulate output, also need to accumulate the multiplicities poly
-                    //       need to accumulate the other polys from lookup table
-                    // We need distinct poly id and at each step we "accumulate" 3 poly
-                    // we can "expand" the set of IDs of polys we commit to here since they're proven fully separated
-                    // from the matrices weight IDs.
-                    let base_id = step.id * 3;
-                    //Some(vec![(base_id + 0, input.to_vec()),(base_id + 1, step.output.clone())])
-                    Some(vec![(base_id + 1, step.output.clone())])
-                },
-                // the dense layer is handling everything "on its own"
-                Layer::Dense(_) => None,
-            }
-        }).flatten().collect_vec();
+    fn instantiate_witness_ctx<'b>(&mut self, trace: &InferenceTrace<'b, E>) -> anyhow::Result<()> {
+        let polys = trace
+            .iter()
+            .rev()
+            .filter_map(|(input, step)| {
+                match step.layer {
+                    Layer::Activation(Activation::Relu(_)) => {
+                        // TODO: right now we accumulate output, also need to accumulate the multiplicities poly
+                        //       need to accumulate the other polys from lookup table
+                        // We need distinct poly id and at each step we "accumulate" 3 poly
+                        // we can "expand" the set of IDs of polys we commit to here since they're proven fully separated
+                        // from the matrices weight IDs.
+                        let base_id = step.id * 3;
+                        // Some(vec![(base_id + 0, input.to_vec()),(base_id + 1, step.output.clone())])
+                        Some(vec![(base_id + 1, step.output.clone())])
+                    }
+                    // the dense layer is handling everything "on its own"
+                    Layer::Dense(_) => None,
+                }
+            })
+            .flatten()
+            .collect_vec();
         if !polys.is_empty() {
-            let ctx = precommit::Context::generate(polys).context("unable to generate ctx for witnesses")?;
+            let ctx = precommit::Context::generate(polys)
+                .context("unable to generate ctx for witnesses")?;
             self.witness_ctx = Some(ctx);
         }
         Ok(())

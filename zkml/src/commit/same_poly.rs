@@ -1,33 +1,33 @@
 //! This module contains logic to prove the opening of several claims related to the _same_ polynomial.
-//! e.g. a set of (r_i,y_i) such that f(r_i) = y_i for all i's. 
+//! e.g. a set of (r_i,y_i) such that f(r_i) = y_i for all i's.
 //! a_i = randomness() for i:0 -> |r_i|
 //! for r_i, compute Beta_{r_i} = [beta_{r_i}(0),(1),...(2^|r_i|)]
 //! then Beta_j = SUM_j a_i * Beta_{r_i}
-//! 
-//! Note the output of the verifier is a claim that needs to be verified outside of this protocol. 
+//!
+//! Note the output of the verifier is a claim that needs to be verified outside of this protocol.
 //! It could be via an opening directly OR via an accumulation scheme.
 
-use anyhow::{ensure, Context as CC, Ok};
-use itertools::Itertools;
+use crate::{Claim, VectorTranscript, commit::identity_eval, vector_to_mle};
+use anyhow::{Context as CC, Ok, ensure};
 use ff_ext::ExtensionField;
+use itertools::Itertools;
 use mpcs::PolynomialCommitmentScheme;
-use multilinear_extensions::virtual_poly::{VPAuxInfo, VirtualPolynomial};
+use multilinear_extensions::{
+    mle::{DenseMultilinearExtension, MultilinearExtension},
+    virtual_poly::{VPAuxInfo, VirtualPolynomial},
+};
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sumcheck::structs::{IOPProof, IOPProverState, IOPVerifierState};
-use crate::{commit::identity_eval, vector_to_mle, Claim, VectorTranscript};
-use multilinear_extensions::mle::{DenseMultilinearExtension, MultilinearExtension};
 use transcript::Transcript;
 
-use super::{aggregated_rlc, compute_betas_eval, Pcs};
+use super::{Pcs, aggregated_rlc, compute_betas_eval};
 
-pub struct Context<E: ExtensionField> 
-{
+pub struct Context<E: ExtensionField> {
     vp_info: VPAuxInfo<E>,
 }
 
-impl<E: ExtensionField> Context<E> 
-{
+impl<E: ExtensionField> Context<E> {
     /// number of variables of the poly in question
     pub fn new(num_vars: usize) -> Self {
         Self {
@@ -35,9 +35,8 @@ impl<E: ExtensionField> Context<E>
         }
     }
 }
-#[derive(Clone,Default,Serialize,Deserialize)]
-pub struct Proof<E: ExtensionField> 
-{
+#[derive(Clone, Default, Serialize, Deserialize)]
+pub struct Proof<E: ExtensionField> {
     sumcheck: IOPProof<E>,
     // [0] about the betas, [1] about the poly
     evals: Vec<E>,
@@ -57,10 +56,12 @@ pub struct Prover<E: ExtensionField> {
     poly: DenseMultilinearExtension<E>,
 }
 
-impl<E> Prover<E> where 
+impl<E> Prover<E>
+where
     E: ExtensionField,
     E::BaseField: Serialize + DeserializeOwned,
-    E: Serialize + DeserializeOwned {
+    E: Serialize + DeserializeOwned,
+{
     /// The polynomial over which the claims are to be accumulated and proven
     /// Note the prover also _commits_ to this polynomial.
     pub fn new(poly: DenseMultilinearExtension<E>) -> Self {
@@ -69,38 +70,59 @@ impl<E> Prover<E> where
             poly,
         }
     }
-    pub fn add_claim(&mut self,claim: Claim<E>) -> anyhow::Result<()> {
-        ensure!(claim.point.len() == self.poly.num_vars(),
-            format!("Invalid claim length: input.len() = {} vs poly.num_vars = {} ",
-            claim.point.len(),self.poly.num_vars()));
-        self.claims.push(claim); 
+    pub fn add_claim(&mut self, claim: Claim<E>) -> anyhow::Result<()> {
+        ensure!(
+            claim.point.len() == self.poly.num_vars(),
+            format!(
+                "Invalid claim length: input.len() = {} vs poly.num_vars = {} ",
+                claim.point.len(),
+                self.poly.num_vars()
+            )
+        );
+        self.claims.push(claim);
         Ok(())
     }
-    pub fn prove<T: Transcript<E>>(self,ctx: &Context<E>, t: &mut T) -> anyhow::Result<Proof<E>> {
+    pub fn prove<T: Transcript<E>>(self, ctx: &Context<E>, t: &mut T) -> anyhow::Result<Proof<E>> {
         let challenges = t.read_challenges(self.claims.len());
 
-        let beta_evals = challenges.into_par_iter().zip(self.claims.into_par_iter()).map(|(a_i, c_i)| {
-            // c_i.input = r_i
-            compute_betas_eval(&c_i.point).into_iter().map(|b_i| a_i * b_i).collect_vec()
-        }).collect::<Vec<_>>();
-        let final_beta = (0..1 << ctx.vp_info.max_num_variables).into_par_iter().map(|i| {
-            beta_evals.iter().map(|beta_for_r_i| beta_for_r_i[i]).fold(E::ZERO, |acc, b| acc + b)
-        }).collect::<Vec<_>>();
+        let beta_evals = challenges
+            .into_par_iter()
+            .zip(self.claims.into_par_iter())
+            .map(|(a_i, c_i)| {
+                // c_i.input = r_i
+                compute_betas_eval(&c_i.point)
+                    .into_iter()
+                    .map(|b_i| a_i * b_i)
+                    .collect_vec()
+            })
+            .collect::<Vec<_>>();
+        let final_beta = (0..1 << ctx.vp_info.max_num_variables)
+            .into_par_iter()
+            .map(|i| {
+                beta_evals
+                    .iter()
+                    .map(|beta_for_r_i| beta_for_r_i[i])
+                    .fold(E::ZERO, |acc, b| acc + b)
+            })
+            .collect::<Vec<_>>();
 
         // then run the sumcheck on it
         let mut vp = VirtualPolynomial::new(self.poly.num_vars());
-        vp.add_mle_list(vec![vector_to_mle(final_beta).into(),self.poly.into()], E::ONE);
-         #[allow(deprecated)]
+        vp.add_mle_list(
+            vec![vector_to_mle(final_beta).into(), self.poly.into()],
+            E::ONE,
+        );
+        #[allow(deprecated)]
         let (sumcheck_proof, state) = IOPProverState::<E>::prove_parallel(vp, t);
 
-        Ok(Proof{
+        Ok(Proof {
             sumcheck: sumcheck_proof,
             evals: state.get_mle_final_evaluations(),
         })
     }
 }
 
-pub struct Verifier<'a, E: ExtensionField> 
+pub struct Verifier<'a, E: ExtensionField>
 where
     E::BaseField: Serialize + DeserializeOwned,
     E: Serialize + DeserializeOwned,
@@ -109,10 +131,10 @@ where
     ctx: &'a Context<E>,
 }
 
-impl<'a, E: ExtensionField> Verifier<'a, E> 
-where 
+impl<'a, E: ExtensionField> Verifier<'a, E>
+where
     E::BaseField: Serialize + DeserializeOwned,
-    E: Serialize + DeserializeOwned
+    E: Serialize + DeserializeOwned,
 {
     pub fn new(ctx: &'a Context<E>) -> Self {
         Self {
@@ -120,26 +142,32 @@ where
             ctx,
         }
     }
-    
+
     pub fn add_claim(&mut self, claim: Claim<E>) -> anyhow::Result<()> {
-        ensure!(claim.point.len() == self.ctx.vp_info.max_num_variables,"invalid input len wrt to poly in ctx");
+        ensure!(
+            claim.point.len() == self.ctx.vp_info.max_num_variables,
+            "invalid input len wrt to poly in ctx"
+        );
         self.claims.push(claim);
         Ok(())
     }
 
     pub fn verify<T: Transcript<E>>(self, proof: Proof<E>, t: &mut T) -> anyhow::Result<Claim<E>> {
-        let fs_challenges = t.read_challenges(self.claims.len()) ;
-        let (rs,ys) :(Vec<_>,Vec<_>)= self.claims.into_iter().map(|c| (c.point,c.eval)).unzip();
+        let fs_challenges = t.read_challenges(self.claims.len());
+        let (rs, ys): (Vec<_>, Vec<_>) = self.claims.into_iter().map(|c| (c.point, c.eval)).unzip();
         let y_res = aggregated_rlc(&ys, &fs_challenges);
         // check sumcheck proof
         let subclaim = IOPVerifierState::<E>::verify(y_res, &proof.sumcheck, &self.ctx.vp_info, t);
         // check sumcheck output: first check for the betas we can compute
-        //for(int i = 0; i < a.size(); i++){y += a[i]*identity_eval(claims[i].first,P.randomness[0]);}
-        let computed_y = fs_challenges.into_iter().zip(rs).fold(E::ZERO,|acc,(a_i,r_i)| {
-            acc + a_i * identity_eval(&r_i, &proof.sumcheck.point)
-        });
+        // for(int i = 0; i < a.size(); i++){y += a[i]*identity_eval(claims[i].first,P.randomness[0]);}
+        let computed_y = fs_challenges
+            .into_iter()
+            .zip(rs)
+            .fold(E::ZERO, |acc, (a_i, r_i)| {
+                acc + a_i * identity_eval(&r_i, &proof.sumcheck.point)
+            });
         let given_y = proof.evals[0];
-        ensure!(computed_y == given_y,"beta evaluation do not match");
+        ensure!(computed_y == given_y, "beta evaluation do not match");
         // here instead of checking this claim via PCS, we actually put it in the output of the verify function.
         // That claims will be accumulated and verified elsewhere in the protocol.
         // Note the claim is only about the actual poly, not the betas since it has been verified just ^
@@ -148,11 +176,10 @@ where
         // then check that both betas and poly evaluation lead to the outcome of the sumcheck, e.g. the sum
         let expected = proof.evals[0] * proof.evals[1];
         let computed = subclaim.expected_evaluation;
-        ensure!(expected == computed,"final evals of sumcheck is not valid");
+        ensure!(expected == computed, "final evals of sumcheck is not valid");
         Ok(claim)
     }
 }
-
 
 #[cfg(test)]
 mod test {
@@ -160,7 +187,9 @@ mod test {
     use mpcs::PolynomialCommitmentScheme;
     use multilinear_extensions::mle::MultilinearExtension;
 
-    use crate::{commit::Pcs, default_transcript, testing::random_field_vector, vector_to_mle, Claim};
+    use crate::{
+        Claim, commit::Pcs, default_transcript, testing::random_field_vector, vector_to_mle,
+    };
     use itertools::Itertools;
 
     use super::{Context, Prover, Verifier};
@@ -183,21 +212,23 @@ mod test {
         let poly_mle = vector_to_mle(poly.clone());
         // number of clains
         let m = 14;
-        let claims = (0..m).map(|_| {
-            let r_i = random_field_vector(num_vars);
-            let y_i = poly_mle.evaluate(&r_i);
-            (r_i,y_i)
-        }).collect_vec();
+        let claims = (0..m)
+            .map(|_| {
+                let r_i = random_field_vector(num_vars);
+                let y_i = poly_mle.evaluate(&r_i);
+                (r_i, y_i)
+            })
+            .collect_vec();
         // COMMON PART
         assert_eq!(poly.len(), 1 << num_vars);
         let ctx = Context::new(num_vars);
         // PROVER PART
         let mut t = default_transcript();
         let mut prover = Prover::new(poly_mle.clone());
-        for (r_i,y_i) in claims.clone().into_iter() {
+        for (r_i, y_i) in claims.clone().into_iter() {
             prover.add_claim(Claim::from(r_i, y_i))?;
         }
-        let proof = prover.prove(&ctx,&mut t)?;
+        let proof = prover.prove(&ctx, &mut t)?;
         // VERIFIER PART
         let mut t = default_transcript();
         let mut verifier = Verifier::new(&ctx);
@@ -206,7 +237,7 @@ mod test {
         }
         let claim = verifier.verify(proof, &mut t)?;
         let expected = poly_mle.evaluate(&claim.point);
-        assert_eq!(claim.eval,expected);
+        assert_eq!(claim.eval, expected);
         Ok(())
     }
 }

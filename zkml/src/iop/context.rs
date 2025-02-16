@@ -1,13 +1,14 @@
-use ff_ext::ExtensionField;
+use crate::{
+    activation::ActivationCtx,
+    iop::{precommit, precommit::PolyID},
+    model::{Layer, Model},
+};
 use anyhow::Context as CC;
+use ff_ext::ExtensionField;
 use itertools::Itertools;
 use multilinear_extensions::virtual_poly::VPAuxInfo;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use transcript::Transcript;
-use crate::activation::ActivationCtx;
-use crate::iop::precommit::PolyID;
-use crate::iop::precommit;
-use crate::model::{Layer, Model};
 
 /// Common information between prover and verifier
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -25,7 +26,7 @@ where
     /// This part contains the commitment of the weights.
     pub weights: precommit::Context<E>,
 
-    /// Context holding the lookup tables for activation, e.g. the MLEs of the input and output columns for 
+    /// Context holding the lookup tables for activation, e.g. the MLEs of the input and output columns for
     /// RELU for example
     pub activation: ActivationCtx<E>,
 }
@@ -59,7 +60,7 @@ where
                                 vector_num_vars,
                             ]]),
                         )
-                    } 
+                    }
                     _ => unimplemented!(),
                 }
             })

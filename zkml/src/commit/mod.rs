@@ -1,6 +1,8 @@
 use ff_ext::ExtensionField;
 use mpcs::{Basefold, BasefoldBasecodeParams};
-use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
+use rayon::iter::{
+    IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator, ParallelIterator,
+};
 
 pub mod precommit;
 pub mod same_poly;
@@ -44,24 +46,28 @@ pub fn aggregated_rlc<E: ExtensionField>(claims: &[E], challenges: &[E]) -> E {
 /// * ris: vector of r_i from the list of claim
 /// * point: evaluation point desired, usually comes from the last step of the sumcheck.
 pub fn compute_beta_eval_poly<E: ExtensionField>(
-        poly_lens: Vec<usize>, 
-        fs_challenges: &[E], 
-        ris: &[Vec<E>], 
-        point: &[E]) -> E {
+    poly_lens: Vec<usize>,
+    fs_challenges: &[E],
+    ris: &[Vec<E>],
+    point: &[E],
+) -> E {
     let mut beta_evals = fs_challenges
-            .into_par_iter()
-            .zip(ris.into_par_iter())
-            .map(|(x_i, r_i)| *x_i * identity_eval(&r_i, &point))
-            .collect::<Vec<_>>();
+        .into_par_iter()
+        .zip(ris.into_par_iter())
+        .map(|(x_i, r_i)| *x_i * identity_eval(&r_i, &point))
+        .collect::<Vec<_>>();
 
-        let mut pos = 0;
-        for (idx, poly_size) in poly_lens.iter().enumerate() {
-            let prod = get_offset_product(*poly_size, pos, &point);
-            pos += poly_size;
-            beta_evals[idx] *= prod;
-        }
+    let mut pos = 0;
+    for (idx, poly_size) in poly_lens.iter().enumerate() {
+        let prod = get_offset_product(*poly_size, pos, &point);
+        pos += poly_size;
+        beta_evals[idx] *= prod;
+    }
 
-    beta_evals.par_iter().fold(|| E::ZERO, |acc, &eval| acc + eval).reduce(|| E::ZERO, |res,acc| res + acc)
+    beta_evals
+        .par_iter()
+        .fold(|| E::ZERO, |acc, &eval| acc + eval)
+        .reduce(|| E::ZERO, |res, acc| res + acc)
 }
 
 /// Compute multilinear identity test between two points: returns 1 if points are equal, 0 if different.
@@ -78,7 +84,6 @@ pub(crate) fn identity_eval<E: ExtensionField>(r1: &[E], r2: &[E]) -> E {
         eval * (*r1_i * r2_i + (one - r1_i) * (one - r2_i))
     })
 }
-
 
 /// Computes the product of offset terms for a given position and random vector
 /// fn get_offset_product<E: ExtensionField>(size: usize, mut pos: usize, r: &[E]) -> E {
@@ -108,7 +113,11 @@ pub(crate) fn identity_eval<E: ExtensionField>(r1: &[E], r2: &[E]) -> E {
 ///
 /// # Returns
 /// The product computed from the bits of `pos` and corresponding values in `rand_vec`.
-pub(crate) fn get_offset_product<E: ExtensionField>(claim_size: usize, mut pos: usize, rand_vec: &[E]) -> E {
+pub(crate) fn get_offset_product<E: ExtensionField>(
+    claim_size: usize,
+    mut pos: usize,
+    rand_vec: &[E],
+) -> E {
     // Create a vector to hold the bits.
     // In the C++ code, bits are pushed in LSB-first order;
     // here we fill the vector in reverse so that the most significant end of the vector
@@ -139,7 +148,10 @@ pub(crate) fn get_offset_product<E: ExtensionField>(claim_size: usize, mut pos: 
 mod test {
     use goldilocks::GoldilocksExt2;
 
-    use crate::{commit::{get_offset_product, identity_eval}, testing::random_bool_vector};
+    use crate::{
+        commit::{get_offset_product, identity_eval},
+        testing::random_bool_vector,
+    };
     use ff::Field;
     type F = GoldilocksExt2;
 
@@ -173,5 +185,4 @@ mod test {
         // Results will be different because they're enforcing different slices
         assert_ne!(result0, result4);
     }
-
 }

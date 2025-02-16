@@ -4,8 +4,9 @@ use std::{collections::HashMap, path::Path};
 use tract_onnx::{pb::NodeProto, prelude::*};
 
 use crate::{
+    Element,
     matrix::Matrix,
-    model::{Layer, Model}, Element,
+    model::{Layer, Model},
 };
 
 #[derive(Debug, Clone)]
@@ -32,9 +33,6 @@ fn build_gemm(node: &NodeProto) -> Result<Gemm> {
     };
     Ok(gemm)
 }
-
-
-
 
 fn create_tensor(shape: Vec<usize>, dt: DatumType, data: &[u8]) -> TractResult<Tensor> {
     unsafe {
@@ -100,8 +98,7 @@ fn reshape<T: Clone>(flat_vec: Vec<T>, rows: usize, cols: usize) -> Option<Vec<V
     Some(flat_vec.chunks(cols).map(|chunk| chunk.to_vec()).collect())
 }
 
-pub fn load_mlp<Q: Quantizer<Element>>(filepath: &str) -> Result<Model>
-{
+pub fn load_mlp<Q: Quantizer<Element>>(filepath: &str) -> Result<Model> {
     if !Path::new(filepath).exists() {
         return Err(Error::msg(format!("File '{}' does not exist", filepath)));
     }
@@ -138,12 +135,11 @@ pub fn load_mlp<Q: Quantizer<Element>>(filepath: &str) -> Result<Model>
 
                 let tensor = values[0].clone();
                 let tensor_f32 = tensor.as_slice::<f32>().unwrap().to_vec();
-                let tensor_f = tensor_f32
-                    .iter()
-                    .map(Q::from_f32_unsafe)
-                    .collect_vec();
+                let tensor_f = tensor_f32.iter().map(Q::from_f32_unsafe).collect_vec();
                 let matrix = reshape(tensor_f, tensor.shape()[0], tensor.shape()[1]).unwrap();
-                let matrix = Matrix::<Element>::from_coeffs(matrix).unwrap().pad_next_power_of_two();
+                let matrix = Matrix::<Element>::from_coeffs(matrix)
+                    .unwrap()
+                    .pad_next_power_of_two();
                 // let matrix = matrix.transpose();
                 layers.push(Layer::Dense(matrix));
             }
@@ -183,7 +179,6 @@ mod tests {
     use goldilocks::GoldilocksExt2;
 
     // cargo test --release --package zkml -- onnx_parse::tests::test_tract --nocapture
-
 
     type F = GoldilocksExt2;
 

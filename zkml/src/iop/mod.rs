@@ -1,9 +1,10 @@
+use crate::{
+    commit::{precommit, same_poly},
+    lookup,
+};
 use ff_ext::ExtensionField;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sumcheck::structs::IOPProof;
-use crate::commit::precommit;
-use crate::commit::same_poly;
-use crate::lookup;
 
 pub mod context;
 pub mod prover;
@@ -24,13 +25,13 @@ where
     commit: precommit::CommitProof<E>,
 }
 
-#[derive(Clone,Serialize,Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub enum StepProof<E: ExtensionField> {
     M2V(Matrix2VecProof<E>),
     Activation(ActivationProof<E>),
 }
 
-#[derive(Clone,Serialize,Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ActivationProof<E: ExtensionField> {
     /// proof for the accumulation of the claim from m2v + claim from lookup for the same poly
     /// e.g. the "link" between a m2v and relu layer
@@ -64,7 +65,11 @@ mod test {
 
     use crate::{default_transcript, model::Model, vector_to_field_par};
 
-    use super::{prover::Prover, verifier::{verify, IO}, Context};
+    use super::{
+        Context,
+        prover::Prover,
+        verifier::{IO, verify},
+    };
 
     type F = GoldilocksExt2;
     use tracing_subscriber;

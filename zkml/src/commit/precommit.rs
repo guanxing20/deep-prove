@@ -1,12 +1,14 @@
 //! This module contains logic to prove the correct opening of several claims from several independent
-//! polynomials. These polynomials are committed at setup time. The proof contains only a single PCS 
+//! polynomials. These polynomials are committed at setup time. The proof contains only a single PCS
 //! opening proofs and a sumcheck proof.
 #![allow(dead_code)]
 
 use std::collections::HashMap;
 
 use crate::{
-    commit::{aggregated_rlc, compute_beta_eval_poly, compute_betas_eval}, model::{Layer, Model}, Claim, VectorTranscript
+    Claim, VectorTranscript,
+    commit::{aggregated_rlc, compute_beta_eval_poly, compute_betas_eval},
+    model::{Layer, Model},
 };
 use anyhow::{Context as CC, ensure};
 use ff_ext::ExtensionField;
@@ -60,10 +62,14 @@ where
 {
     /// NOTE: it assumes the model's layers are already padded to power of two
     pub fn generate_from_model(m: &Model) -> anyhow::Result<Self> {
-        Self::generate(m.layers().flat_map(|(id, l)| match l {
-            Layer::Dense(m) => Some((id, m.evals())),
-            _ => None,
-        }).collect_vec())
+        Self::generate(
+            m.layers()
+                .flat_map(|(id, l)| match l {
+                    Layer::Dense(m) => Some((id, m.evals())),
+                    _ => None,
+                })
+                .collect_vec(),
+        )
     }
 
     /// Generates the context given the set of individual polys that we need to commit to.
@@ -175,15 +181,8 @@ where
     /// The layer must be existing in the context, i.e. the setup phase must have processed the
     /// corresponding poly.
     /// TODO: add context so it can check the correct shape of the claim
-    pub fn add_claim(
-        &mut self,
-        id: PolyID,
-        claim: Claim<E>,
-    ) -> anyhow::Result<()> {
-        let claim = IndividualClaim {
-            poly_id: id,
-            claim,
-        };
+    pub fn add_claim(&mut self, id: PolyID, claim: Claim<E>) -> anyhow::Result<()> {
+        let claim = IndividualClaim { poly_id: id, claim };
         self.claims.push(claim);
         Ok(())
     }
@@ -304,7 +303,8 @@ where
                 poly_len
             })
             .collect();
-        let computed = compute_beta_eval_poly(pairs,&fs_challenges,&full_r,&proof.sumcheck.point);
+        let computed =
+            compute_beta_eval_poly(pairs, &fs_challenges, &full_r, &proof.sumcheck.point);
         // 0 since poly is f_beta(..) * f_w(..) so beta comes firt
         let expected = proof.individual_evals[0];
         ensure!(computed == expected, "Error in beta evaluation check");
@@ -370,7 +370,6 @@ fn beta_matrix_mle<E: ExtensionField>(ris: &[Vec<E>], ais: &[E]) -> DenseMultili
     DenseMultilinearExtension::from_evaluations_ext_vec(betas.len().ilog2() as usize, betas)
 }
 
-
 #[cfg(test)]
 mod test {
     use ark_std::rand::{Rng, thread_rng};
@@ -381,7 +380,11 @@ mod test {
 
     use super::compute_betas_eval;
     use crate::{
-        default_transcript, matrix::Matrix, pad_vector, testing::{random_bool_vector, random_field_vector}, vector_to_mle, Claim
+        Claim, default_transcript,
+        matrix::Matrix,
+        pad_vector,
+        testing::{random_bool_vector, random_field_vector},
+        vector_to_mle,
     };
 
     use super::{CommitProver, CommitVerifier, Context};
@@ -395,8 +398,7 @@ mod test {
         // let range = thread_rng().gen_range(3..15);
         let matrices = (0..n_poly)
             .map(|_| {
-                Matrix::random((rng.gen_range(3..24), rng.gen_range(3..24)))
-                    .pad_next_power_of_two()
+                Matrix::random((rng.gen_range(3..24), rng.gen_range(3..24))).pad_next_power_of_two()
             })
             .enumerate()
             .collect_vec();

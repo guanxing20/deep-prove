@@ -8,7 +8,7 @@ use rayon::iter::{
     IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator, ParallelIterator,
 };
 
-use crate::{testing::random_vector, to_bit_sequence_le, Element};
+use crate::{Element, testing::random_vector, to_bit_sequence_le};
 
 #[derive(Clone, Debug)]
 pub struct Matrix<E> {
@@ -17,8 +17,7 @@ pub struct Matrix<E> {
     coeffs: Vec<Vec<E>>,
 }
 
-impl Matrix<Element>
-{
+impl Matrix<Element> {
     pub fn from_coeffs(coeffs: Vec<Vec<Element>>) -> anyhow::Result<Self> {
         let n_rows = coeffs.len();
         let n_cols = coeffs.first().expect("at least one row in a matrix").len();
@@ -75,7 +74,11 @@ impl Matrix<Element>
 
     /// Returns the evaluation point, in order for (row,col) addressing
     pub fn evals<F: ExtensionField>(&self) -> Vec<F> {
-        self.coeffs.par_iter().flatten().map(|e| F::from(*e as u64)).collect()
+        self.coeffs
+            .par_iter()
+            .flatten()
+            .map(|e| F::from(*e as u64))
+            .collect()
     }
 
     pub fn pad_next_power_of_two(mut self) -> Self {
@@ -181,8 +184,7 @@ mod test {
 
     use super::Matrix;
 
-    impl Matrix<Element>
-    {
+    impl Matrix<Element> {
         pub fn assert_structure(&self, (n_rows, n_cols): (usize, usize)) {
             assert_eq!(self.dim.0, n_rows);
             assert_eq!(self.dim.1, n_cols);
@@ -224,12 +226,7 @@ mod test {
             thread_rng().gen_range(0..mat.dim.1),
         );
         let elem = mat.get(chosen_row, chosen_col);
-        println!(
-            "(x,y) = ({},{}) ==> {:?}", 
-            chosen_row,
-            chosen_col,
-            elem
-        );
+        println!("(x,y) = ({},{}) ==> {:?}", chosen_row, chosen_col, elem);
         let inputs = mat.position_to_boolean(chosen_row, chosen_col);
         let output = mle.evaluate(&inputs);
         assert_eq!(E::from(elem as u64), output);
@@ -259,8 +256,7 @@ mod test {
         new_mat.assert_structure((new_rows, new_cols));
     }
 
-    impl Matrix<Element>
-    {
+    impl Matrix<Element> {
         pub fn is_equal(&self, other: &Self) -> bool {
             if self.dim != other.dim {
                 return false;
@@ -271,18 +267,10 @@ mod test {
     }
     #[test]
     fn test_matrix_transpose() {
-        let mat = vec![
-            vec![1, 2],
-            vec![3, 4],
-            vec![5, 6],
-        ];
+        let mat = vec![vec![1, 2], vec![3, 4], vec![5, 6]];
         let mat = Matrix::<Element>::from_coeffs(mat).unwrap();
 
-        let trans_mat = vec![vec![1, 3, 5], vec![
-            2,
-            4,
-            6,
-        ]];
+        let trans_mat = vec![vec![1, 3, 5], vec![2, 4, 6]];
         let trans_mat = Matrix::<Element>::from_coeffs(trans_mat).unwrap();
         let res = mat.transpose();
         let result = trans_mat.is_equal(&res);

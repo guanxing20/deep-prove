@@ -1,20 +1,18 @@
-use anyhow::bail;
-use anyhow::ensure;
+use crate::{
+    Claim, VectorTranscript,
+    iop::{StepProof, precommit},
+    vector_to_mle,
+};
+use anyhow::{bail, ensure};
 use ff_ext::ExtensionField;
 use itertools::Itertools;
 use log::debug;
-use multilinear_extensions::mle::MultilinearExtension;
-use multilinear_extensions::mle::IntoMLE;
+use multilinear_extensions::mle::{IntoMLE, MultilinearExtension};
+use serde::{Serialize, de::DeserializeOwned};
 use sumcheck::structs::IOPVerifierState;
-use crate::iop::StepProof;
-use crate::vector_to_mle;
-use crate::{Claim, VectorTranscript};
-use crate::iop::precommit;
-use serde::{de::DeserializeOwned, Serialize};
 use transcript::Transcript;
 
 use super::{Context, Proof};
-
 
 /// What the verifier must have besides the proof
 pub struct IO<E> {
@@ -56,8 +54,8 @@ where
     };
     // NOTE: if we only had m2v then we would need to do the following check manually.
     // However, now that we have m2v + relu, we _always_ accumulate output claims into the _witness_prover_
-    // part. So we don't need to 
-    //let mut claimed_sum = proof
+    // part. So we don't need to
+    // let mut claimed_sum = proof
     //    .steps
     //    .first()
     //    .expect("at least one layer")
@@ -66,7 +64,7 @@ where
     //    // expecting (random evaluation of the output)
     //    .extract_sum();
 
-    //ensure!(
+    // ensure!(
     //    computed_sum == claimed_sum,
     //    "output vector evaluation is incorrect"
     //);
@@ -84,7 +82,8 @@ where
         debug!("verify {}: aux {:?}", i, aux);
 
         // TODO: currently that API can panic - should remove panic for error
-        let subclaim = IOPVerifierState::<E>::verify(output_claim.eval, &step.proof, &aux, transcript);
+        let subclaim =
+            IOPVerifierState::<E>::verify(output_claim.eval, &step.proof, &aux, transcript);
 
         // MATRIX OPENING PART
         // pcs_eval means this evaluation should come from a PCS opening proof

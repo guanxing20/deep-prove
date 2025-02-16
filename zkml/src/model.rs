@@ -1,9 +1,12 @@
 use ff_ext::ExtensionField;
-use rayon::iter::ParallelIterator;
-use rayon::iter::IntoParallelRefIterator;
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
-use crate::activation::Relu;
-use crate::{activation::Activation, matrix::Matrix, vector_to_field_par, vector_to_field_par_into, Element};
+use crate::{
+    Element,
+    activation::{Activation, Relu},
+    matrix::Matrix,
+    vector_to_field_par, vector_to_field_par_into,
+};
 
 // The index of the step, starting from the input layer. (proving is done in the opposite flow)
 pub type StepIdx = usize;
@@ -16,7 +19,6 @@ pub enum Layer {
 }
 
 impl Layer {
-
     /// Run the operation associated with that layer with the given input
     // TODO: move to tensor library : right now it works because we assume there is only Dense
     // layer which is matmul
@@ -29,7 +31,7 @@ impl Layer {
 
     pub fn shape(&self) -> Vec<usize> {
         match self {
-            Layer::Dense(ref matrix) => vec![matrix.nrows(),matrix.ncols()],
+            Layer::Dense(ref matrix) => vec![matrix.nrows(), matrix.ncols()],
             Layer::Activation(Activation::Relu(_)) => Relu::shape(),
         }
     }
@@ -37,7 +39,7 @@ impl Layer {
 
 /// NOTE: this doesn't handle dynamism in the model with loops for example for LLMs where it
 /// produces each token one by one.
-#[derive(Clone,Debug)]
+#[derive(Clone, Debug)]
 pub struct Model {
     layers: Vec<Layer>,
 }
@@ -52,7 +54,7 @@ impl Model {
         self.layers.push(l);
     }
 
-    pub fn run<'a, E: ExtensionField>(&'a self, input: Vec<Element>) -> InferenceTrace<'a,E> {
+    pub fn run<'a, E: ExtensionField>(&'a self, input: Vec<Element>) -> InferenceTrace<'a, E> {
         let mut trace = InferenceTrace::<Element>::new(input);
         for (id, layer) in self.layers() {
             let input = trace.last_input();
@@ -68,7 +70,7 @@ impl Model {
     }
 
     pub fn input_shape(&self) -> Vec<usize> {
-        let Layer::Dense(mat)= &self.layers[0] else {
+        let Layer::Dense(mat) = &self.layers[0] else {
             panic!("layer is not starting with a dense layer?");
         };
         vec![mat.ncols()]
@@ -82,18 +84,22 @@ pub struct InferenceTrace<'a, E> {
     input: Vec<E>,
 }
 
-impl<'a> InferenceTrace<'a,Element> {
-    pub fn to_field<E: ExtensionField>(self) -> InferenceTrace<'a,E> {
+impl<'a> InferenceTrace<'a, Element> {
+    pub fn to_field<E: ExtensionField>(self) -> InferenceTrace<'a, E> {
         let input = vector_to_field_par_into(self.input);
-        let field_steps = self.steps.par_iter().map(|step| InferenceStep {
+        let field_steps = self
+            .steps
+            .par_iter()
+            .map(|step| InferenceStep {
                 id: step.id,
                 layer: step.layer,
                 output: vector_to_field_par(&step.output),
-        }).collect::<Vec<_>>();
-       InferenceTrace {
-        steps: field_steps,
-        input,
-       } 
+            })
+            .collect::<Vec<_>>();
+        InferenceTrace {
+            steps: field_steps,
+            input,
+        }
     }
 }
 
@@ -104,8 +110,10 @@ impl<'a, E> InferenceTrace<'a, E> {
             input,
         }
     }
-    pub fn last_step(&self) -> &InferenceStep<'a,E> {
-        self.steps.last().expect("can't call last_step on empty inferece")
+    pub fn last_step(&self) -> &InferenceStep<'a, E> {
+        self.steps
+            .last()
+            .expect("can't call last_step on empty inferece")
     }
 
     /// Useful when building the trace. The next input is either the first input or the last
@@ -201,15 +209,20 @@ pub(crate) mod test {
     use ark_std::rand::{Rng, thread_rng};
     use goldilocks::GoldilocksExt2;
 
-    use crate::{activation::{Activation, Relu}, matrix::Matrix, model::Layer, testing::random_vector, vector_to_field_par, Element};
+    use crate::{
+        Element,
+        activation::{Activation, Relu},
+        matrix::Matrix,
+        model::Layer,
+        testing::random_vector,
+        vector_to_field_par,
+    };
 
     use super::Model;
 
     type F = GoldilocksExt2;
 
-    
-
-    impl  Model {
+    impl Model {
         /// Returns a random model with specified number of dense layers and a matching input.
         pub fn random(num_dense_layers: usize) -> (Self, Vec<Element>) {
             let mut model = Model::new();
@@ -221,7 +234,7 @@ pub(crate) mod test {
                 last_row = nrows;
                 let mat = Matrix::random((nrows, ncols)).pad_next_power_of_two();
                 model.add_layer(Layer::Dense(mat));
-                //model.add_layer(Layer::Activation(Activation::Relu(Relu)));
+                // model.add_layer(Layer::Activation(Activation::Relu(Relu)));
             }
             let input_dims = model.layers.first().unwrap().shape();
             // ncols since matrix2vector is summing over the columns
