@@ -14,6 +14,7 @@ mod matrix;
 mod model;
 mod onnx_parse;
 mod testing;
+mod utils;
 
 /// Claim type to accumulate in this protocol, for a certain polynomial, known in the context.
 /// f(point) = eval
