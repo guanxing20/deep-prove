@@ -127,6 +127,20 @@ fn fetch_weight_bias_as_mat<Q: Quantizer<Element>>(
     initializers: &HashMap<String, Tensor>,
 ) -> Result<Vec<Vec<u64>>> {
     ensure!(weight_or_bias == "weight" || weight_or_bias == "bias");
+
+    let alpha_or_beta = node
+        .attribute
+        .iter()
+        .filter(|x| {
+            x.name.contains(match weight_or_bias {
+                "weight" => "alpha",
+                _ => "beta",
+            })
+        })
+        .map(|x| x.f)
+        .collect_vec();
+    let alpha_or_beta = alpha_or_beta[0];
+
     let tensor_vec = node
         .input
         .iter()
@@ -137,6 +151,7 @@ fn fetch_weight_bias_as_mat<Q: Quantizer<Element>>(
     // If a node is Gemm, then it has only one tensor of the form "fcN.weight"
     let tensor_t = tensor_vec[0].clone();
     let tensor_t_f32 = tensor_t.as_slice::<f32>().unwrap().to_vec();
+    let tensor_t_f32 = tensor_t_f32.iter().map(|x| x * alpha_or_beta).collect_vec();
     let tensor_f = tensor_t_f32.iter().map(Q::from_f32_unsafe).collect_vec();
 
     let (rows, cols) = match tensor_t.shape().len() {
