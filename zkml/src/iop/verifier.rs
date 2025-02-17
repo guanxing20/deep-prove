@@ -1,5 +1,5 @@
 use crate::{
-    commit, iop::{precommit, StepProof}, vector_to_mle, Claim, VectorTranscript
+    commit, iop::{context::StepInfo, precommit, StepProof}, vector_to_mle, Claim, VectorTranscript
 };
 use crate::iop::precommit::PolyID;
 use anyhow::{bail, ensure};
@@ -11,7 +11,7 @@ use serde::{Serialize, de::DeserializeOwned};
 use sumcheck::structs::IOPVerifierState;
 use transcript::Transcript;
 
-use super::{Context, Matrix2VecProof, Proof};
+use super::{ActivationProof, Context, Matrix2VecProof, Proof};
 
 /// What the verifier must have besides the proof
 pub struct IO<E> {
@@ -71,20 +71,15 @@ where
     // let nlayers = layers.len();
 
     // 2. Verify each proof sequentially
-    // TODO generalize according to the type of proof - and find a way to link polys to only m2v proofs
-    let mut poly_aux_idx = 0;
-    for (i, proof) in proof.steps.iter().enumerate() {
-        match proof {
-            StepProof::Activation(_) => unimplemented!(),
-            StepProof::M2V(proof) => {
-                // fetch corresponding poly info for that step
-                let (id, aux) = ctx.polys_aux[poly_aux_idx].clone();
-                // increase the index for next time we see a m2v proof - i.e. the verifier is enforcing the VPAux sequence to 
-                // match the sequence of m2v proofs the prover is giving.
-                poly_aux_idx += 1;
-
-                output_claim = verify_m2v(output_claim, proof, (id,aux), &mut commit_verifier, transcript)?;
+    for (i, (proof,step_kind)) in proof.steps.iter().zip(ctx.steps_kind.iter()).enumerate() {
+        output_claim = match (proof ,step_kind) {
+            (StepProof::Activation(_), StepInfo::Activation { poly_id:_, poly_aux :_}) =>  {
+                unimplemented!()
             }
+            (StepProof::Dense(proof), StepInfo::Dense { poly_id, poly_aux }) => {
+                verify_m2v(output_claim, proof, (*poly_id,poly_aux.clone()), &mut commit_verifier, transcript)?
+            }
+            _ => bail!("proof type {} at step {} don't match expected kind {} from setup ",proof.variant_name(),i,step_kind.variant_name()),
         }
     }
     // 3. input verification: evaluating the input at the random evaluation point from the sumcheck
@@ -98,6 +93,20 @@ where
     // 4. verify the opening of the accumulation of claims
     commit_verifier.verify(&ctx.weights, proof.commit, transcript)?;
     Ok(())
+}
+
+fn verify_activation<E: ExtensionField,T: Transcript<E>>(
+    last_claim: Claim<E>,
+    proof: &ActivationProof<E>,
+    witness_verifier: &mut commit::precommit::CommitVerifier<E>,
+    t: &mut T) -> anyhow::Result<Claim<E>> 
+where
+    E::BaseField: Serialize + DeserializeOwned,
+    E: Serialize + DeserializeOwned,
+{
+    // 1. Verify the accumulation proof from last_claim + lookup claim into the new claim
+    //let same_poly_ctx = commit::same_poly::Context::new(last_claim.)
+    Ok(last_claim)
 }
 
 fn verify_m2v<E: ExtensionField,T: Transcript<E>>(

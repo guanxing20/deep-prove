@@ -12,7 +12,7 @@ use crate::{
 use anyhow::Context as CC;
 use ff_ext::ExtensionField;
 use itertools::Itertools;
-use log::debug;
+use log::{debug, warn};
 use multilinear_extensions::{
     mle::{IntoMLE, IntoMLEs, MultilinearExtension},
     virtual_poly::VirtualPolynomial,
@@ -200,7 +200,7 @@ where
             point: proof.point.clone(),
             eval: state.get_mle_final_evaluations()[1],
         };
-        self.proofs.push(StepProof::M2V(Matrix2VecProof {
+        self.proofs.push(StepProof::Dense(Matrix2VecProof {
             sumcheck: proof,
             individual_claims: state.get_mle_final_evaluations(),
         }));
@@ -233,10 +233,16 @@ where
         let commit_proof = self
             .commit_prover
             .prove(&self.ctx.weights, self.transcript)?;
-        Ok(Proof {
+        let mut output_proof = Proof {
             steps: self.proofs,
             commit: commit_proof,
-        })
+            witness: None,
+        };
+        if let Some(witness_ctx) = self.witness_ctx {
+            let witness_proof = self.witness_prover.prove(&witness_ctx,self.transcript)?;
+            output_proof.witness = Some((witness_proof,witness_ctx));
+        }
+        Ok(output_proof)
     }
 
     /// Looks at all the individual polys to accumulate from the witnesses and create the context from that.
@@ -266,6 +272,8 @@ where
             let ctx = precommit::Context::generate(polys)
                 .context("unable to generate ctx for witnesses")?;
             self.witness_ctx = Some(ctx);
+        } else {
+            warn!("no activation functions found - no witness commitment");
         }
         Ok(())
     }
