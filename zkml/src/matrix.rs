@@ -155,6 +155,7 @@ impl Matrix<Element> {
             .collect()
     }
 
+    // Computes returns the transpose of the current matrix
     pub fn transpose(&self) -> Matrix<Element> {
         let (rows, cols) = self.dim;
         let mut transposed_coeffs = vec![vec![self.coeffs[0][0].clone(); rows]; cols];
