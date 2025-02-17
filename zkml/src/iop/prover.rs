@@ -1,15 +1,16 @@
-use super::{Context, Proof, StepProof};
+use super::{context::{ActivationInfo, DenseInfo, StepInfo}, Context, Proof, StepProof};
 use crate::{
+    commit::{same_poly,precommit},
     Claim, Element, VectorTranscript,
     activation::Activation,
-    iop::{Matrix2VecProof, precommit, precommit::PolyID, same_poly},
+    iop::{Matrix2VecProof},
     lookup,
     lookup::LookupProtocol,
     matrix::Matrix,
-    model::{InferenceStep, InferenceTrace, Layer, StepIdx},
+    model::{InferenceStep, InferenceTrace, Layer},
     vector_to_mle,
 };
-use anyhow::Context as CC;
+use anyhow::{bail, Context as CC};
 use ff_ext::ExtensionField;
 use itertools::Itertools;
 use log::{debug, warn};
@@ -65,17 +66,19 @@ where
         last_claim: Claim<E>,
         input: &[E],
         step: &InferenceStep<'b, E>,
+        info: &StepInfo<E>,
     ) -> anyhow::Result<Claim<E>> {
-        match step.layer {
-            Layer::Dense(matrix) => {
+        match (step.layer, info) {
+            (Layer::Dense(matrix), StepInfo::Dense(info)) => {
                 // NOTE: here we treat the ID of the step AS the ID of the polynomial. THat's okay because we only care
                 // about these IDs being unique, so as long as the mapping between poly <-> id is correct, all good.
                 // This is the case here since we treat each matrix as a different poly
-                self.prove_dense_step(last_claim, input, &step.output, (step.id as PolyID, matrix))
+                self.prove_dense_step(last_claim, input, &step.output, info, matrix)
             }
-            Layer::Activation(crate::activation::Activation::Relu(relu)) => {
-                self.prove_relu(last_claim, input, &step.output, step.id)
+            (Layer::Activation(Activation::Relu(relu)),StepInfo::Activation(info)) => {
+                self.prove_relu(last_claim, input, &step.output, info)
             }
+            _ => bail!("inconsistent step and info from ctx"),
         }
     }
 
@@ -86,14 +89,22 @@ where
         input: &[E],
         // output of the relu
         output: &[E],
-        // the step_id is used to associate the polys to accumulate for this lookup argument
-        step_id: StepIdx,
+        info: &ActivationInfo,
     ) -> anyhow::Result<Claim<E>> {
+        assert_eq!(input.len(),output.len(),"input/output of lookup don't have same size");
+        let padded_size = 1 << info.padded_num_vars;
         // First call the lookup with the right arguments:
         // * table mle: one mle per column
         // * lookup mle: one mle per column, where the evals are just the list of inputs and output ordered by access
-        let table_mles = self.ctx.activation.relu_polys().into_mles();
-        let lookup_mles = vec![input.to_vec(), output.to_vec()].into_mles();
+        let table_mles = self.ctx.activation.relu_polys();
+        let lookup_mles = vec![input.to_vec(), output.to_vec()];
+        println!("RELU: BEFORE: lookup[input].len() = {}, table.len() = {}",lookup_mles[0].len(),table_mles[0].len());
+        let table_mles = pad2(table_mles,padded_size,E::ZERO).into_mles();
+        let lookup_mles = pad2(lookup_mles,padded_size,E::ZERO).into_mles();
+        println!("RELU: AFTER: lookup[input].len() = {}, table.len() = {}",1 << lookup_mles[0].num_vars(), 1 << table_mles[0].num_vars());
+        // pad the output to the required size
+        let padded_output = output.iter().chain(std::iter::repeat(&E::ZERO)).take(padded_size).cloned().collect_vec();
+
         // TODO: replace via proper lookup protocol
         let mut lookup_proof =
             lookup::DummyLookup::prove(table_mles, lookup_mles, self.transcript)?;
@@ -101,9 +112,9 @@ where
         // step (likely dense) has "outputted" to evaluate at a random point. So here we accumulate the two claims,
         // the one from previous proving step and the one given by the lookup protocol into one. Since they're claims
         // about the same poly, we can use the "same_poly" protocol.
-        let same_poly_ctx = same_poly::Context::<E>::new(output.len());
-        let mut same_poly_prover = same_poly::Prover::<E>::new(output.to_vec().into_mle());
-        same_poly_prover.add_claim(last_claim)?;
+        let same_poly_ctx = same_poly::Context::<E>::new(info.padded_num_vars);
+        let mut same_poly_prover = same_poly::Prover::<E>::new(padded_output.into_mle());
+        same_poly_prover.add_claim(last_claim.pad(info.padded_num_vars))?;
         let (input_claim, output_claim) =
             (lookup_proof.claims.remove(0), lookup_proof.claims.remove(0));
         same_poly_prover.add_claim(output_claim)?;
@@ -111,9 +122,17 @@ where
         // order is (output,mult)
         // TODO: add multiplicities, etc...
         self.witness_prover
-            .add_claim(step_id * 3, claim_acc_proof.extract_claim())?;
+            .add_claim(info.poly_id, claim_acc_proof.extract_claim())?;
         // the next step is gonna take care of proving the next claim
-        Ok(input_claim)
+        // TODO: clarify that bit - here cheating because of fake lookup protocol, but inconsistency
+        // between padded input and real inputsize. Next proving step REQUIRES the real input size.
+        let next_claim = {
+            let input_mle = input.to_vec().into_mle();
+            let point = input_claim.pad(input_mle.num_vars()).point;
+            let eval = input_mle.evaluate(&point);
+            Claim::from(point,eval)
+        };
+        Ok(next_claim)
     }
 
     fn prove_dense_step(
@@ -124,10 +143,11 @@ where
         input: &[E],
         // output of dense layer evaluation
         output: &[E],
-        (id, matrix): (PolyID, &Matrix<Element>),
+        info: &DenseInfo<E>,
+        matrix: &Matrix<Element>,
     ) -> anyhow::Result<Claim<E>> {
         let (nrows, ncols) = (matrix.nrows(), matrix.ncols());
-        assert_eq!(nrows, output.len(), "something's wrong with the output");
+        assert_eq!(nrows, output.len(), "dense proving: nrows {} vs output {}",nrows,output.len());
         assert_eq!(
             nrows.ilog2() as usize,
             last_claim.point.len(),
@@ -191,7 +211,7 @@ where
         let point = [proof.point.as_slice(), last_claim.point.as_slice()].concat();
         let eval = state.get_mle_final_evaluations()[0];
         self.commit_prover
-            .add_claim(id, Claim::from(point, eval))
+            .add_claim(info.poly_id, Claim::from(point, eval))
             .context("unable to add claim")?;
 
         // the claim that this proving step outputs is the claim about not the matrix but the vector poly.
@@ -209,7 +229,7 @@ where
 
     pub fn prove<'b>(mut self, trace: InferenceTrace<'b, E>) -> anyhow::Result<Proof<E>> {
         // First, create the context for the witness polys -
-        self.instantiate_witness_ctx(&trace)?;
+        self.instantiate_witness_ctx(&trace,&self.ctx.steps_info)?;
         // write commitments and polynomials info to transcript
         self.ctx.write_to_transcript(self.transcript)?;
         // this is the random set of variables to fix at each step derived as the output of
@@ -226,8 +246,8 @@ where
             eval: y_i,
         };
         // we start by the output to prove up to the input, GKR style
-        for (i, (input, step)) in trace.iter().rev().enumerate() {
-            last_claim = self.prove_step(last_claim, input, step)?;
+        for (i, ((input, step),info) )in trace.iter().rev().zip(self.ctx.steps_info.iter()).enumerate() {
+            last_claim = self.prove_step(last_claim, input, step,&info)?;
         }
         // now provide opening proofs for all claims accumulated during the proving steps
         let commit_proof = self
@@ -246,24 +266,18 @@ where
     }
 
     /// Looks at all the individual polys to accumulate from the witnesses and create the context from that.
-    fn instantiate_witness_ctx<'b>(&mut self, trace: &InferenceTrace<'b, E>) -> anyhow::Result<()> {
+    fn instantiate_witness_ctx<'b>(&mut self, trace: &InferenceTrace<'b, E>,step_infos: &[StepInfo<E>]) -> anyhow::Result<()> {
         let polys = trace
             .iter()
             .rev()
-            .filter_map(|(input, step)| {
-                match step.layer {
-                    Layer::Activation(Activation::Relu(_)) => {
-                        // TODO: right now we accumulate output, also need to accumulate the multiplicities poly
-                        //       need to accumulate the other polys from lookup table
-                        // We need distinct poly id and at each step we "accumulate" 3 poly
-                        // we can "expand" the set of IDs of polys we commit to here since they're proven fully separated
-                        // from the matrices weight IDs.
-                        let base_id = step.id * 3;
-                        // Some(vec![(base_id + 0, input.to_vec()),(base_id + 1, step.output.clone())])
-                        Some(vec![(base_id + 1, step.output.clone())])
+            .zip(step_infos.iter())
+            .filter_map(|((_input, step),info)| {
+                match (step.layer,info) {
+                    (Layer::Activation(Activation::Relu(_)), StepInfo::Activation(info)) => {
+                        Some(vec![(info.poly_id, step.output.clone())])
                     }
                     // the dense layer is handling everything "on its own"
-                    Layer::Dense(_) => None,
+                    _ => None,
                 }
             })
             .flatten()
@@ -277,4 +291,13 @@ where
         }
         Ok(())
     }
+}
+
+/// Pad all inner vectors to the given size
+fn pad2<E:Clone>(a: Vec<Vec<E>>,nsize: usize,with: E) -> Vec<Vec<E>> {
+    // check vectors inside are all of the same length respectively
+    assert_eq!(a.iter().map(|v|v.len()).sum::<usize>(), a.len() * a[0].len());
+    // make sure we're not doing anything wrong
+    assert!(a.iter().all(|v| v.len() <= nsize));
+    a.into_iter().map(|mut v| { v.resize(nsize, with.clone()); v } ).collect_vec()
 }

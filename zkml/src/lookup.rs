@@ -21,6 +21,15 @@ pub struct Proof<E> {
     _p: PhantomData<E>,
 }
 
+impl<E: Clone> Proof<E> {
+    pub fn output_claim(&self) -> Option<Claim<E>> {
+        self.claims.last().cloned()
+    }
+    pub fn input_claim(&self) -> Option<Claim<E>> {
+        self.claims.first().cloned()
+    }
+}
+
 struct Context<E> {
     _p: PhantomData<E>,
 }

@@ -152,7 +152,7 @@ where
         Ok(())
     }
 
-    pub fn verify<T: Transcript<E>>(self, proof: Proof<E>, t: &mut T) -> anyhow::Result<Claim<E>> {
+    pub fn verify<T: Transcript<E>>(self, proof: &Proof<E>, t: &mut T) -> anyhow::Result<Claim<E>> {
         let fs_challenges = t.read_challenges(self.claims.len());
         let (rs, ys): (Vec<_>, Vec<_>) = self.claims.into_iter().map(|c| (c.point, c.eval)).unzip();
         let y_res = aggregated_rlc(&ys, &fs_challenges);
@@ -235,7 +235,7 @@ mod test {
         for (r_i, y_i) in claims.into_iter() {
             verifier.add_claim(Claim::from(r_i, y_i))?;
         }
-        let claim = verifier.verify(proof, &mut t)?;
+        let claim = verifier.verify(&proof, &mut t)?;
         let expected = poly_mle.evaluate(&claim.point);
         assert_eq!(claim.eval, expected);
         Ok(())

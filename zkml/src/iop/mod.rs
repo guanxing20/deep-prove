@@ -84,7 +84,8 @@ mod test {
     #[test]
     fn test_prover_steps() {
         tracing_subscriber::fmt::init();
-        let (model, input) = Model::random(1);
+        let (model, input) = Model::random(2);
+        model.describe();
         let trace = model.run::<F>(input.clone());
         let output = trace.final_output();
         let ctx = Context::generate(&model).expect("unable to generate context");

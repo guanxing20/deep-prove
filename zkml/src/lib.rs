@@ -28,6 +28,16 @@ impl<E> Claim<E> {
         Self { point, eval }
     }
 }
+impl<E: ExtensionField> Claim<E> {
+    /// Pad the point to the new size given.
+    /// This is necessary
+    pub fn pad(&self,nsize: usize) -> Claim<E> {
+        Self {
+            eval: self.eval,
+            point: self.point.iter().chain(std::iter::repeat(&E::ZERO)).take(nsize).cloned().collect_vec(),
+        }
+    }
+}
 
 /// Element is u64 right now to withstand the overflow arithmetics when running inference for any kinds of small models.
 /// With quantization this is not needed anymore and we can try changing back to u16 or u32 but perf gains should be minimal.
