@@ -35,6 +35,16 @@ impl Layer {
             Layer::Activation(Activation::Relu(_)) => Relu::shape(),
         }
     }
+    pub fn to_string(&self) -> String {
+        match self {
+            Layer::Dense(ref matrix) => {
+                format!("Dense: ({},{})",matrix.nrows(),matrix.ncols())
+            }
+            Layer::Activation(Activation::Relu(_)) => {
+                format!("RELU: {}", 1 << Relu::num_vars())
+            }
+        }
+    }
 }
 
 /// NOTE: this doesn't handle dynamism in the model with loops for example for LLMs where it
@@ -74,6 +84,14 @@ impl Model {
             panic!("layer is not starting with a dense layer?");
         };
         vec![mat.ncols()]
+    }
+    /// Prints to stdout 
+    pub fn describe(&self) {
+        println!("MATRIX description:");
+        for (idx,layer) in self.layers() {
+            println!("\t- {}: {:?}",idx,layer.to_string());
+        }
+        println!("\n");
     }
 }
 
@@ -221,6 +239,9 @@ pub(crate) mod test {
     use super::Model;
 
     type F = GoldilocksExt2;
+    const SELECTOR_DENSE :usize = 0;
+    const SELECTOR_RELU: usize = 1;
+    const MOD_SELECTOR: usize = 2;
 
     impl Model {
         /// Returns a random model with specified number of dense layers and a matching input.
@@ -228,13 +249,21 @@ pub(crate) mod test {
             let mut model = Model::new();
             let mut rng = thread_rng();
             let mut last_row = rng.gen_range(3..15);
-            for _ in 0..num_dense_layers {
-                // last row becomes new column
-                let (nrows, ncols) = (rng.gen_range(3..15), last_row);
-                last_row = nrows;
-                let mat = Matrix::random((nrows, ncols)).pad_next_power_of_two();
-                model.add_layer(Layer::Dense(mat));
-                // model.add_layer(Layer::Activation(Activation::Relu(Relu)));
+            for selector in 0..num_dense_layers {
+                if selector % MOD_SELECTOR == SELECTOR_DENSE {
+                //if true {
+                    // last row becomes new column
+                    let (nrows, ncols) = (rng.gen_range(3..15), last_row);
+                    last_row = nrows;
+                    let mat = Matrix::random((nrows, ncols)).pad_next_power_of_two();
+                    model.add_layer(Layer::Dense(mat));
+                } else if selector % MOD_SELECTOR == SELECTOR_RELU {
+                    model.add_layer(Layer::Activation(Activation::Relu(Relu::new())));
+                    // no need to change the `last_row` since RELU layer keeps the same shape
+                    // of outputs
+                } else {
+                    panic!("random selection shouldn't be in that case");
+                }
             }
             let input_dims = model.layers.first().unwrap().shape();
             // ncols since matrix2vector is summing over the columns

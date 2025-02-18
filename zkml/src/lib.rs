@@ -29,6 +29,17 @@ impl<E> Claim<E> {
         Self { point, eval }
     }
 }
+impl<E: ExtensionField> Claim<E> {
+    /// Pad the point to the new size given 
+    /// This is necessary for passing from output of padded lookups to next dense layer proving for example.
+    /// NOTE: you can use it to pad or reduce size
+    pub fn pad(&self,new_num_vars: usize) -> Claim<E> {
+        Self {
+            eval: self.eval,
+            point: self.point.iter().chain(std::iter::repeat(&E::ZERO)).take(new_num_vars).cloned().collect_vec(),
+        }
+    }
+}
 
 /// Element is u64 right now to withstand the overflow arithmetics when running inference for any kinds of small models.
 /// With quantization this is not needed anymore and we can try changing back to u16 or u32 but perf gains should be minimal.

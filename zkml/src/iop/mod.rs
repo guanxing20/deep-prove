@@ -21,13 +21,25 @@ where
 {
     /// The successive sumchecks proofs. From output layer to input.
     steps: Vec<StepProof<E>>,
+    /// the commitment proofs related to the weights
     commit: precommit::CommitProof<E>,
+    /// the proofs related to the witnesses from RELU and link with dense layer
+    witness: Option<(precommit::CommitProof<E>, precommit::Context<E>)>,
 }
 
 #[derive(Clone,Serialize,Deserialize)]
 pub enum StepProof<E: ExtensionField> {
-    M2V(Matrix2VecProof<E>),
+    Dense(Matrix2VecProof<E>),
     Activation(ActivationProof<E>),
+}
+
+impl<E: ExtensionField> StepProof<E> {
+    pub fn variant_name(&self) -> String {
+        match self {
+            Self::Dense(_) => "Dense".to_string(),
+            Self::Activation(_) => "Activation".to_string(),
+        }
+    }
 }
 
 #[derive(Clone,Serialize,Deserialize)]
@@ -72,7 +84,8 @@ mod test {
     #[test]
     fn test_prover_steps() {
         tracing_subscriber::fmt::init();
-        let (model, input) = Model::random(1);
+        let (model, input) = Model::random(2);
+        model.describe();
         let trace = model.run::<F>(input.clone());
         let output = trace.final_output();
         let ctx = Context::generate(&model).expect("unable to generate context");

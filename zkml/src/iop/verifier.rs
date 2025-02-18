@@ -1,8 +1,8 @@
 use crate::{
-    commit, iop::{precommit, StepProof}, vector_to_mle, Claim, VectorTranscript
+    commit::{self,precommit,same_poly}, iop::{context::StepInfo, StepProof}, vector_to_mle, Claim, VectorTranscript
 };
 use crate::iop::precommit::PolyID;
-use anyhow::{bail, ensure};
+use anyhow::{bail, ensure, Context as CC};
 use ff_ext::ExtensionField;
 use itertools::Itertools;
 use log::debug;
@@ -11,7 +11,7 @@ use serde::{Serialize, de::DeserializeOwned};
 use sumcheck::structs::IOPVerifierState;
 use transcript::Transcript;
 
-use super::{Context, Matrix2VecProof, Proof};
+use super::{context::{ActivationInfo, DenseInfo}, ActivationProof, Context, Matrix2VecProof, Proof};
 
 /// What the verifier must have besides the proof
 pub struct IO<E> {
@@ -39,52 +39,47 @@ where
     E: Serialize + DeserializeOwned,
 {
     let mut commit_verifier = precommit::CommitVerifier::new();
+    let mut witness_verifier = precommit::CommitVerifier::new();
     ctx.write_to_transcript(transcript)?;
     // 0. Derive the first randomness
-    let mut randomness_to_fix = transcript.read_challenges(io.output.len().ilog2() as usize);
+    let first_randomness = transcript.read_challenges(io.output.len().ilog2() as usize);
     // 1. For the output, we manually evaluate the MLE and check if it's the same as what prover
     //    gave. Note prover could ellude that but it's simpler to avoid that special check right
     //    now.
     let output_mle = io.output.into_mle();
-    let computed_sum = output_mle.evaluate(&randomness_to_fix);
+    let computed_sum = output_mle.evaluate(&first_randomness);
     let mut output_claim = Claim {
-        point: randomness_to_fix,
+        point: first_randomness,
         eval: computed_sum,
     };
-    // NOTE: if we only had m2v then we would need to do the following check manually.
-    // However, now that we have m2v + relu, we _always_ accumulate output claims into the _witness_prover_
-    // part. So we don't need to
-    // let mut claimed_sum = proof
-    //    .steps
-    //    .first()
-    //    .expect("at least one layer")
-    //    .proof
-    //    // checks that the last g(0) + g(1) is really equal to the output that the verifier's
-    //    // expecting (random evaluation of the output)
-    //    .extract_sum();
+    
+    // NOTE: if we only had m2v then we need to do the following check manually to make sure the output is correct.
+    // For other cases, for example if we have RELU at last, then we _always_ accumulate output claims into the 
+    // _witness_prover_ part,  so that claim will be verified nonetheless. 
+    // TODO: optimization to avoid proving the accumulation if last layer is RELU since verifier can do it himself.
+    match proof.steps.first().expect("At least one proof") {
+        StepProof::Dense(dproof) => {
+            // checks that the last g(0) + g(1) is really equal to the output that the verifier's
+            // expecting (random evaluation of the output)
+            let claimed_sum = dproof.sumcheck.extract_sum();
+            ensure!(
+                computed_sum == claimed_sum,
+                "output vector evaluation is incorrect"
+            );
+        }
+        _ => {},
+    }
 
-    // ensure!(
-    //    computed_sum == claimed_sum,
-    //    "output vector evaluation is incorrect"
-    //);
-    // let layers = ctx.model.layers().collect_vec();
-    // let nlayers = layers.len();
-
-    // 2. Verify each proof sequentially
-    // TODO generalize according to the type of proof - and find a way to link polys to only m2v proofs
-    let mut poly_aux_idx = 0;
-    for (i, proof) in proof.steps.iter().enumerate() {
-        match proof {
-            StepProof::Activation(_) => unimplemented!(),
-            StepProof::M2V(proof) => {
-                // fetch corresponding poly info for that step
-                let (id, aux) = ctx.polys_aux[poly_aux_idx].clone();
-                // increase the index for next time we see a m2v proof - i.e. the verifier is enforcing the VPAux sequence to 
-                // match the sequence of m2v proofs the prover is giving.
-                poly_aux_idx += 1;
-
-                output_claim = verify_m2v(output_claim, proof, (id,aux), &mut commit_verifier, transcript)?;
+    // 2. Verify each proof sequentially, Always make sure the proof corresponds to the expected type of proof in the context.
+    for (i, (proof,step_kind)) in proof.steps.iter().zip(ctx.steps_info.iter()).enumerate() {
+        output_claim = match (proof ,step_kind) {
+            (StepProof::Activation(proof), StepInfo::Activation(info) ) =>  {
+                verify_activation(output_claim, proof, info, &mut witness_verifier, transcript)?
             }
+            (StepProof::Dense(proof), StepInfo::Dense(info)) => {
+                verify_dense(output_claim, proof, info, &mut commit_verifier, transcript)?
+            }
+            _ => bail!("proof type {} at step {} don't match expected kind {} from setup ",proof.variant_name(),i,step_kind.variant_name()),
         }
     }
     // 3. input verification: evaluating the input at the random evaluation point from the sumcheck
@@ -100,10 +95,34 @@ where
     Ok(())
 }
 
-fn verify_m2v<E: ExtensionField,T: Transcript<E>>(
+fn verify_activation<E: ExtensionField,T: Transcript<E>>(
+    last_claim: Claim<E>,
+    proof: &ActivationProof<E>,
+    info: &ActivationInfo,
+    witness_verifier: &mut commit::precommit::CommitVerifier<E>,
+    t: &mut T) -> anyhow::Result<Claim<E>> 
+where
+    E::BaseField: Serialize + DeserializeOwned,
+    E: Serialize + DeserializeOwned,
+{
+    // 1. Verify the accumulation proof from last_claim + lookup claim into the new claim
+    let sp_ctx = same_poly::Context::<E>::new(info.padded_num_vars);
+    let mut sp_verifier = same_poly::Verifier::<E>::new(&sp_ctx);
+    sp_verifier.add_claim(last_claim.pad(info.padded_num_vars))?;
+    sp_verifier.add_claim(proof.lookup.output_claim().context("no output claim for lookup")?)?;
+    let new_output_claim = sp_verifier.verify(&proof.io_accumulation,t)?;
+    // 2. Accumulate the new claim into the witness commitment protocol
+    witness_verifier.add_claim(info.poly_id, new_output_claim)?;
+    // TODO: add the other claims of the  lookup proofs 
+    // TODO: add verification of the lookup proof
+    // 3. return the input claim for to be proven at subsequent step
+    Ok(proof.lookup.input_claim().context("no input claim for lookup")?)
+}
+
+fn verify_dense<E: ExtensionField,T: Transcript<E>>(
         last_claim: Claim<E>, 
         proof: &Matrix2VecProof<E>,
-        (poly_id, aux): (PolyID, VPAuxInfo<E>),
+        info: &DenseInfo<E>,
         commit_verifier: &mut commit::precommit::CommitVerifier<E>,
         t: &mut T) -> anyhow::Result<Claim<E>> 
 where
@@ -112,7 +131,7 @@ where
 {
          // TODO: currently that API can panic - should remove panic for error
         let subclaim =
-            IOPVerifierState::<E>::verify(last_claim.eval, &proof.sumcheck, &aux, t);
+            IOPVerifierState::<E>::verify(last_claim.eval, &proof.sumcheck, &info.poly_aux, t);
 
         // MATRIX OPENING PART
         // pcs_eval means this evaluation should come from a PCS opening proof
@@ -126,7 +145,7 @@ where
         // Note we don't care about verifying that for the vector since it's verified at the next
         // step.
         let pcs_eval_output = proof.individual_claims[0];
-        commit_verifier.add_claim(poly_id, Claim::from(pcs_eval_input, pcs_eval_output))?;
+        commit_verifier.add_claim(info.poly_id, Claim::from(pcs_eval_input, pcs_eval_output))?;
 
         // SUMCHECK verification part
         // Instead of computing the polynomial at the random point requested like this

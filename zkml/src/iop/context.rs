@@ -1,6 +1,6 @@
 use crate::{
-    activation::ActivationCtx,
-    iop::{precommit, precommit::PolyID},
+    activation::{Activation, ActivationCtx, Relu},
+    iop::precommit::{self, PolyID},
     model::{Layer, Model},
 };
 use anyhow::Context as CC;
@@ -10,6 +10,38 @@ use multilinear_extensions::virtual_poly::VPAuxInfo;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use transcript::Transcript;
 
+/// Describes a steps wrt the polynomial to be proven/looked at. Verifier needs to know
+/// the sequence of steps and the type of each step from the setup phase so it can make sure the prover is not
+/// cheating on this.
+#[derive(Clone,Debug, Serialize,Deserialize)]
+pub enum StepInfo<E> {
+    Dense(DenseInfo<E>),
+    Activation(ActivationInfo)
+}
+
+/// Holds the poly info for the polynomials representing each matrix in the dense layers
+#[derive(Clone,Debug,Serialize,Deserialize)]
+pub struct DenseInfo<E> {
+    pub poly_id: PolyID,
+    pub poly_aux: VPAuxInfo<E>
+}
+/// Currently holds the poly info for the output polynomial of the RELU
+#[derive(Clone,Debug,Serialize,Deserialize)]
+pub struct ActivationInfo {
+    pub poly_id: PolyID,
+    pub padded_num_vars: usize,
+
+}
+
+impl<E> StepInfo<E> {
+    pub fn variant_name(&self) -> String {
+        match self {
+            Self::Dense(_) => "Dense".to_string(),
+            Self::Activation(_) => "Activation".to_string(),
+        }
+    }
+}
+
 /// Common information between prover and verifier
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(bound(serialize = "E: Serialize", deserialize = "E: DeserializeOwned"))]
@@ -18,10 +50,10 @@ where
     E::BaseField: Serialize + DeserializeOwned,
     E: Serialize + DeserializeOwned,
 {
-    /// Dimensions of the polynomials necessary to verify the sumcheck proofs
-    /// These poly are from the matrices weights
+    /// Information about each steps of the model. That's the information that the verifier
+    /// needs to know from the setup to avoid the prover being able to cheat.
     /// in REVERSED order already since proving goes from last layer to first layer.
-    pub polys_aux: Vec<(PolyID, VPAuxInfo<E>)>,
+    pub steps_info: Vec<StepInfo<E>>,
     /// Context related to the commitment and accumulation of claims related to the weights of model.
     /// This part contains the commitment of the weights.
     pub weights: precommit::Context<E>,
@@ -40,6 +72,7 @@ where
     /// to prove at each step.
     /// INFO: it _assumes_ the model is already well padded to power of twos.
     pub fn generate(model: &Model) -> anyhow::Result<Self> {
+        let mut last_output_size = 0;
         let auxs = model
             .layers()
             .map(|(id, layer)| {
@@ -47,21 +80,28 @@ where
                     Layer::Dense(matrix) => {
                         // construct dimension of the polynomial given to the sumcheck
                         let ncols = matrix.ncols();
+                        last_output_size = matrix.nrows();
                         // each poly is only two polynomial right now: matrix and vector
                         // for matrix, each time we fix the variables related to rows so we are only left
                         // with the variables related to columns
                         let matrix_num_vars = ncols.ilog2() as usize;
                         let vector_num_vars = matrix_num_vars;
                         // there is only one product (i.e. quadratic sumcheck)
-                        (
-                            id,
-                            VPAuxInfo::<E>::from_mle_list_dimensions(&vec![vec![
+                        StepInfo::Dense(DenseInfo {
+                            poly_id: id, 
+                            poly_aux: VPAuxInfo::<E>::from_mle_list_dimensions(&vec![vec![
                                 matrix_num_vars,
                                 vector_num_vars,
                             ]]),
-                        )
+                        })
                     }
-                    _ => unimplemented!(),
+                    Layer::Activation(Activation::Relu(_)) => {
+                        let max_num_vars = std::cmp::max(Relu::num_vars(),last_output_size);
+                        StepInfo::Activation(ActivationInfo {
+                            poly_id: id,
+                            padded_num_vars: max_num_vars,
+                        })
+                    }
                 }
             })
             .rev()
@@ -70,16 +110,24 @@ where
             .context("can't generate context for commitment part")?;
         let activation = ActivationCtx::new();
         Ok(Self {
-            polys_aux: auxs,
+            steps_info: auxs,
             weights: commit_ctx,
             activation,
         })
     }
 
     pub fn write_to_transcript<T: Transcript<E>>(&self, t: &mut T) -> anyhow::Result<()> {
-        for (id, poly_info) in self.polys_aux.iter() {
-            t.append_field_element(&E::BaseField::from(*id as u64));
-            poly_info.write_to_transcript(t);
+        for steps in self.steps_info.iter() {
+            match steps {
+                StepInfo::Dense(info)=> {
+                    t.append_field_element(&E::BaseField::from(info.poly_id as u64));
+                    info.poly_aux.write_to_transcript(t);
+                }
+                StepInfo::Activation(info) => {
+                    t.append_field_element(&E::BaseField::from(info.poly_id as u64));
+                    t.append_field_element(&E::BaseField::from(info.padded_num_vars as u64));
+                }
+            }
         }
         self.weights.write_to_transcript(t)?;
         Ok(())
