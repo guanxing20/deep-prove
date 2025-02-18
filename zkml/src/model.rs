@@ -85,6 +85,13 @@ impl Model {
         };
         vec![mat.ncols()]
     }
+
+    pub fn first_output_shape(&self) -> Vec<usize> {
+        let Layer::Dense(mat) = &self.layers[0] else {
+            panic!("layer is not starting with a dense layer?");
+        };
+        vec![mat.nrows()]
+    }
     /// Prints to stdout
     pub fn describe(&self) {
         println!("MATRIX description:");

@@ -27,7 +27,6 @@ pub struct Proof<E: ExtensionField> {
     output_claim: E,
     // multi_C: Commitment<E>,
 }
-
 impl<E: ExtensionField> Proof<E> {
     /// Retireve the claims about the input columns
     pub fn input_column_claims(&self) -> &[Claim<E>] {
@@ -42,6 +41,26 @@ impl<E: ExtensionField> Proof<E> {
     /// Retrieve the multiplicity poly claim
     pub fn multiplicity_claim(&self) -> &Claim<E> {
         &self.m_claim
+    }
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VerifierClaims<E: ExtensionField> {
+    input_claims: Vec<Claim<E>>,
+    output_claims: Vec<Claim<E>>,
+    multiplicity_claim: Claim<E>,
+}
+
+impl<E: ExtensionField> VerifierClaims<E> {
+    pub fn input_claims(&self) -> &[Claim<E>] {
+        &self.input_claims
+    }
+
+    pub fn output_claims(&self) -> &[Claim<E>] {
+        &self.output_claims
+    }
+
+    pub fn multiplicity_poly_claim(&self) -> &Claim<E> {
+        &self.multiplicity_claim
     }
 }
 
@@ -92,7 +111,11 @@ pub trait LookupProtocol<E: ExtensionField> {
     ) -> anyhow::Result<Proof<E>>;
 
     // commitments to the lookups, one commitment per "column"
-    fn verify<T: Transcript<E>>(ctx: Context<E>, proof: Proof<E>, t: &mut T) -> anyhow::Result<()>;
+    fn verify<T: Transcript<E>>(
+        ctx: Context<E>,
+        proof: Proof<E>,
+        t: &mut T,
+    ) -> anyhow::Result<VerifierClaims<E>>;
 }
 
 pub struct DummyLookup {}
@@ -152,11 +175,15 @@ impl<E: ExtensionField> LookupProtocol<E> for DummyLookup {
             m_claim,
         })
     }
-    fn verify<T: Transcript<E>>(ctx: Context<E>, proof: Proof<E>, t: &mut T) -> anyhow::Result<()> {
+    fn verify<T: Transcript<E>>(
+        ctx: Context<E>,
+        proof: Proof<E>,
+        t: &mut T,
+    ) -> anyhow::Result<VerifierClaims<E>> {
         todo!()
     }
 }
-pub struct GoldilocksLogUp;
+
 pub struct LogUp<E: ExtensionField>(PhantomData<E>);
 
 impl<E: ExtensionField> LookupProtocol<E> for LogUp<E> {
@@ -217,7 +244,7 @@ impl<E: ExtensionField> LookupProtocol<E> for LogUp<E> {
             .map(|mle| {
                 let eval = mle.evaluate(&final_point[..mle.num_vars()]);
                 Claim {
-                    point: final_point.clone(),
+                    point: final_point[..mle.num_vars()].to_vec(),
                     eval,
                 }
             })
@@ -230,7 +257,7 @@ impl<E: ExtensionField> LookupProtocol<E> for LogUp<E> {
             .map(|mle| {
                 let eval = mle.evaluate(&final_point[..mle.num_vars()]);
                 Claim {
-                    point: final_point.clone(),
+                    point: final_point[..mle.num_vars()].to_vec(),
                     eval,
                 }
             })
@@ -250,17 +277,40 @@ impl<E: ExtensionField> LookupProtocol<E> for LogUp<E> {
         })
     }
 
-    fn verify<T: Transcript<E>>(ctx: Context<E>, proof: Proof<E>, t: &mut T) -> anyhow::Result<()> {
+    fn verify<T: Transcript<E>>(
+        ctx: Context<E>,
+        proof: Proof<E>,
+        t: &mut T,
+    ) -> anyhow::Result<VerifierClaims<E>> {
         let Proof {
             gkr_proof,
-            output_claim,
+            output_claim: denominator_product,
             ..
         } = proof;
 
-        // For now just check that we don't error.
-        // TODO: add step verifying output GKR claim
-        let _ = verify_logup(output_claim, gkr_proof, ctx.circuit(), t)
+        let number_table_columns = ctx.no_input_columns + ctx.no_output_columns;
+        // Verify the GKR proof, this involves verifying that `denominator_product` is non-zero and outputs claims about
+        // the polynomials used in the GKR circuit. these claims will be ordered as table_polys, lookup_polys, multiplicity_poly
+        let gkr_claims = verify_logup(denominator_product, gkr_proof, ctx.circuit(), t)
             .map_err(|e| anyhow!("Error verifying GKR: {:?}", e))?;
-        Ok(())
+
+        let input_claims = gkr_claims.point_and_evals
+            [number_table_columns..number_table_columns + ctx.no_input_columns]
+            .iter()
+            .map(Claim::from)
+            .collect::<Vec<Claim<E>>>();
+        let output_claims = gkr_claims.point_and_evals
+            [number_table_columns + ctx.no_input_columns..2 * number_table_columns]
+            .iter()
+            .map(Claim::from)
+            .collect::<Vec<Claim<E>>>();
+        let multiplicity_claim =
+            Claim::<E>::from(&gkr_claims.point_and_evals[2 * number_table_columns]);
+
+        Ok(VerifierClaims {
+            input_claims,
+            output_claims,
+            multiplicity_claim,
+        })
     }
 }

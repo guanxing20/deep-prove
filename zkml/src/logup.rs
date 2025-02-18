@@ -365,7 +365,7 @@ mod tests {
         let random_combiner = GoldilocksExt2::random(&mut rng);
         let merged_table = merge_columns(&table, random_combiner);
 
-        for n in 4..5 {
+        for n in 4..20 {
             println!("Testing with {n} number of variables");
             // First make two random columns that should pass
             let (lookup_in, lookup_out): (Vec<Goldilocks>, Vec<Goldilocks>) = (0..1 << n)

@@ -1,6 +1,7 @@
 #![feature(iter_next_chunk)]
 
 use ff_ext::ExtensionField;
+use gkr::structs::PointAndEval;
 use itertools::Itertools;
 use multilinear_extensions::mle::DenseMultilinearExtension;
 use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
@@ -27,10 +28,29 @@ pub struct Claim<E> {
 }
 
 impl<E> Claim<E> {
-    pub fn from(point: Vec<E>, eval: E) -> Self {
+    pub fn new(point: Vec<E>, eval: E) -> Self {
         Self { point, eval }
     }
 }
+
+impl<E: ExtensionField> From<PointAndEval<E>> for Claim<E> {
+    fn from(value: PointAndEval<E>) -> Self {
+        Claim {
+            point: value.point.clone(),
+            eval: value.eval,
+        }
+    }
+}
+
+impl<E: ExtensionField> From<&PointAndEval<E>> for Claim<E> {
+    fn from(value: &PointAndEval<E>) -> Self {
+        Claim {
+            point: value.point.clone(),
+            eval: value.eval,
+        }
+    }
+}
+
 impl<E: ExtensionField> Claim<E> {
     /// Pad the point to the new size given
     /// This is necessary for passing from output of padded lookups to next dense layer proving for example.
@@ -124,6 +144,7 @@ mod test {
             prover::Prover,
             verifier::{IO, verify},
         },
+        lookup::{DummyLookup, LookupProtocol},
         onnx_parse::load_mlp,
         testing::random_vector,
         to_bit_sequence_le, vector_to_field_par, vector_to_mle,
@@ -133,7 +154,12 @@ mod test {
     type E = GoldilocksExt2;
 
     #[test]
-    fn test_model_run() {
+    fn test_model_run() -> anyhow::Result<()> {
+        test_model_run_helper::<DummyLookup>()?;
+        Ok(())
+    }
+
+    fn test_model_run_helper<L: LookupProtocol<E>>() -> anyhow::Result<()> {
         let filepath = "assets/model.onnx";
         let model = load_mlp::<Element>(&filepath).unwrap();
         println!("[+] Loaded onnx file");
@@ -149,14 +175,15 @@ mod test {
         println!("[+] Run inference. Result: {:?}", output);
 
         let mut prover_transcript = default_transcript();
-        let prover = Prover::new(&ctx, &mut prover_transcript);
+        let prover = Prover::<_, _, L>::new(&ctx, &mut prover_transcript);
         println!("[+] Run prover");
         let proof = prover.prove(trace).expect("unable to generate proof");
 
         let mut verifier_transcript = default_transcript();
         let io = IO::new(vector_to_field_par(&input), output.to_vec());
-        verify(ctx, proof, io, &mut verifier_transcript).expect("invalid proof");
+        verify::<_, _, L>(ctx, proof, io, &mut verifier_transcript).expect("invalid proof");
         println!("[+] Verify proof: valid");
+        Ok(())
     }
 
     // TODO: move below code to a vector module

@@ -73,7 +73,7 @@ where
     /// to prove at each step.
     /// INFO: it _assumes_ the model is already well padded to power of twos.
     pub fn generate(model: &Model) -> anyhow::Result<Self> {
-        let mut last_output_size = 0;
+        let mut last_output_size = model.first_output_shape()[0];
         let mut current_multiplicity_poly_id = model.layer_count();
         let auxs = model
             .layers()
@@ -100,10 +100,9 @@ where
                     Layer::Activation(Activation::Relu(_)) => {
                         let multiplicity_poly_id = current_multiplicity_poly_id;
                         current_multiplicity_poly_id += 1;
-
                         StepInfo::Activation(ActivationInfo {
                             poly_id: id,
-                            num_vars: last_output_size,
+                            num_vars: last_output_size.ilog2() as usize,
                             multiplicity_poly_id,
                             multiplicity_num_vars: Relu::num_vars(),
                         })

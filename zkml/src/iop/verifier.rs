@@ -2,6 +2,7 @@ use crate::{
     Claim, VectorTranscript,
     commit::{self, precommit, same_poly},
     iop::{StepProof, context::StepInfo, precommit::PolyID},
+    lookup::{self, LookupProtocol},
     vector_to_mle,
 };
 use anyhow::{Context as CC, bail, ensure};
@@ -36,7 +37,7 @@ impl<E> IO<E> {
 }
 
 /// Verifies an inference proof given a context, a proof and the input / output of the model.
-pub fn verify<E: ExtensionField, T: Transcript<E>>(
+pub fn verify<E: ExtensionField, T: Transcript<E>, L: LookupProtocol<E>>(
     ctx: Context<E>,
     proof: Proof<E>,
     io: IO<E>,
@@ -82,7 +83,13 @@ where
     for (i, (proof, step_kind)) in proof.steps.iter().zip(ctx.steps_info.iter()).enumerate() {
         output_claim = match (proof, step_kind) {
             (StepProof::Activation(proof), StepInfo::Activation(info)) => {
-                verify_activation(output_claim, proof, info, &mut witness_verifier, transcript)?
+                verify_activation::<_, _, L>(
+                    output_claim,
+                    proof,
+                    info,
+                    &mut witness_verifier,
+                    transcript,
+                )?
             }
             (StepProof::Dense(proof), StepInfo::Dense(info)) => {
                 verify_dense(output_claim, proof, info, &mut commit_verifier, transcript)?
@@ -108,7 +115,7 @@ where
     Ok(())
 }
 
-fn verify_activation<E: ExtensionField, T: Transcript<E>>(
+fn verify_activation<E: ExtensionField, T: Transcript<E>, L: LookupProtocol<E>>(
     last_claim: Claim<E>,
     proof: &ActivationProof<E>,
     info: &ActivationInfo,
@@ -119,18 +126,34 @@ where
     E::BaseField: Serialize + DeserializeOwned,
     E: Serialize + DeserializeOwned,
 {
+    // 1. Verify the lookup proof
+    let lookup_context = lookup::Context::<E>::new(
+        info.multiplicity_num_vars,
+        info.num_vars,
+        proof.lookup.input_column_claims().len(),
+        proof.lookup.output_column_claims().len(),
+    );
+    let verifier_claims = L::verify(lookup_context, proof.lookup.clone(), t)?;
     // 1. Verify the accumulation proof from last_claim + lookup claim into the new claim
     let sp_ctx = same_poly::Context::<E>::new(info.num_vars);
     let mut sp_verifier = same_poly::Verifier::<E>::new(&sp_ctx);
     sp_verifier.add_claim(last_claim)?;
-    sp_verifier.add_claim(proof.lookup.output_column_claims()[0].clone())?;
+    verifier_claims
+        .output_claims()
+        .iter()
+        .try_for_each(|claim| sp_verifier.add_claim(claim.clone()))?;
+
     let new_output_claim = sp_verifier.verify(&proof.io_accumulation, t)?;
     // 2. Accumulate the new claim into the witness commitment protocol
     witness_verifier.add_claim(info.poly_id, new_output_claim)?;
+    witness_verifier.add_claim(
+        info.multiplicity_poly_id,
+        verifier_claims.multiplicity_poly_claim().clone(),
+    )?;
     // TODO: add the other claims of the  lookup proofs
     // TODO: add verification of the lookup proof
     // 3. return the input claim for to be proven at subsequent step
-    Ok(proof.lookup.input_column_claims()[0].clone())
+    Ok(verifier_claims.input_claims()[0].clone())
 }
 
 fn verify_dense<E: ExtensionField, T: Transcript<E>>(
@@ -160,7 +183,7 @@ where
     // Note we don't care about verifying that for the vector since it's verified at the next
     // step.
     let pcs_eval_output = proof.individual_claims[0];
-    commit_verifier.add_claim(info.poly_id, Claim::from(pcs_eval_input, pcs_eval_output))?;
+    commit_verifier.add_claim(info.poly_id, Claim::new(pcs_eval_input, pcs_eval_output))?;
 
     // SUMCHECK verification part
     // Instead of computing the polynomial at the random point requested like this
