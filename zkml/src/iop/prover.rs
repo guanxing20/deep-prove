@@ -301,3 +301,37 @@ fn pad2<E:Clone>(a: Vec<Vec<E>>,nsize: usize,with: E) -> Vec<Vec<E>> {
     assert!(a.iter().all(|v| v.len() <= nsize));
     a.into_iter().map(|mut v| { v.resize(nsize, with.clone()); v } ).collect_vec()
 }
+
+
+#[cfg(test)]
+mod test {
+
+    use goldilocks::GoldilocksExt2;
+    use itertools::Itertools;
+    use multilinear_extensions::mle::{IntoMLE, MultilinearExtension};
+
+    use crate::{testing::{random_field_vector, random_vector}, Claim};
+
+    use ff::Field;
+    type F = GoldilocksExt2;
+
+    #[test]
+    fn test_padding_prover() {
+        let num_vars = 7;
+        let poly_size = 1 << num_vars;
+        let padded_num_vars = 10;
+        let padded_size = 1 << padded_num_vars;
+        let poly = random_field_vector(1 << num_vars);
+        let padded_poly = poly.iter().chain(std::iter::repeat(&F::ZERO)).take(padded_size).cloned().collect_vec();
+        let padded_point = random_field_vector::<F>(padded_num_vars);
+        let padded_eval = padded_poly.into_mle().evaluate(&padded_point);
+        let padded_claim = Claim {
+            point: padded_point,
+            eval: padded_eval,
+        };
+        // now resize the claim to the original poly size (emulating what next dense layer proving is doing)
+        let reduced_claim = padded_claim.pad(num_vars);
+        let eval = poly.into_mle().evaluate(&reduced_claim.point);
+        assert_eq!(padded_eval,eval);
+    }
+}
