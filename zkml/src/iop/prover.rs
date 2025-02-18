@@ -325,13 +325,9 @@ mod test {
         let padded_poly = poly.iter().chain(std::iter::repeat(&F::ZERO)).take(padded_size).cloned().collect_vec();
         let padded_point = random_field_vector::<F>(padded_num_vars);
         let padded_eval = padded_poly.into_mle().evaluate(&padded_point);
-        let padded_claim = Claim {
-            point: padded_point,
-            eval: padded_eval,
-        };
         // now resize the claim to the original poly size (emulating what next dense layer proving is doing)
-        let reduced_claim = padded_claim.pad(num_vars);
-        let eval = poly.into_mle().evaluate(&reduced_claim.point);
+        let reduced_point = padded_point.iter().take(num_vars).cloned().collect_vec();
+        let eval = poly.into_mle().evaluate(&reduced_point);
         assert_eq!(padded_eval,eval);
     }
 }
