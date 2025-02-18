@@ -30,8 +30,16 @@ impl<E: Clone> Proof<E> {
     }
 }
 
-struct Context<E> {
+pub struct Context<E> {
     _p: PhantomData<E>,
+}
+
+impl<E> Context<E> {
+    pub fn new() -> Self {
+        Self {
+            _p: PhantomData,
+        }
+    }
 }
 
 pub trait LookupProtocol<E: ExtensionField> {
@@ -47,7 +55,7 @@ pub trait LookupProtocol<E: ExtensionField> {
     ) -> anyhow::Result<Proof<E>>;
 
     // commitments to the lookups, one commitment per "column"
-    fn verify<T: Transcript<E>>(ctx: Context<E>, proof: Proof<E>, t: &mut T) -> anyhow::Result<()>;
+    fn verify<T: Transcript<E>>(ctx: &Context<E>, proof: &Proof<E>, t: &mut T) -> anyhow::Result<()>;
 }
 
 pub struct DummyLookup {}
@@ -58,13 +66,12 @@ impl<E: ExtensionField> LookupProtocol<E> for DummyLookup {
         lookups: Vec<MLE<E>>,
         t: &mut T,
     ) -> anyhow::Result<Proof<E>> {
+        // make sure they have same number of columns
         assert_eq!(table.len(), lookups.len());
-        assert!(
-            table
-                .iter()
-                .zip(lookups.iter())
-                .all(|(t, l)| t.num_vars() == l.num_vars())
-        );
+        // make sure each column of the table have the same length
+        assert_eq!(table.iter().map(|column| column.num_vars()).sum::<usize>(), table[0].num_vars() * table.len());
+        // make sure each column of the lookups have the same length
+        assert_eq!(lookups.iter().map(|column| column.num_vars()).sum::<usize>(), lookups[0].num_vars() * lookups.len());
         let claims = lookups
             .iter()
             .map(|l| {
@@ -80,7 +87,7 @@ impl<E: ExtensionField> LookupProtocol<E> for DummyLookup {
         })
     }
 
-    fn verify<T: Transcript<E>>(ctx: Context<E>, proof: Proof<E>, t: &mut T) -> anyhow::Result<()> {
-        todo!()
+    fn verify<T: Transcript<E>>(ctx: &Context<E>, proof: &Proof<E>, t: &mut T) -> anyhow::Result<()> {
+        Ok(())
     }
 }

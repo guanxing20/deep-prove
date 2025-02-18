@@ -1,12 +1,12 @@
 use crate::{
-    commit::{self,precommit,same_poly}, iop::{context::StepInfo, StepProof}, vector_to_mle, Claim, VectorTranscript
+    commit::{self,precommit,same_poly}, iop::{context::StepInfo, StepProof}, lookup::{self, LookupProtocol}, vector_to_mle, Claim, VectorTranscript
 };
 use crate::iop::precommit::PolyID;
 use anyhow::{bail, ensure, Context as CC};
 use ff_ext::ExtensionField;
 use itertools::Itertools;
 use log::debug;
-use multilinear_extensions::{mle::{IntoMLE, MultilinearExtension}, virtual_poly::VPAuxInfo};
+use multilinear_extensions::{mle::{IntoMLE, IntoMLEs, MultilinearExtension}, virtual_poly::VPAuxInfo};
 use serde::{Serialize, de::DeserializeOwned};
 use sumcheck::structs::IOPVerifierState;
 use transcript::Transcript;
@@ -52,6 +52,7 @@ where
         point: first_randomness,
         eval: computed_sum,
     };
+    println!("VERIFIER: Proof Order: {:?}",proof.steps.iter().map(|p| p.variant_name()).collect_vec());
     
     // NOTE: if we only had m2v then we need to do the following check manually to make sure the output is correct.
     // For other cases, for example if we have RELU at last, then we _always_ accumulate output claims into the 
@@ -74,7 +75,7 @@ where
     for (i, (proof,step_kind)) in proof.steps.iter().zip(ctx.steps_info.iter()).enumerate() {
         output_claim = match (proof ,step_kind) {
             (StepProof::Activation(proof), StepInfo::Activation(info) ) =>  {
-                verify_activation(output_claim, proof, info, &mut witness_verifier, transcript)?
+                verify_activation(&ctx,output_claim, proof, info, &mut witness_verifier, transcript)?
             }
             (StepProof::Dense(proof), StepInfo::Dense(info)) => {
                 verify_dense(output_claim, proof, info, &mut commit_verifier, transcript)?
@@ -96,6 +97,7 @@ where
 }
 
 fn verify_activation<E: ExtensionField,T: Transcript<E>>(
+    ctx: &Context<E>,
     last_claim: Claim<E>,
     proof: &ActivationProof<E>,
     info: &ActivationInfo,
@@ -106,15 +108,16 @@ where
     E: Serialize + DeserializeOwned,
 {
     // 1. Verify the accumulation proof from last_claim + lookup claim into the new claim
-    let sp_ctx = same_poly::Context::<E>::new(info.padded_num_vars);
+    let sp_ctx = same_poly::Context::<E>::new(info.num_vars);
     let mut sp_verifier = same_poly::Verifier::<E>::new(&sp_ctx);
-    sp_verifier.add_claim(last_claim.pad(info.padded_num_vars))?;
+    sp_verifier.add_claim(last_claim)?;
     sp_verifier.add_claim(proof.lookup.output_claim().context("no output claim for lookup")?)?;
     let new_output_claim = sp_verifier.verify(&proof.io_accumulation,t)?;
     // 2. Accumulate the new claim into the witness commitment protocol
     witness_verifier.add_claim(info.poly_id, new_output_claim)?;
     // TODO: add the other claims of the  lookup proofs 
-    // TODO: add verification of the lookup proof
+    // TODO: get lookup context from info
+    lookup::DummyLookup::verify(&lookup::Context::<E>::new(),&proof.lookup, t)?;
     // 3. return the input claim for to be proven at subsequent step
     Ok(proof.lookup.input_claim().context("no input claim for lookup")?)
 }

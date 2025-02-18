@@ -1,7 +1,5 @@
 use crate::{
-    activation::{Activation, ActivationCtx, Relu},
-    iop::precommit::{self, PolyID},
-    model::{Layer, Model},
+    activation::{Activation, ActivationCtx, Relu}, iop::precommit::{self, PolyID}, lookup, model::{Layer, Model}
 };
 use anyhow::Context as CC;
 use ff_ext::ExtensionField;
@@ -29,8 +27,7 @@ pub struct DenseInfo<E> {
 #[derive(Clone,Debug,Serialize,Deserialize)]
 pub struct ActivationInfo {
     pub poly_id: PolyID,
-    pub padded_num_vars: usize,
-
+    pub num_vars: usize,
 }
 
 impl<E> StepInfo<E> {
@@ -96,21 +93,19 @@ where
                         })
                     }
                     Layer::Activation(Activation::Relu(_)) => {
-                        let max_num_vars = std::cmp::max(Relu::num_vars(),last_output_size);
                         StepInfo::Activation(ActivationInfo {
                             poly_id: id,
-                            padded_num_vars: max_num_vars,
+                            num_vars: last_output_size.ilog2() as usize,
                         })
                     }
                 }
             })
-            .rev()
             .collect_vec();
         let commit_ctx = precommit::Context::generate_from_model(model)
             .context("can't generate context for commitment part")?;
         let activation = ActivationCtx::new();
         Ok(Self {
-            steps_info: auxs,
+            steps_info: auxs.into_iter().rev().collect_vec(),
             weights: commit_ctx,
             activation,
         })
@@ -125,7 +120,7 @@ where
                 }
                 StepInfo::Activation(info) => {
                     t.append_field_element(&E::BaseField::from(info.poly_id as u64));
-                    t.append_field_element(&E::BaseField::from(info.padded_num_vars as u64));
+                    t.append_field_element(&E::BaseField::from(info.num_vars as u64));
                 }
             }
         }
