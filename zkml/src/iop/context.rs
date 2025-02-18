@@ -13,24 +13,25 @@ use transcript::Transcript;
 /// Describes a steps wrt the polynomial to be proven/looked at. Verifier needs to know
 /// the sequence of steps and the type of each step from the setup phase so it can make sure the prover is not
 /// cheating on this.
-#[derive(Clone,Debug, Serialize,Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum StepInfo<E> {
     Dense(DenseInfo<E>),
-    Activation(ActivationInfo)
+    Activation(ActivationInfo),
 }
 
 /// Holds the poly info for the polynomials representing each matrix in the dense layers
-#[derive(Clone,Debug,Serialize,Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DenseInfo<E> {
     pub poly_id: PolyID,
-    pub poly_aux: VPAuxInfo<E>
+    pub poly_aux: VPAuxInfo<E>,
 }
 /// Currently holds the poly info for the output polynomial of the RELU
-#[derive(Clone,Debug,Serialize,Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ActivationInfo {
     pub poly_id: PolyID,
-    pub padded_num_vars: usize,
-
+    pub num_vars: usize,
+    pub multiplicity_poly_id: PolyID,
+    pub multiplicity_num_vars: usize,
 }
 
 impl<E> StepInfo<E> {
@@ -73,6 +74,7 @@ where
     /// INFO: it _assumes_ the model is already well padded to power of twos.
     pub fn generate(model: &Model) -> anyhow::Result<Self> {
         let mut last_output_size = 0;
+        let mut current_multiplicity_poly_id = model.layer_count();
         let auxs = model
             .layers()
             .map(|(id, layer)| {
@@ -88,7 +90,7 @@ where
                         let vector_num_vars = matrix_num_vars;
                         // there is only one product (i.e. quadratic sumcheck)
                         StepInfo::Dense(DenseInfo {
-                            poly_id: id, 
+                            poly_id: id,
                             poly_aux: VPAuxInfo::<E>::from_mle_list_dimensions(&vec![vec![
                                 matrix_num_vars,
                                 vector_num_vars,
@@ -96,10 +98,14 @@ where
                         })
                     }
                     Layer::Activation(Activation::Relu(_)) => {
-                        let max_num_vars = std::cmp::max(Relu::num_vars(),last_output_size);
+                        let multiplicity_poly_id = current_multiplicity_poly_id;
+                        current_multiplicity_poly_id += 1;
+
                         StepInfo::Activation(ActivationInfo {
                             poly_id: id,
-                            padded_num_vars: max_num_vars,
+                            num_vars: last_output_size,
+                            multiplicity_poly_id,
+                            multiplicity_num_vars: Relu::num_vars(),
                         })
                     }
                 }
@@ -119,13 +125,15 @@ where
     pub fn write_to_transcript<T: Transcript<E>>(&self, t: &mut T) -> anyhow::Result<()> {
         for steps in self.steps_info.iter() {
             match steps {
-                StepInfo::Dense(info)=> {
+                StepInfo::Dense(info) => {
                     t.append_field_element(&E::BaseField::from(info.poly_id as u64));
                     info.poly_aux.write_to_transcript(t);
                 }
                 StepInfo::Activation(info) => {
                     t.append_field_element(&E::BaseField::from(info.poly_id as u64));
-                    t.append_field_element(&E::BaseField::from(info.padded_num_vars as u64));
+                    t.append_field_element(&E::BaseField::from(info.num_vars as u64));
+                    t.append_field_element(&E::BaseField::from(info.multiplicity_poly_id as u64));
+                    t.append_field_element(&E::BaseField::from(info.multiplicity_num_vars as u64));
                 }
             }
         }

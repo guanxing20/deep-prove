@@ -15,47 +15,47 @@ use std::collections::HashMap;
 use transcript::Transcript;
 
 /// Function that builds the LogUp GKR circuit, the input `num_vars` is the number of variables the `p` and `q` MLEs will have.
-pub fn logup_circuit<E: ExtensionField>(num_vars: usize, no_table_columns: usize) -> Circuit<E> {
+pub fn logup_circuit<E: ExtensionField>(
+    table_num_vars: usize,
+    lookup_num_vars: usize,
+    no_table_columns: usize,
+) -> Circuit<E> {
     let cb = &mut CircuitBuilder::default();
 
     // For each column of the table and lookup wire we have an input witness
     let table_columns = (0..no_table_columns)
-        .map(|_| cb.create_witness_in(1 << num_vars).1)
+        .map(|_| cb.create_witness_in(1 << table_num_vars).1)
         .collect::<Vec<Vec<CellId>>>();
     let lookup_wire_columns = (0..no_table_columns)
-        .map(|_| cb.create_witness_in(1 << num_vars).1)
+        .map(|_| cb.create_witness_in(1 << lookup_num_vars).1)
         .collect::<Vec<Vec<CellId>>>();
 
-    let multiplicity_poly = cb.create_witness_in(1 << num_vars).1;
-
-    let minus_one_const = cb.create_constant_in(1 << num_vars, -1);
+    let multiplicity_poly = cb.create_witness_in(1 << table_num_vars).1;
 
     let (table, lookup) = (
-        cb.create_ext_cells(1 << num_vars),
-        cb.create_ext_cells(1 << num_vars),
+        cb.create_ext_cells(1 << table_num_vars),
+        cb.create_ext_cells(1 << lookup_num_vars),
     );
 
-    izip!(table.iter(), lookup.iter())
-        .enumerate()
-        .for_each(|(i, (table_cell, lookup_cell))| {
-            let table_row = table_columns
-                .iter()
-                .map(|col| col[i])
-                .collect::<Vec<CellId>>();
-            let lookup_row = lookup_wire_columns
-                .iter()
-                .map(|col| col[i])
-                .collect::<Vec<CellId>>();
+    table.iter().enumerate().for_each(|(i, table_cell)| {
+        let table_row = table_columns
+            .iter()
+            .map(|col| col[i])
+            .collect::<Vec<CellId>>();
 
-            // Produce the merged table row
-            cb.rlc(table_cell, &table_row, 0);
+        // Produce the merged table row
+        cb.rlc(table_cell, &table_row, 0);
+    });
 
-            // Produce the merged lookup row
-            cb.rlc(lookup_cell, &lookup_row, 0);
-        });
+    lookup.iter().enumerate().for_each(|(i, lookup_cell)| {
+        let lookup_row = lookup_wire_columns
+            .iter()
+            .map(|col| col[i])
+            .collect::<Vec<CellId>>();
 
-    let p_base = [multiplicity_poly, minus_one_const].concat();
-    let q_start = [table, lookup].concat();
+        // Produce the merged lookup row
+        cb.rlc(lookup_cell, &lookup_row, 0);
+    });
 
     // at each level take adjacent pairs (p0, q0) and (p1, q1) and compute the next levels p and q as
     // p_next = p0 * q1 + p1 * q0
@@ -64,46 +64,60 @@ pub fn logup_circuit<E: ExtensionField>(num_vars: usize, no_table_columns: usize
     // p0/q0 + p1/q1 which is equal to (p0q1 + p1q0)/q0q1
     //
     // At the first level it is slightly different because one set of evals is basefield and the other is extension field
+    // We do the first round of summing for the table and the lookups seperately since the lookups don't requie an input for the numerator
+    let (mut table_num, mut table_denom): (Vec<ExtCellId<E>>, Vec<ExtCellId<E>>) =
+        multiplicity_poly
+            .chunks(2)
+            .zip(table.chunks(2))
+            .map(|(nums, denoms)| {
+                let num_out = cb.create_ext_cell();
+                cb.mul_ext_base(&num_out, &denoms[1], nums[0], E::BaseField::ONE);
 
-    let (mut p, mut q): (Vec<ExtCellId<E>>, Vec<ExtCellId<E>>) = p_base
+                cb.mul_ext_base(&num_out, &denoms[0], nums[1], E::BaseField::ONE);
+
+                let denom_out = cb.create_ext_cell();
+                cb.mul2_ext(&denom_out, &denoms[0], &denoms[1], E::BaseField::ONE);
+                (num_out, denom_out)
+            })
+            .unzip();
+
+    let (mut lookup_num, mut lookup_denom): (Vec<ExtCellId<E>>, Vec<ExtCellId<E>>) = lookup
         .chunks(2)
-        .zip(q_start.chunks(2))
-        .map(|(p_is, q_is)| {
-            let p_out = cb.create_ext_cell();
-            cb.mul_ext_base(&p_out, &q_is[1], p_is[0], E::BaseField::ONE);
+        .map(|denoms| {
+            let num_out = cb.create_ext_cell();
+            cb.add_ext(&num_out, &denoms[0], -E::BaseField::ONE);
+            cb.add_ext(&num_out, &denoms[1], -E::BaseField::ONE);
 
-            cb.mul_ext_base(&p_out, &q_is[0], p_is[1], E::BaseField::ONE);
-
-            let q_out = cb.create_ext_cell();
-            cb.mul2_ext(&q_out, &q_is[0], &q_is[1], E::BaseField::ONE);
-            (p_out, q_out)
+            let denom_out = cb.create_ext_cell();
+            cb.mul2_ext(&denom_out, &denoms[0], &denoms[1], E::BaseField::ONE);
+            (num_out, denom_out)
         })
         .unzip();
 
-    while p.len() > 1 && q.len() > 1 {
-        (p, q) = p
-            .chunks(2)
-            .zip(q.chunks(2))
-            .map(|(p_is, q_is)| {
-                let p_out = cb.create_ext_cell();
-                cb.mul2_ext(&p_out, &p_is[0], &q_is[1], E::BaseField::ONE);
+    while table_num.len() > 1 && table_denom.len() > 1 {
+        (table_num, table_denom) = add_fractions(cb, &table_num, &table_denom);
+    }
 
-                cb.mul2_ext(&p_out, &p_is[1], &q_is[0], E::BaseField::ONE);
-
-                let q_out = cb.create_ext_cell();
-                cb.mul2_ext(&q_out, &q_is[0], &q_is[1], E::BaseField::ONE);
-                (p_out, q_out)
-            })
-            .unzip();
+    while lookup_num.len() > 1 && lookup_denom.len() > 1 {
+        (lookup_num, lookup_denom) = add_fractions(cb, &lookup_num, &lookup_denom);
     }
     // Once the loop has finished we should be left with only one p and q,
     // the value stored in p should be the numerator of Sum p_original/q_original and should be equal to 0
     // the value stored in q is the product of all the evaluations of the input q mle and should be enforced to be non-zero by the verifier.
-    assert_eq!(p.len(), 1);
-    assert_eq!(q.len(), 1);
+    assert_eq!(table_num.len(), 1);
+    assert_eq!(table_denom.len(), 1);
+    assert_eq!(lookup_num.len(), 1);
+    assert_eq!(lookup_denom.len(), 1);
 
-    p[0].cells.iter().for_each(|cell| cb.assert_const(*cell, 0));
-    cb.create_witness_out_from_exts(&q);
+    let numerators = [table_num, lookup_num].concat();
+    let denominators = [table_denom, lookup_denom].concat();
+
+    let (final_numerator, final_denominator) = add_fractions(cb, &numerators, &denominators);
+    final_numerator[0]
+        .cells
+        .iter()
+        .for_each(|cell| cb.assert_const(*cell, 0));
+    cb.create_witness_out_from_exts(&final_denominator);
 
     cb.configure();
 
@@ -117,11 +131,9 @@ pub fn prove_logup<E: ExtensionField, T: Transcript<E>>(
     lookups: &[DenseMultilinearExtension<E>],
     circuit: &Circuit<E>,
     transcript: &mut T,
-) -> Option<(IOPProof<E>, E)> {
+) -> Option<(IOPProof<E>, E, DenseMultilinearExtension<E>)> {
     // Check we have the same number of columns for each
     assert_eq!(table.len(), lookups.len());
-
-    let num_vars = table[0].num_vars();
 
     // We need to squeeze one challenge here for merging the table and lookup columns
     let challenges = std::iter::repeat_with(|| {
@@ -132,48 +144,11 @@ pub fn prove_logup<E: ExtensionField, T: Transcript<E>>(
     .take(1)
     .collect::<Vec<E>>();
 
-    // Convert the provided MLEs into their evaluations, they should all be basefield elements
-    let table_evals = table
-        .iter()
-        .map(|col| match col.evaluations() {
-            FieldType::Base(inner) => inner.clone(),
-            _ => unreachable!(),
-        })
-        .collect::<Vec<_>>();
+    // Compute the merged table and lookup
+    let merged_table = merge_columns(table, challenges[0]);
+    let merged_lookup = merge_columns(lookups, challenges[0]);
 
-    let lookup_evals = lookups
-        .iter()
-        .map(|col| match col.evaluations() {
-            FieldType::Base(inner) => inner.clone(),
-            _ => unreachable!(),
-        })
-        .collect::<Vec<_>>();
-
-    let challenge_powers = std::iter::successors(Some(E::ONE), |prev| Some(*prev * challenges[0]))
-        .take(table.len() + 1)
-        .collect::<Vec<E>>();
-    // Compute the merged evaluations (to be used in calculating the multiplicity polynomial)
-    let (merged_table, merged_lookup): (Vec<E>, Vec<E>) = (0..1 << num_vars)
-        .into_par_iter()
-        .map(|i| {
-            let (table_entry, lookup_entry) = table_evals
-                .iter()
-                .zip(lookup_evals.iter())
-                .enumerate()
-                .fold(
-                    (challenge_powers[table.len()], challenge_powers[table.len()]),
-                    |(table_acc, lookup_acc), (j, (table_col, lookup_col))| {
-                        let out_table_acc = table_acc + challenge_powers[j] * table_col[i];
-                        let out_lookup_acc = lookup_acc + challenge_powers[j] * lookup_col[i];
-
-                        (out_table_acc, out_lookup_acc)
-                    },
-                );
-
-            (table_entry, lookup_entry)
-        })
-        .unzip();
-
+    // Comput the multiplicity polynomial
     let multiplicity_poly = compute_multiplicity_poly(&merged_table, &merged_lookup);
 
     // We calculate the product of the evaluations of the combined denominator here as it is an output of the GKR circuit
@@ -187,8 +162,8 @@ pub fn prove_logup<E: ExtensionField, T: Transcript<E>>(
     let wits_in = table
         .iter()
         .chain(lookups.iter())
+        .chain([&multiplicity_poly])
         .cloned()
-        .chain([multiplicity_poly])
         .collect::<Vec<DenseMultilinearExtension<E>>>();
 
     let mut witness = CircuitWitness::new(circuit, challenges);
@@ -214,7 +189,7 @@ pub fn prove_logup<E: ExtensionField, T: Transcript<E>>(
         transcript,
     );
 
-    Some((proof, denom_prod))
+    Some((proof, denom_prod, multiplicity_poly))
 }
 
 /// Verifies a GKR proof that `SUM M(X)/(a + T(X)) - 1/(a + L(X)) == 0` when provided with `PROD Q(X)`.
@@ -262,7 +237,7 @@ pub fn verify_logup<E: ExtensionField, T: Transcript<E>>(
 }
 
 /// Function that when provided with the merged table and merged lookups computes the multiplicity polynomial
-fn compute_multiplicity_poly<E: ExtensionField>(
+pub fn compute_multiplicity_poly<E: ExtensionField>(
     merged_table: &[E],
     merged_lookups: &[E],
 ) -> DenseMultilinearExtension<E> {
@@ -273,17 +248,17 @@ fn compute_multiplicity_poly<E: ExtensionField>(
 
     // For each value in the merged table and merged lookups create an entry in the respective HashMap if its not already present
     // otherwise simply increment the count for how many times we've seeen this element
-    merged_table
-        .iter()
-        .zip(merged_lookups.iter())
-        .for_each(|(&table_entry, &lookup_entry)| {
-            *h_table
-                .entry(table_entry)
-                .or_insert_with(|| E::BaseField::ZERO) += E::BaseField::ONE;
-            *h_lookup
-                .entry(lookup_entry)
-                .or_insert_with(|| E::BaseField::ZERO) += E::BaseField::ONE;
-        });
+    merged_table.iter().for_each(|&table_entry| {
+        *h_table
+            .entry(table_entry)
+            .or_insert_with(|| E::BaseField::ZERO) += E::BaseField::ONE;
+    });
+
+    merged_lookups.iter().for_each(|&lookup_entry| {
+        *h_lookup
+            .entry(lookup_entry)
+            .or_insert_with(|| E::BaseField::ZERO) += E::BaseField::ONE;
+    });
 
     // Calculate multiplicity polynomial evals, these are calculated as (no. times looked up) / (no. times in table)
     // If a value is present in the table but is not looked up we set its multiplicity to be 0.
@@ -301,12 +276,65 @@ fn compute_multiplicity_poly<E: ExtensionField>(
     DenseMultilinearExtension::from_evaluations_vec(num_vars, multiplicity_evals)
 }
 
+/// GKR circuit utility function to pairwise add a series of fractions of the form (p1, q1), (p2, q2) to obtain (p1q2+p2q1, q1q2)
+fn add_fractions<E: ExtensionField>(
+    cb: &mut CircuitBuilder<E>,
+    numerators: &[ExtCellId<E>],
+    denominators: &[ExtCellId<E>],
+) -> (Vec<ExtCellId<E>>, Vec<ExtCellId<E>>) {
+    numerators
+        .chunks(2)
+        .zip(denominators.chunks(2))
+        .map(|(nums, denoms)| {
+            let num_out = cb.create_ext_cell();
+            cb.mul2_ext(&num_out, &nums[0], &denoms[1], E::BaseField::ONE);
+
+            cb.mul2_ext(&num_out, &nums[1], &denoms[0], E::BaseField::ONE);
+
+            let denom_out = cb.create_ext_cell();
+            cb.mul2_ext(&denom_out, &denoms[0], &denoms[1], E::BaseField::ONE);
+            (num_out, denom_out)
+        })
+        .unzip()
+}
+
+/// Function that merges MLE columns of a table or lookups into a single vector of values
+pub fn merge_columns<E: ExtensionField>(
+    columns: &[DenseMultilinearExtension<E>],
+    challenge: E,
+) -> Vec<E> {
+    // Convert the provided MLEs into their evaluations, they should all be basefield elements
+    let column_evals = columns
+        .iter()
+        .map(|col| col.get_base_field_vec())
+        .collect::<Vec<_>>();
+
+    let num_vars = columns[0].num_vars();
+
+    let challenge_powers = std::iter::successors(Some(E::ONE), |prev| Some(*prev * challenge))
+        .take(columns.len() + 1)
+        .collect::<Vec<E>>();
+    // Compute the merged evaluations (to be used in calculating the multiplicity polynomial)
+    (0..1 << num_vars)
+        .into_iter()
+        .map(|i| {
+            column_evals
+                .iter()
+                .enumerate()
+                .fold(challenge_powers[columns.len()], |acc, (j, col)| {
+                    acc + challenge_powers[j] * col[i]
+                })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use ark_std::rand::{
         Rng, RngCore, SeedableRng,
         rngs::{OsRng, StdRng},
     };
+    use gkr::utils::i64_to_field;
     use goldilocks::{Goldilocks, GoldilocksExt2};
     use transcript::BasicTranscript;
 
@@ -315,51 +343,65 @@ mod tests {
     #[test]
     fn test_logup_gkr() {
         let mut rng = StdRng::seed_from_u64(OsRng.next_u64());
-        for n in 4..20 {
+
+        // We make two fixed table columns for the test
+        let subtractor = 1i64 << 15;
+        let (in_column, out_column): (Vec<Goldilocks>, Vec<Goldilocks>) = (0i64..1 << 16)
+            .map(|i| {
+                let shifted = i - subtractor;
+                let cell_1 = shifted;
+                let cell_2 = if shifted <= 0 { 0 } else { shifted };
+
+                (
+                    i64_to_field::<Goldilocks>(cell_1),
+                    i64_to_field::<Goldilocks>(cell_2),
+                )
+            })
+            .unzip();
+
+        let table = [in_column.as_slice(), out_column.as_slice()]
+            .map(|col| DenseMultilinearExtension::from_evaluations_slice(16, col));
+
+        let random_combiner = GoldilocksExt2::random(&mut rng);
+        let merged_table = merge_columns(&table, random_combiner);
+
+        for n in 4..5 {
             println!("Testing with {n} number of variables");
+            // First make two random columns that should pass
+            let (lookup_in, lookup_out): (Vec<Goldilocks>, Vec<Goldilocks>) = (0..1 << n)
+                .map(|_| {
+                    let position = rng.gen_range(0usize..1 << 16);
+                    (in_column[position], out_column[position])
+                })
+                .unzip();
+
+            let lookups = [lookup_in.as_slice(), lookup_out.as_slice()]
+                .map(|col| DenseMultilinearExtension::from_evaluations_slice(n, col));
+            let merged_lookups = merge_columns(&lookups, random_combiner);
+
+            let expected_multiplicity_poly =
+                compute_multiplicity_poly(&merged_table, &merged_lookups);
+
             // Make the circuit for n variables with two columns
-            let circuit = logup_circuit::<GoldilocksExt2>(n, 2);
-
-            // Make two columns for the table
-            let table_column_1 = (0..1 << n)
-                .map(|_| {
-                    let random: u64 = rng.gen::<u64>() + 1u64;
-                    Goldilocks::from(random)
-                })
-                .collect::<Vec<_>>();
-
-            let table_column_2 = (0..1 << n)
-                .map(|_| {
-                    let random: u64 = rng.gen::<u64>() + 1u64;
-                    Goldilocks::from(random)
-                })
-                .collect::<Vec<_>>();
-
-            // Make two lookup columns, here we reverse the order of the original table columns, that way each
-            // value is looked up but not in the same order
-            let mut lookup_column_1 = table_column_1.clone();
-            lookup_column_1.reverse();
-
-            let mut lookup_column_2 = table_column_2.clone();
-            lookup_column_2.reverse();
-
-            let table = [table_column_1, table_column_2]
-                .map(|col| DenseMultilinearExtension::from_evaluations_vec(n, col));
-            let lookups = [lookup_column_1, lookup_column_2]
-                .map(|col| DenseMultilinearExtension::from_evaluations_vec(n, col));
+            let circuit = logup_circuit::<GoldilocksExt2>(16, n, 2);
 
             // Initiate a new transcript for the prover
             let mut prover_transcript = BasicTranscript::<GoldilocksExt2>::new(b"test");
             // Make the proof and the claimed product of the denominator polynomial
             let now = std::time::Instant::now();
-            let (proof, denom_prod) =
+            let (proof, denom_prod, _) =
                 prove_logup(&table, &lookups, &circuit, &mut prover_transcript).unwrap();
             println!("Total time to run prove function: {:?}", now.elapsed());
 
             // Make a transcript for the verifier
             let mut verifier_transcript = BasicTranscript::<GoldilocksExt2>::new(b"test");
             // Generate the verifiers claim that they need to check against the original input polynomials
-            let claim = verify_logup(denom_prod, proof, &circuit, &mut verifier_transcript);
+            let claim = verify_logup(
+                denom_prod,
+                proof.clone(),
+                &circuit,
+                &mut verifier_transcript,
+            );
             assert!(claim.is_ok());
 
             let input_claims = claim.unwrap();
@@ -369,20 +411,12 @@ mod tests {
             for (input_poly, point_and_eval) in table
                 .iter()
                 .chain(lookups.iter())
+                .chain(std::iter::once(&expected_multiplicity_poly))
                 .zip(input_claims.point_and_evals.iter())
             {
                 let actual_eval = input_poly.evaluate(&point_and_eval.point);
-
                 assert_eq!(actual_eval, point_and_eval.eval);
             }
-
-            let expected_m_poly =
-                DenseMultilinearExtension::from_evaluations_vec(n, vec![Goldilocks::ONE; 1 << n]);
-            let final_point_and_eval = input_claims.point_and_evals.last().unwrap();
-
-            let actual_eval = expected_m_poly.evaluate(&final_point_and_eval.point);
-
-            assert_eq!(actual_eval, final_point_and_eval.eval);
         }
     }
 }

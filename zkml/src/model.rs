@@ -38,7 +38,7 @@ impl Layer {
     pub fn to_string(&self) -> String {
         match self {
             Layer::Dense(ref matrix) => {
-                format!("Dense: ({},{})",matrix.nrows(),matrix.ncols())
+                format!("Dense: ({},{})", matrix.nrows(), matrix.ncols())
             }
             Layer::Activation(Activation::Relu(_)) => {
                 format!("RELU: {}", 1 << Relu::num_vars())
@@ -85,13 +85,17 @@ impl Model {
         };
         vec![mat.ncols()]
     }
-    /// Prints to stdout 
+    /// Prints to stdout
     pub fn describe(&self) {
         println!("MATRIX description:");
-        for (idx,layer) in self.layers() {
-            println!("\t- {}: {:?}",idx,layer.to_string());
+        for (idx, layer) in self.layers() {
+            println!("\t- {}: {:?}", idx, layer.to_string());
         }
         println!("\n");
+    }
+
+    pub fn layer_count(&self) -> usize {
+        self.layers.len()
     }
 }
 
@@ -239,7 +243,7 @@ pub(crate) mod test {
     use super::Model;
 
     type F = GoldilocksExt2;
-    const SELECTOR_DENSE :usize = 0;
+    const SELECTOR_DENSE: usize = 0;
     const SELECTOR_RELU: usize = 1;
     const MOD_SELECTOR: usize = 2;
 
@@ -251,7 +255,7 @@ pub(crate) mod test {
             let mut last_row = rng.gen_range(3..15);
             for selector in 0..num_dense_layers {
                 if selector % MOD_SELECTOR == SELECTOR_DENSE {
-                //if true {
+                    // if true {
                     // last row becomes new column
                     let (nrows, ncols) = (rng.gen_range(3..15), last_row);
                     last_row = nrows;
