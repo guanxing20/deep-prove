@@ -1,35 +1,48 @@
 use ff_ext::ExtensionField;
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
-use crate::matrix::Matrix;
+use crate::{
+    Element,
+    activation::{Activation, Relu},
+    matrix::Matrix,
+    vector_to_field_par, vector_to_field_par_into,
+};
 
-/// A layer has a unique ID associated to it in the model
-pub type PolyID = usize;
+// The index of the step, starting from the input layer. (proving is done in the opposite flow)
+pub type StepIdx = usize;
 
 #[derive(Clone, Debug)]
-pub enum Layer<E> {
+pub enum Layer {
     // TODO: replace this with a Tensor based implementation
-    Dense(Matrix<E>),
+    Dense(Matrix<Element>),
+    Activation(Activation),
 }
 
-impl<E: ExtensionField> Layer<E> {
-    pub fn dim(&self) -> (usize, usize) {
-        match self {
-            Layer::Dense(ref matrix) => (matrix.nrows(), matrix.ncols()),
-        }
-    }
-
+impl Layer {
     /// Run the operation associated with that layer with the given input
     // TODO: move to tensor library : right now it works because we assume there is only Dense
     // layer which is matmul
-    pub fn op(&self, input: &[E]) -> Vec<E> {
+    pub fn op(&self, input: &[Element]) -> Vec<Element> {
         match self {
             Layer::Dense(ref matrix) => matrix.matmul(input),
+            Layer::Activation(activation) => activation.op(input),
         }
     }
 
-    pub fn evals(&self) -> Vec<E> {
+    pub fn shape(&self) -> Vec<usize> {
         match self {
-            Layer::Dense(ref matrix) => matrix.evals(),
+            Layer::Dense(ref matrix) => vec![matrix.nrows(), matrix.ncols()],
+            Layer::Activation(Activation::Relu(_)) => Relu::shape(),
+        }
+    }
+    pub fn to_string(&self) -> String {
+        match self {
+            Layer::Dense(ref matrix) => {
+                format!("Dense: ({},{})", matrix.nrows(), matrix.ncols())
+            }
+            Layer::Activation(Activation::Relu(_)) => {
+                format!("RELU: {}", 1 << Relu::num_vars())
+            }
         }
     }
 }
@@ -37,33 +50,59 @@ impl<E: ExtensionField> Layer<E> {
 /// NOTE: this doesn't handle dynamism in the model with loops for example for LLMs where it
 /// produces each token one by one.
 #[derive(Clone, Debug)]
-pub struct Model<E> {
-    layers: Vec<Layer<E>>,
+pub struct Model {
+    layers: Vec<Layer>,
 }
 
-impl<E: ExtensionField> Model<E> {
+impl Model {
     pub fn new() -> Self {
         Self {
             layers: Default::default(),
         }
     }
-    fn add_layer(&mut self, l: Layer<E>) {
+    pub fn add_layer(&mut self, l: Layer) {
         self.layers.push(l);
     }
 
-    pub fn run<'a>(&'a self, input: Vec<E>) -> InferenceTrace<'a, E> {
-        let mut trace = InferenceTrace::new(input);
+    pub fn run<'a, E: ExtensionField>(&'a self, input: Vec<Element>) -> InferenceTrace<'a, E> {
+        let mut trace = InferenceTrace::<Element>::new(input);
         for (id, layer) in self.layers() {
             let input = trace.last_input();
             let output = layer.op(input);
             let step = InferenceStep { layer, output, id };
             trace.push_step(step);
         }
-        trace
+        trace.to_field()
     }
 
-    pub fn layers(&self) -> impl DoubleEndedIterator<Item = (PolyID, &Layer<E>)> {
+    pub fn layers(&self) -> impl DoubleEndedIterator<Item = (StepIdx, &Layer)> {
         self.layers.iter().enumerate()
+    }
+
+    pub fn input_shape(&self) -> Vec<usize> {
+        let Layer::Dense(mat) = &self.layers[0] else {
+            panic!("layer is not starting with a dense layer?");
+        };
+        vec![mat.ncols()]
+    }
+
+    pub fn first_output_shape(&self) -> Vec<usize> {
+        let Layer::Dense(mat) = &self.layers[0] else {
+            panic!("layer is not starting with a dense layer?");
+        };
+        vec![mat.nrows()]
+    }
+    /// Prints to stdout
+    pub fn describe(&self) {
+        println!("MATRIX description:");
+        for (idx, layer) in self.layers() {
+            println!("\t- {}: {:?}", idx, layer.to_string());
+        }
+        println!("\n");
+    }
+
+    pub fn layer_count(&self) -> usize {
+        self.layers.len()
     }
 }
 
@@ -74,12 +113,36 @@ pub struct InferenceTrace<'a, E> {
     input: Vec<E>,
 }
 
+impl<'a> InferenceTrace<'a, Element> {
+    pub fn to_field<E: ExtensionField>(self) -> InferenceTrace<'a, E> {
+        let input = vector_to_field_par_into(self.input);
+        let field_steps = self
+            .steps
+            .par_iter()
+            .map(|step| InferenceStep {
+                id: step.id,
+                layer: step.layer,
+                output: vector_to_field_par(&step.output),
+            })
+            .collect::<Vec<_>>();
+        InferenceTrace {
+            steps: field_steps,
+            input,
+        }
+    }
+}
+
 impl<'a, E> InferenceTrace<'a, E> {
     fn new(input: Vec<E>) -> Self {
         Self {
             steps: Default::default(),
             input,
         }
+    }
+    pub fn last_step(&self) -> &InferenceStep<'a, E> {
+        self.steps
+            .last()
+            .expect("can't call last_step on empty inferece")
     }
 
     /// Useful when building the trace. The next input is either the first input or the last
@@ -163,9 +226,9 @@ impl<'t, 'a, E> DoubleEndedIterator for InferenceTraceIterator<'t, 'a, E> {
 }
 
 pub struct InferenceStep<'a, E> {
-    pub id: PolyID,
+    pub id: StepIdx,
     /// Reference to the layer that produced this step
-    pub layer: &'a Layer<E>,
+    pub layer: &'a Layer,
     /// Output produced by this layer
     pub output: Vec<E>,
 }
@@ -174,88 +237,95 @@ pub struct InferenceStep<'a, E> {
 pub(crate) mod test {
     use ark_std::rand::{Rng, thread_rng};
     use goldilocks::GoldilocksExt2;
-    use itertools::Itertools;
 
-    use crate::{matrix::Matrix, model::Layer};
+    use crate::{
+        Element,
+        activation::{Activation, Relu},
+        matrix::Matrix,
+        model::Layer,
+        testing::random_vector,
+        vector_to_field_par,
+    };
 
     use super::Model;
-    use ff_ext::ExtensionField;
 
     type F = GoldilocksExt2;
+    const SELECTOR_DENSE: usize = 0;
+    const SELECTOR_RELU: usize = 1;
+    const MOD_SELECTOR: usize = 2;
 
-    pub fn random_vector<E: ExtensionField>(n: usize) -> Vec<E> {
-        let mut rng = thread_rng();
-        (0..n).map(|_| E::random(&mut rng)).collect_vec()
-    }
-
-    pub fn random_bool_vector<E: ExtensionField>(n: usize) -> Vec<E> {
-        let mut rng = thread_rng();
-        (0..n)
-            .map(|_| E::from(rng.gen_bool(0.5) as u64))
-            .collect_vec()
-    }
-
-    impl<E: ExtensionField> Model<E> {
+    impl Model {
         /// Returns a random model with specified number of dense layers and a matching input.
-        pub fn random(num_dense_layers: usize) -> (Self, Vec<E>) {
+        pub fn random(num_dense_layers: usize) -> (Self, Vec<Element>) {
             let mut model = Model::new();
             let mut rng = thread_rng();
             let mut last_row = rng.gen_range(3..15);
-            for _ in 0..num_dense_layers {
-                // last row becomes new column
-                let (nrows, ncols) = (rng.gen_range(3..15), last_row);
-                last_row = nrows;
-                let mat = Matrix::<E>::random((nrows, ncols)).pad_next_power_of_two();
-                model.add_layer(Layer::Dense(mat));
+            for selector in 0..num_dense_layers {
+                if selector % MOD_SELECTOR == SELECTOR_DENSE {
+                    // if true {
+                    // last row becomes new column
+                    let (nrows, ncols) = (rng.gen_range(3..15), last_row);
+                    last_row = nrows;
+                    let mat = Matrix::random((nrows, ncols)).pad_next_power_of_two();
+                    model.add_layer(Layer::Dense(mat));
+                } else if selector % MOD_SELECTOR == SELECTOR_RELU {
+                    model.add_layer(Layer::Activation(Activation::Relu(Relu::new())));
+                    // no need to change the `last_row` since RELU layer keeps the same shape
+                    // of outputs
+                } else {
+                    panic!("random selection shouldn't be in that case");
+                }
             }
-            let input_dims = model.layers.first().unwrap().dim();
+            let input_dims = model.layers.first().unwrap().shape();
             // ncols since matrix2vector is summing over the columns
-            let input = random_vector(input_dims.1);
+            let input = random_vector(input_dims[1]);
             (model, input)
         }
     }
 
     #[test]
     fn test_model_long() {
-        let (model, input) = Model::<F>::random(15);
-        model.run(input);
+        let (model, input) = Model::random(3);
+        model.run::<F>(input);
     }
 
     #[test]
     fn test_model_run() {
-        let mat1 = Matrix::<F>::random((10, 11)).pad_next_power_of_two();
-        let mat2 = Matrix::<F>::random((7, mat1.ncols())).pad_next_power_of_two();
+        let mat1 = Matrix::random((10, 11)).pad_next_power_of_two();
+        let mat2 = Matrix::random((7, mat1.ncols())).pad_next_power_of_two();
         let input = random_vector(mat1.ncols());
         let output1 = mat1.matmul(&input);
         let final_output = mat2.matmul(&output1);
 
-        let mut model = Model::<F>::new();
+        let mut model = Model::new();
         model.add_layer(Layer::Dense(mat1));
         model.add_layer(Layer::Dense(mat2.clone()));
 
-        let trace = model.run(input.clone());
+        let trace = model.run::<F>(input.clone());
         assert_eq!(trace.steps.len(), 2);
 
         // Verify first step
-        assert_eq!(trace.steps[0].output, output1);
+        assert_eq!(trace.steps[0].output, vector_to_field_par(&output1));
 
         // Verify second step
-        assert_eq!(trace.steps[1].output, final_output);
+        assert_eq!(trace.steps[1].output, vector_to_field_par(&final_output));
         let (nrow, _) = (mat2.nrows(), mat2.ncols());
         assert_eq!(final_output.len(), nrow);
     }
 
     #[test]
     fn test_inference_trace_iterator() {
-        let mat1 = Matrix::<F>::random((10, 11)).pad_next_power_of_two();
-        let mat2 = Matrix::<F>::random((7, mat1.ncols())).pad_next_power_of_two();
+        let mat1 = Matrix::random((10, 11)).pad_next_power_of_two();
+        let relu1 = Activation::Relu(Relu);
+        let mat2 = Matrix::random((7, mat1.ncols())).pad_next_power_of_two();
+        let relu2 = Activation::Relu(Relu);
         let input = random_vector(mat1.ncols());
 
-        let mut model = Model::<F>::new();
+        let mut model = Model::new();
         model.add_layer(Layer::Dense(mat1));
         model.add_layer(Layer::Dense(mat2));
 
-        let trace = model.run(input.clone());
+        let trace = model.run::<F>(input.clone());
 
         // Verify iterator yields correct input/output pairs
         let mut iter = trace.iter();
@@ -276,15 +346,15 @@ pub(crate) mod test {
 
     #[test]
     fn test_inference_trace_reverse_iterator() {
-        let mat1 = Matrix::<F>::random((10, 11)).pad_next_power_of_two();
-        let mat2 = Matrix::<F>::random((7, mat1.ncols())).pad_next_power_of_two();
+        let mat1 = Matrix::random((10, 11)).pad_next_power_of_two();
+        let mat2 = Matrix::random((7, mat1.ncols())).pad_next_power_of_two();
         let input = random_vector(mat1.ncols());
 
-        let mut model = Model::<F>::new();
+        let mut model = Model::new();
         model.add_layer(Layer::Dense(mat1));
         model.add_layer(Layer::Dense(mat2));
 
-        let trace = model.run(input.clone());
+        let trace = model.run::<F>(input.clone());
 
         // Test reverse iteration
         let mut rev_iter = trace.iter().rev();

@@ -1,15 +1,19 @@
+//! This module contains logic to prove the correct opening of several claims from several independent
+//! polynomials. These polynomials are committed at setup time. The proof contains only a single PCS
+//! opening proofs and a sumcheck proof.
 #![allow(dead_code)]
 
 use std::collections::HashMap;
 
 use crate::{
-    VectorTranscript,
-    model::{Model, PolyID},
+    Claim, VectorTranscript,
+    commit::{aggregated_rlc, compute_beta_eval_poly, compute_betas_eval},
+    model::{Layer, Model},
 };
 use anyhow::{Context as CC, ensure};
 use ff_ext::ExtensionField;
 use itertools::Itertools;
-use mpcs::{Basefold, BasefoldBasecodeParams, PolynomialCommitmentScheme};
+use mpcs::PolynomialCommitmentScheme;
 use multilinear_extensions::{
     mle::{DenseMultilinearExtension, MultilinearExtension},
     virtual_poly::{VPAuxInfo, VirtualPolynomial},
@@ -18,7 +22,10 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sumcheck::structs::{IOPProof, IOPProverState, IOPVerifierState};
 use transcript::Transcript;
 
-type Pcs<E> = Basefold<E, BasefoldBasecodeParams>;
+use super::Pcs;
+
+/// A polynomial has an unique ID associated to it.
+pub type PolyID = usize;
 
 // TODO: separate context into verifier and prover ctx once thing is working
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -54,8 +61,15 @@ where
     E: Serialize + DeserializeOwned,
 {
     /// NOTE: it assumes the model's layers are already padded to power of two
-    pub fn generate_from_model(m: &Model<E>) -> anyhow::Result<Self> {
-        Self::generate(m.layers().map(|(id, l)| (id, l.evals())).collect_vec())
+    pub fn generate_from_model(m: &Model) -> anyhow::Result<Self> {
+        Self::generate(
+            m.layers()
+                .flat_map(|(id, l)| match l {
+                    Layer::Dense(m) => Some((id, m.evals())),
+                    _ => None,
+                })
+                .collect_vec(),
+        )
     }
 
     /// Generates the context given the set of individual polys that we need to commit to.
@@ -130,7 +144,7 @@ where
                 .poly_info
                 .get(&claim.poly_id)
                 .context("claim refers to unknown poly")?;
-            let given_size = 1 << claim.point.len() as usize;
+            let given_size = 1 << claim.claim.point.len() as usize;
             // verify the consistency of the individual polys lens with the claims
             ensure!(
                 *poly_size == given_size,
@@ -166,18 +180,9 @@ where
     /// Add a claim to be accumulated and checked via PCS
     /// The layer must be existing in the context, i.e. the setup phase must have processed the
     /// corresponding poly.
-    pub fn add_claim(
-        &mut self,
-        id: PolyID,
-        point: Vec<E>,
-        // Note this one is not necessary and should be removed down the line for the prover
-        eval: E,
-    ) -> anyhow::Result<()> {
-        let claim = IndividualClaim {
-            poly_id: id,
-            point,
-            eval,
-        };
+    /// TODO: add context so it can check the correct shape of the claim
+    pub fn add_claim(&mut self, id: PolyID, claim: Claim<E>) -> anyhow::Result<()> {
+        let claim = IndividualClaim { poly_id: id, claim };
         self.claims.push(claim);
         Ok(())
     }
@@ -194,7 +199,7 @@ where
         let fs_challenges = t.read_challenges(sorted_claims.len());
         let (full_r, full_y): (Vec<Vec<_>>, Vec<_>) = sorted_claims
             .into_iter()
-            .map(|c| (c.point, c.eval))
+            .map(|c| (c.claim.point, c.claim.eval))
             .multiunzip();
 
         // construct the matrix with the betas scaled
@@ -251,12 +256,8 @@ where
             claims: Default::default(),
         }
     }
-    pub fn add_claim(&mut self, id: PolyID, point: Vec<E>, eval: E) -> anyhow::Result<()> {
-        let claim = IndividualClaim {
-            poly_id: id,
-            point,
-            eval,
-        };
+    pub fn add_claim(&mut self, id: PolyID, claim: Claim<E>) -> anyhow::Result<()> {
+        let claim = IndividualClaim { poly_id: id, claim };
         self.claims.push(claim);
         Ok(())
     }
@@ -276,7 +277,7 @@ where
         let (full_r, full_y): (Vec<Vec<_>>, Vec<_>) = sorted_claims
             .iter()
             .cloned()
-            .map(|c| (c.point, c.eval))
+            .map(|c| (c.claim.point, c.claim.eval))
             .multiunzip();
         let y_agg = aggregated_rlc(&full_y, &fs_challenges);
         let subclaim = IOPVerifierState::<E>::verify(y_agg, &proof.sumcheck, &ctx.poly_aux, t);
@@ -302,21 +303,8 @@ where
                 poly_len
             })
             .collect();
-
-        let mut beta_evals = fs_challenges
-            .iter()
-            .zip(&full_r)
-            .map(|(&x_i, r_i)| x_i * identity_eval(r_i, &proof.sumcheck.point))
-            .collect::<Vec<_>>();
-
-        let mut pos = 0;
-        for (idx, poly_size) in pairs.iter().enumerate() {
-            let prod = get_offset_product(*poly_size, pos, &proof.sumcheck.point);
-            pos += poly_size;
-            beta_evals[idx] *= prod;
-        }
-
-        let computed = beta_evals.iter().fold(E::ZERO, |acc, &eval| acc + eval);
+        let computed =
+            compute_beta_eval_poly(pairs, &fs_challenges, &full_r, &proof.sumcheck.point);
         // 0 since poly is f_beta(..) * f_w(..) so beta comes firt
         let expected = proof.individual_evals[0];
         ensure!(computed == expected, "Error in beta evaluation check");
@@ -351,39 +339,7 @@ where
 #[derive(Clone, Debug)]
 struct IndividualClaim<E> {
     poly_id: PolyID,
-    point: Vec<E>,
-    eval: E,
-}
-
-/// Random linear combination of claims and random elements derived from transcript
-fn aggregated_rlc<E: ExtensionField>(claims: &[E], challenges: &[E]) -> E {
-    assert_eq!(claims.len(), challenges.len());
-    claims
-        .iter()
-        .zip(challenges)
-        .fold(E::ZERO, |acc, (claim, r)| acc + *claim * r)
-}
-
-/// Compute the vector (beta(r,1),....,beta(r,2^{|r|}))
-/// This function uses the dynamic programing technique of Libra
-fn compute_betas_eval<E: ExtensionField>(r: &[E]) -> Vec<E> {
-    let n = r.len();
-    let size = 1 << n;
-    let mut betas = vec![E::ZERO; size];
-    betas[0] = E::ONE;
-
-    for i in 0..n {
-        let current_size = 1 << i;
-        let temp = betas[..current_size].to_vec();
-        let r_elem = r[r.len() - 1 - i];
-        for j in 0..current_size {
-            let idx = j << 1;
-            let t = r_elem * temp[j];
-            betas[idx] = temp[j] - t;
-            betas[idx + 1] = t;
-        }
-    }
-    betas
+    claim: Claim<E>,
 }
 
 /// compute the beta matrix from individual challenges and betas.
@@ -414,76 +370,6 @@ fn beta_matrix_mle<E: ExtensionField>(ris: &[Vec<E>], ais: &[E]) -> DenseMultili
     DenseMultilinearExtension::from_evaluations_ext_vec(betas.len().ilog2() as usize, betas)
 }
 
-/// Compute multilinear identity test between two points: returns 1 if points are equal, 0 if different.
-/// Used as equality checker in polynomial commitment verification.
-/// Compute Beta(r1,r2) = prod_{i \in [n]}((1-r1[i])(1-r2[i]) + r1[i]r2[i])
-/// NOTE: the two vectors don't need to be of equal size. It compute the identity eval on the
-/// minimum size between the two vector
-fn identity_eval<E: ExtensionField>(r1: &[E], r2: &[E]) -> E {
-    let max_elem = std::cmp::min(r1.len(), r2.len());
-    let v1 = &r1[..max_elem];
-    let v2 = &r2[..max_elem];
-    v1.iter().zip(v2).fold(E::ONE, |eval, (r1_i, r2_i)| {
-        let one = E::ONE;
-        eval * (*r1_i * r2_i + (one - r1_i) * (one - r2_i))
-    })
-}
-
-/// Computes the product of offset terms for a given position and random vector
-/// fn get_offset_product<E: ExtensionField>(size: usize, mut pos: usize, r: &[E]) -> E {
-///    // 1. Convert 'pos' into its binary representation
-///    let mut bits = vec![E::ZERO; r.len()];
-///    // Convert position to binary representation in little-endian order
-///    for i in (0..r.len()).rev() {  // Changed: iterate in reverse
-///        bits[i] = if pos & 1 == 1 { E::ONE } else { E::ZERO };
-///        pos >>= 1;
-///    }
-///    
-///    let num_vars_needed = r.len() - size.ilog2() as usize;
-///    // Compute product for the required number of variables
-///    (0..num_vars_needed).fold(E::ONE, |prod, i| {
-///        let bit = bits[r.len() - 1 - i];
-///        let r_i = r[r.len() - 1 - i];
-///        prod * (bit * r_i + (E::ONE - bit) * (E::ONE - r_i))
-///    })
-/// }
-///
-/// Computes the offset product for a given claim.
-///
-/// # Parameters
-/// - `claim_size`: The size (number of entries) corresponding to the claim.
-/// - `mut pos`: The position (an integer) whose binary representation will be used.
-/// - `rand_vec`: The vector of random field elements (corresponding to `r` in the C++ code).
-///
-/// # Returns
-/// The product computed from the bits of `pos` and corresponding values in `rand_vec`.
-fn get_offset_product<E: ExtensionField>(claim_size: usize, mut pos: usize, rand_vec: &[E]) -> E {
-    // Create a vector to hold the bits.
-    // In the C++ code, bits are pushed in LSB-first order;
-    // here we fill the vector in reverse so that the most significant end of the vector
-    // contains what C++ would later pick from bits[r.size()-1 - i].
-    let mut bits = vec![E::ZERO; rand_vec.len()];
-
-    // Fill 'bits' such that bits[0] becomes the LSB, bits[len-1] the MSB.
-    // By iterating in reverse, we mimic the eventual reversal in the C++ code.
-    for i in 0..rand_vec.len() {
-        bits[i] = if pos & 1 == 1 { E::ONE } else { E::ZERO };
-        pos >>= 1;
-    }
-
-    // The number of variables to be "folded" is determined by log2(claim_size).
-    // This is equivalent to 'r.size() - (int)log2(size)' in C++.
-    let num_vars_needed = rand_vec.len() - claim_size.ilog2() as usize;
-
-    // Now, accumulate the product similar to the C++ loop.
-    (0..num_vars_needed).fold(E::ONE, |prod, i| {
-        // Access from the end of the vector (i.e. effectively reversing the bits again)
-        let bit = bits[rand_vec.len() - 1 - i];
-        let r_i = rand_vec[rand_vec.len() - 1 - i];
-        prod * (bit * r_i + (E::ONE - bit) * (E::ONE - r_i))
-    })
-}
-
 #[cfg(test)]
 mod test {
     use ark_std::rand::{Rng, thread_rng};
@@ -492,12 +378,12 @@ mod test {
     use itertools::Itertools;
     use multilinear_extensions::mle::MultilinearExtension;
 
+    use super::compute_betas_eval;
     use crate::{
-        commit::{compute_betas_eval, get_offset_product, identity_eval},
+        Claim, default_transcript,
         matrix::Matrix,
-        model::test::{random_bool_vector, random_vector},
         pad_vector,
-        prover::default_transcript,
+        testing::{random_bool_vector, random_field_vector},
         vector_to_mle,
     };
 
@@ -512,8 +398,7 @@ mod test {
         // let range = thread_rng().gen_range(3..15);
         let matrices = (0..n_poly)
             .map(|_| {
-                Matrix::<F>::random((rng.gen_range(3..24), rng.gen_range(3..24)))
-                    .pad_next_power_of_two()
+                Matrix::random((rng.gen_range(3..24), rng.gen_range(3..24))).pad_next_power_of_two()
             })
             .enumerate()
             .collect_vec();
@@ -533,7 +418,7 @@ mod test {
 
         let mut prover = CommitProver::new();
         for (id, point, eval) in claims.iter() {
-            prover.add_claim(*id, point.clone(), eval.clone())?;
+            prover.add_claim(*id, Claim::new(point.clone(), eval.clone()))?;
         }
 
         let mut t = default_transcript();
@@ -543,7 +428,7 @@ mod test {
         let mut verifier = CommitVerifier::new();
         let mut t = default_transcript();
         for (id, point, eval) in claims {
-            verifier.add_claim(id, point, eval)?;
+            verifier.add_claim(id, Claim::new(point, eval))?;
         }
         verifier.verify(&ctx, proof, &mut t)?;
 
@@ -555,7 +440,7 @@ mod test {
         let n_poly = 7;
         // let range = thread_rng().gen_range(3..15);
         let polys = (0..n_poly)
-            .map(|_| pad_vector(random_vector::<F>(thread_rng().gen_range(3..24))))
+            .map(|_| pad_vector(random_field_vector::<F>(thread_rng().gen_range(3..24))))
             .enumerate()
             .collect_vec();
         let ctx = Context::generate(polys.clone())?;
@@ -566,7 +451,7 @@ mod test {
             let p = random_bool_vector(poly.len().ilog2() as usize);
             let eval = vector_to_mle(poly.clone()).evaluate(&p);
             claims.push((id, p.clone(), eval.clone()));
-            prover.add_claim(id, p, eval)?;
+            prover.add_claim(id, Claim::new(p, eval))?;
         }
 
         let mut t = default_transcript();
@@ -576,7 +461,7 @@ mod test {
         let mut verifier = CommitVerifier::new();
         let mut t = default_transcript();
         for (id, point, eval) in claims {
-            verifier.add_claim(id, point, eval)?;
+            verifier.add_claim(id, Claim::new(point, eval))?;
         }
         verifier.verify(&ctx, proof, &mut t)?;
 
@@ -593,36 +478,5 @@ mod test {
         let r2 = random_bool_vector::<F>(n / 2);
         assert_ne!(beta_mle.evaluate(&r2), F::ONE);
         assert_eq!(beta_mle.evaluate(&r2), F::ZERO);
-    }
-
-    #[test]
-    fn test_identity_eval() {
-        let n = 4;
-        let r1 = random_bool_vector::<F>(n);
-
-        // When vectors are identical, should return 1
-        let r2 = r1.clone();
-        let result = identity_eval(&r1, &r2);
-        assert_eq!(result, F::ONE);
-
-        // When vectors are different, should return 0
-        let r2 = random_bool_vector::<F>(n);
-        let result = identity_eval(&r1, &r2);
-        assert_eq!(result, F::ZERO);
-    }
-
-    #[test]
-    fn test_get_offset_product() {
-        let size = 4; // Original polynomial of size 4 (2^2 variables)
-        let r = vec![F::ONE, F::ZERO, F::ONE, F::ZERO]; // Some test point
-
-        // When evaluating at position 0 (first slice)
-        let result0 = get_offset_product(size, 0, &r);
-
-        // When evaluating at position 4 (second slice)
-        let result4 = get_offset_product(size, 4, &r);
-
-        // Results will be different because they're enforcing different slices
-        assert_ne!(result0, result4);
     }
 }
