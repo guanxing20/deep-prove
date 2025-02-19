@@ -244,7 +244,7 @@ mod tests {
 
     #[test]
     fn test_tract() {
-        let filepath = "assets/models/MLP/model-01.onnx";
+        let filepath = "assets/models/MLP/mlp-iris-01.onnx";
         let result = load_mlp::<Element>(&filepath);
 
         assert!(result.is_ok(), "Failed: {:?}", result.unwrap_err());
@@ -252,7 +252,7 @@ mod tests {
 
     #[test]
     fn test_model_run() {
-        let filepath = "assets/models/MLP/model-01.onnx";
+        let filepath = "assets/models/MLP/mlp-iris-01.onnx";
 
         let model = load_mlp::<Element>(&filepath).unwrap();
         let input = random_vector(model.input_shape()[0]);
