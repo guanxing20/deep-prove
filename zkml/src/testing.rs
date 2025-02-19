@@ -1,12 +1,12 @@
-use ark_std::rand::{Rng, thread_rng};
+use ark_std::rand::{distributions::Standard, prelude::Distribution, thread_rng, Rng};
 use ff_ext::ExtensionField;
 use itertools::Itertools;
 
 use crate::Element;
 
-pub fn random_vector(n: usize) -> Vec<Element> {
+pub fn random_vector<T>(n: usize) -> Vec<Element> where Standard: Distribution<T> {
     let mut rng = thread_rng();
-    (0..n).map(|_| rng.gen::<u8>() as Element).collect_vec()
+    (0..n).map(|_| rng.gen::<T>() as Element).collect_vec()
 }
 
 pub fn random_field_vector<E: ExtensionField>(n: usize) -> Vec<E> {

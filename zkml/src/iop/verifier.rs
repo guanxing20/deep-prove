@@ -8,10 +8,8 @@ use crate::{
 use anyhow::{Context as CC, bail, ensure};
 use ff_ext::ExtensionField;
 use itertools::Itertools;
-use log::debug;
 use multilinear_extensions::{
     mle::{IntoMLE, MultilinearExtension},
-    virtual_poly::VPAuxInfo,
 };
 use serde::{Serialize, de::DeserializeOwned};
 use sumcheck::structs::IOPVerifierState;

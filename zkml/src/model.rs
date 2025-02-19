@@ -293,7 +293,7 @@ pub(crate) mod test {
     fn test_model_run() {
         let mat1 = Matrix::random((10, 11)).pad_next_power_of_two();
         let mat2 = Matrix::random((7, mat1.ncols())).pad_next_power_of_two();
-        let input = random_vector(mat1.ncols());
+        let input = random_vector::<Element>(mat1.ncols());
         let output1 = mat1.matmul(&input);
         let final_output = mat2.matmul(&output1);
 

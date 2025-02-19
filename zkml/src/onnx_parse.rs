@@ -1,12 +1,10 @@
 use anyhow::{Error, Result, bail, ensure};
 use itertools::Itertools;
-use std::{collections::HashMap, path::Path};
+use std::{collections::HashMap, i8, path::Path};
 use tract_onnx::{pb::NodeProto, prelude::*};
 
 use crate::{
-    Element,
-    matrix::Matrix,
-    model::{Layer, Model},
+    matrix::Matrix, model::{Layer, Model}, quantization::{QuantInteger, Quantizer}, Element
 };
 
 #[derive(Debug, Clone)]
@@ -165,7 +163,7 @@ fn fetch_weight_bias_as_mat<Q: Quantizer<Element>>(
     Ok(field_matrix)
 }
 
-pub fn load_mlp<Q: Quantizer<Element>>(filepath: &str) -> Result<Model> {
+pub fn load_mlp<Q: Quantizer<QuantInteger>>(filepath: &str) -> Result<Model> {
     if !Path::new(filepath).exists() {
         return Err(Error::msg(format!("File '{}' does not exist", filepath)));
     }
@@ -214,20 +212,7 @@ pub fn load_mlp<Q: Quantizer<Element>>(filepath: &str) -> Result<Model> {
     Ok(sumcheck_model)
 }
 
-trait Quantizer<Output> {
-    fn from_f32_unsafe(e: &f32) -> Output;
-}
 
-impl Quantizer<Element> for Element {
-    fn from_f32_unsafe(e: &f32) -> Self {
-        let max_u8 = 255u32;
-        let scale = 2.0 / max_u8 as f64;
-        let zero_point = (max_u8 as f64) / 2.0;
-
-        let scaled = (*e as f64 / scale + zero_point).round() as u32;
-        scaled as Element
-    }
-}
 
 #[cfg(test)]
 mod tests {

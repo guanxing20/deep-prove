@@ -1,8 +1,9 @@
 use ff_ext::ExtensionField;
+use goldilocks::SmallField;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use serde::{Deserialize, Serialize};
 
-use crate::Element;
+use crate::{quantization::{self, BIT_LEN, ZERO}, Element};
 
 /// Context holding information related to the lookup tables used in the proving
 /// steps for the verifier and the prover.
@@ -39,12 +40,6 @@ impl Activation {
     }
 }
 
-/// RELU over 16 bit for 8 bit quantization (after a dense layer, a number could be up to 16bits)
-/// ASSUMPTIONS about quantization: [-1;1] is mapped to [0;256]
-/// so over 16 bits, middle "0" is 2**15
-/// TODO: add quantization
-const BIT_QUANTIZATION: usize = 8;
-pub const ZERO_QUANTIZED: Element = 1 << 15;
 #[derive(Clone, Debug)]
 pub struct Relu;
 
@@ -53,7 +48,7 @@ impl Relu {
         Self
     }
     pub fn num_vars() -> usize {
-        BIT_QUANTIZATION * 2
+        BIT_LEN
     }
     pub fn poly_len() -> usize {
         1 << Self::num_vars()
@@ -65,9 +60,19 @@ impl Relu {
     /// f_i: one containing the input column values
     /// f_o: one containing the output column values
     pub fn to_mle<E: ExtensionField>() -> (Vec<E>, Vec<E>) {
-        let num_vars = BIT_QUANTIZATION * 2;
-        (0..1 << num_vars)
-            .map(|i| (E::from(i), E::from(Self::apply(i))))
+        (quantization::MIN..quantization::MAX)
+            .map(|i| {
+                let input = if i < 0 {
+                    // Doing wrapped arithmetic : p-128 ... p-1 means negative number
+                    E::from(<E::BaseField as SmallField>::MODULUS_U64 - i.abs() as u64)
+                } else {
+                    // for positive and zero, it's just the number
+                    E::from(i as u64)
+                }; 
+                // conversion from QuantInteger -> u64 OK because result is either 0 or strictly positive.
+                let output = E::from(Self::apply(i) as u64);
+                (input,output)
+            })
             .unzip()
     }
 
@@ -80,11 +85,10 @@ impl Relu {
 
     #[inline(always)]
     pub fn apply(e: Element) -> Element {
-        if e <= ZERO_QUANTIZED {
+        if e <= ZERO {
             0
         } else {
-            // we also apply requantization by reshifting into [0;2**8] range
-            e >> 8
+            e 
         }
     }
 }
@@ -113,9 +117,9 @@ mod test {
             }
         }
         for case in [
-            testCase::from(10, 0),
-            testCase::from(255, 0),
-            testCase::from(4031, 15),
+            testCase::from(-24, 0),
+            testCase::from(0, 0),
+            testCase::from(124, 15),
         ] {
             assert_eq!(Relu::apply(case.input), case.output);
         }

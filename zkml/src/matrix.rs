@@ -176,7 +176,6 @@ impl Matrix<Element> {
 #[cfg(test)]
 mod test {
     use ark_std::rand::{Rng, thread_rng};
-    use ff_ext::ExtensionField;
     use goldilocks::GoldilocksExt2;
     use itertools::Itertools;
     use multilinear_extensions::mle::MultilinearExtension;
@@ -250,7 +249,7 @@ mod test {
 
     #[test]
     fn test_matrix_next_power_of_two() {
-        let (n_rows, n_cols) = (10, 10);
+        let (n_rows, n_cols) : (usize,usize) = (10, 10);
         let mat = Matrix::<Element>::random((n_rows, n_cols));
         let (new_rows, new_cols) = (n_rows.next_power_of_two(), n_cols.next_power_of_two());
         let new_mat = mat.pad_next_power_of_two();

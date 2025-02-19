@@ -2,7 +2,7 @@ use crate::{
     activation::{Activation, ActivationCtx, Relu},
     iop::precommit::{self, PolyID},
     lookup,
-    model::{Layer, Model},
+    model::{Layer, Model}, quantization::QuantInfo, BIT_LEN,
 };
 use anyhow::Context as CC;
 use ff_ext::ExtensionField;
@@ -25,6 +25,7 @@ pub enum StepInfo<E> {
 pub struct DenseInfo<E> {
     pub poly_id: PolyID,
     pub poly_aux: VPAuxInfo<E>,
+    pub quant_info: QuantInfo<BIT_LEN>,
 }
 /// Currently holds the poly info for the output polynomial of the RELU
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -96,6 +97,7 @@ where
                                 matrix_num_vars,
                                 vector_num_vars,
                             ]]),
+                            quant_info: QuantInfo::<BIT_LEN>::default(),
                         })
                     }
                     Layer::Activation(Activation::Relu(_)) => {

@@ -4,6 +4,7 @@ use ff_ext::ExtensionField;
 use gkr::structs::PointAndEval;
 use itertools::Itertools;
 use multilinear_extensions::mle::DenseMultilinearExtension;
+use quantization::QuantInteger;
 use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use serde::{Deserialize, Serialize};
 use transcript::{BasicTranscript, Transcript};
@@ -12,6 +13,7 @@ mod commit;
 mod iop;
 
 mod logup;
+mod quantization;
 mod lookup;
 mod matrix;
 mod model;
@@ -19,6 +21,9 @@ mod onnx_parse;
 
 mod testing;
 mod utils;
+
+/// allowed range is [-128;127]
+type Element = QuantInteger;
 
 /// Claim type to accumulate in this protocol, for a certain polynomial, known in the context.
 /// f(point) = eval
@@ -70,9 +75,6 @@ impl<E: ExtensionField> Claim<E> {
     }
 }
 
-/// Element is u64 right now to withstand the overflow arithmetics when running inference for any kinds of small models.
-/// With quantization this is not needed anymore and we can try changing back to u16 or u32 but perf gains should be minimal.
-type Element = u64;
 
 /// Returns the default transcript the prover and verifier must instantiate to validate a proof.
 pub fn default_transcript<E: ExtensionField>() -> BasicTranscript<E> {
@@ -169,7 +171,7 @@ mod test {
 
         let shape = model.input_shape();
         assert_eq!(shape.len(), 1);
-        let input = random_vector(shape[0]);
+        let input = random_vector::<Element>(shape[0]);
 
         let trace = model.run(input.clone());
         let output = trace.final_output().to_vec();
