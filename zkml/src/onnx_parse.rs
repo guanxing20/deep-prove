@@ -1,4 +1,4 @@
-use anyhow::{Error, Result};
+use anyhow::{Error, Result, bail, ensure};
 use itertools::Itertools;
 use std::{collections::HashMap, path::Path};
 use tract_onnx::{pb::NodeProto, prelude::*};
@@ -18,6 +18,7 @@ struct Gemm {
     trans_b: bool,
 }
 
+// Given a ONNX node, build a struct which contains information about the Gemm
 fn build_gemm(node: &NodeProto) -> Result<Gemm> {
     let name = node.name.to_string();
     let alpha = node.get_attr_opt("alpha")?.unwrap_or(1.);
@@ -34,6 +35,7 @@ fn build_gemm(node: &NodeProto) -> Result<Gemm> {
     Ok(gemm)
 }
 
+// Given serialized data and its tract DatumType, build a tract tensor.
 fn create_tensor(shape: Vec<usize>, dt: DatumType, data: &[u8]) -> TractResult<Tensor> {
     unsafe {
         match dt {
@@ -90,12 +92,77 @@ fn is_mlp(filepath: &str) -> Result<bool> {
     Ok(is_mlp)
 }
 
+// Given a flat vector, converts it to matrix in row major form
 fn reshape<T: Clone>(flat_vec: Vec<T>, rows: usize, cols: usize) -> Option<Vec<Vec<T>>> {
     if flat_vec.len() != rows * cols {
         return None; // Return None if dimensions don't match the number of elements
     }
 
     Some(flat_vec.chunks(cols).map(|chunk| chunk.to_vec()).collect())
+}
+
+fn concat_column(matrix: Vec<Vec<u64>>, column: Vec<Vec<u64>>) -> Result<Vec<Vec<u64>>> {
+    if matrix.len() != column.len() {
+        bail!("Column length must match matrix row count");
+    }
+
+    let new_matrix: Vec<Vec<u64>> = matrix
+        .into_iter()
+        .zip(column.into_iter())
+        .map(|(mut row, col_val)| {
+            if col_val.len() != 1 {
+                bail!("Column vector must have a single value per row");
+            }
+            row.push(col_val[0]); // Append the single column value
+            Ok(row)
+        })
+        .collect::<Result<Vec<_>>>()?; // Collect results into Vec<Vec<u64>>
+
+    Ok(new_matrix)
+}
+
+fn fetch_weight_bias_as_mat<Q: Quantizer<Element>>(
+    weight_or_bias: &str,
+    node: &NodeProto,
+    initializers: &HashMap<String, Tensor>,
+) -> Result<Vec<Vec<u64>>> {
+    ensure!(weight_or_bias == "weight" || weight_or_bias == "bias");
+
+    let alpha_or_beta = node
+        .attribute
+        .iter()
+        .filter(|x| {
+            x.name.contains(match weight_or_bias {
+                "weight" => "alpha",
+                _ => "beta",
+            })
+        })
+        .map(|x| x.f)
+        .collect_vec();
+    let alpha_or_beta = alpha_or_beta[0];
+
+    let tensor_vec = node
+        .input
+        .iter()
+        .filter(|x| x.contains(weight_or_bias))
+        .filter_map(|key| initializers.get(key).cloned())
+        .collect_vec();
+
+    // If a node is Gemm, then it has only one tensor of the form "fcN.weight"
+    let tensor_t = tensor_vec[0].clone();
+    let tensor_t_f32 = tensor_t.as_slice::<f32>().unwrap().to_vec();
+    let tensor_t_f32 = tensor_t_f32.iter().map(|x| x * alpha_or_beta).collect_vec();
+    let tensor_f = tensor_t_f32.iter().map(Q::from_f32_unsafe).collect_vec();
+
+    let (rows, cols) = match tensor_t.shape().len() {
+        1 => (tensor_t.shape()[0], 1),
+        2 => (tensor_t.shape()[0], tensor_t.shape()[1]),
+        _ => bail!("Invalid tensor shape: expected 1D or 2D tensor"),
+    };
+
+    let field_matrix = reshape(tensor_f, rows, cols).unwrap();
+
+    Ok(field_matrix)
 }
 
 pub fn load_mlp<Q: Quantizer<Element>>(filepath: &str) -> Result<Model> {
@@ -126,17 +193,10 @@ pub fn load_mlp<Q: Quantizer<Element>>(filepath: &str) -> Result<Model> {
     for node in graph.node.iter() {
         match node.op_type.as_str() {
             "Gemm" => {
-                let values = node
-                    .input
-                    .iter()
-                    .filter(|x| x.contains("weight"))
-                    .filter_map(|key| initializers.get(key).cloned())
-                    .collect_vec();
+                let matrix_weight = fetch_weight_bias_as_mat::<Q>("weight", node, &initializers)?;
+                let matrix_bias = fetch_weight_bias_as_mat::<Q>("bias", node, &initializers)?;
 
-                let tensor = values[0].clone();
-                let tensor_f32 = tensor.as_slice::<f32>().unwrap().to_vec();
-                let tensor_f = tensor_f32.iter().map(Q::from_f32_unsafe).collect_vec();
-                let matrix = reshape(tensor_f, tensor.shape()[0], tensor.shape()[1]).unwrap();
+                let matrix = concat_column(matrix_weight, matrix_bias)?;
                 let matrix = Matrix::<Element>::from_coeffs(matrix)
                     .unwrap()
                     .pad_next_power_of_two();
@@ -195,7 +255,7 @@ mod tests {
         let filepath = "assets/model.onnx";
 
         let model = load_mlp::<Element>(&filepath).unwrap();
-        let input = random_vector(4);
+        let input = random_vector(model.input_shape()[0]);
 
         let trace = model.run::<F>(input.clone());
         println!("Result: {:?}", trace.final_output());
