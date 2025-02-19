@@ -139,9 +139,16 @@ mod test {
     use multilinear_extensions::mle::MultilinearExtension;
 
     use crate::{
-        default_transcript, iop::{
-            prover::Prover, verifier::{verify, IO}, Context
-        }, lookup::{LogUp, LookupProtocol}, onnx_parse::load_mlp, testing::random_vector, to_bit_sequence_le, vector_to_field_par, vector_to_mle, Element
+        Element, default_transcript,
+        iop::{
+            Context,
+            prover::Prover,
+            verifier::{IO, verify},
+        },
+        lookup::{LogUp, LookupProtocol},
+        onnx_parse::load_mlp,
+        testing::random_vector,
+        to_bit_sequence_le, vector_to_field_par, vector_to_mle,
     };
     use ff_ext::ff::Field;
 

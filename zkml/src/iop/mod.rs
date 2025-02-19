@@ -75,12 +75,7 @@ impl<E: ExtensionField> Matrix2VecProof<E> {
 mod test {
     use goldilocks::GoldilocksExt2;
 
-    use crate::{
-        default_transcript,
-        lookup::LogUp,
-        model::Model,
-        vector_to_field_par,
-    };
+    use crate::{default_transcript, lookup::LogUp, model::Model, vector_to_field_par};
 
     use super::{
         Context,

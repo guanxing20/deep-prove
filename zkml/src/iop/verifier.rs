@@ -61,7 +61,10 @@ where
         point: first_randomness,
         eval: computed_sum,
     };
-    println!("VERIFIER: Proof Order: {:?}",proof.steps.iter().map(|p| p.variant_name()).collect_vec());
+    println!(
+        "VERIFIER: Proof Order: {:?}",
+        proof.steps.iter().map(|p| p.variant_name()).collect_vec()
+    );
     // NOTE: if we only had m2v then we need to do the following check manually to make sure the output is correct.
     // For other cases, for example if we have RELU at last, then we _always_ accumulate output claims into the
     // _witness_prover_ part,  so that claim will be verified nonetheless.

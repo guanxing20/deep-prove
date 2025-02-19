@@ -118,7 +118,6 @@ pub trait LookupProtocol<E: ExtensionField> {
     ) -> anyhow::Result<VerifierClaims<E>>;
 }
 
-
 pub struct LogUp<E: ExtensionField>(PhantomData<E>);
 
 impl<E: ExtensionField> LookupProtocol<E> for LogUp<E> {

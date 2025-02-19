@@ -1,5 +1,8 @@
 use crate::{
-    activation::{Activation, ActivationCtx, Relu}, iop::precommit::{self, PolyID}, lookup, model::{Layer, Model}
+    activation::{Activation, ActivationCtx, Relu},
+    iop::precommit::{self, PolyID},
+    lookup,
+    model::{Layer, Model},
 };
 use anyhow::Context as CC;
 use ff_ext::ExtensionField;
