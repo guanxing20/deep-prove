@@ -161,7 +161,7 @@ mod test {
     }
 
     fn test_model_run_helper<L: LookupProtocol<E>>() -> anyhow::Result<()> {
-        let filepath = "assets/model.onnx";
+        let filepath = "assets/models/MLP/model-01.onnx";
         let model = load_mlp::<Element>(&filepath).unwrap();
         println!("[+] Loaded onnx file");
         let ctx = Context::<E>::generate(&model).expect("unable to generate context");
