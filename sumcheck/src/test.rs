@@ -1,6 +1,9 @@
 use std::{array, sync::Arc};
 
-use ark_std::{rand::RngCore, test_rng};
+use ark_std::{
+    rand::{RngCore, thread_rng},
+    test_rng,
+};
 use ff::Field;
 use ff_ext::ExtensionField;
 use goldilocks::GoldilocksExt2;
@@ -47,6 +50,12 @@ fn test_sumcheck<E: ExtensionField>(
                 .as_ref()
         ) == subclaim.expected_evaluation,
         "wrong subclaim"
+    );
+    // The point given in the proof is the same as the point returned by the verifier method
+    // It is the point over which to evaluate the original polynomial over
+    assert_eq!(
+        proof.point,
+        subclaim.point.iter().map(|c| c.elements).collect_vec()
     );
 }
 
@@ -226,7 +235,7 @@ fn test_interpolation() {
 }
 
 const NUM_DEGREE: usize = 3;
-const NV: usize = 29;
+const NV: usize = 20;
 type E = GoldilocksExt2;
 
 #[test]

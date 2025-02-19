@@ -13,6 +13,7 @@ use rayon::{
     slice::ParallelSliceMut,
 };
 use serde::{Deserialize, Serialize};
+use transcript::Transcript;
 
 pub type ArcMultilinearExtension<'a, E> =
     Arc<dyn MultilinearExtension<E, Output = DenseMultilinearExtension<E>> + 'a>;
@@ -66,6 +67,36 @@ pub struct VPAuxInfo<E> {
     /// Associated field
     #[doc(hidden)]
     pub phantom: PhantomData<E>,
+}
+impl<E: ExtensionField> VPAuxInfo<E> {
+    pub fn write_to_transcript<T: Transcript<E>>(&self, t: &mut T) {
+        t.append_field_elements(&[
+            E::BaseField::from(self.max_degree as u64),
+            E::BaseField::from(self.max_num_variables as u64),
+        ]);
+    }
+}
+impl<E> VPAuxInfo<E> {
+    /// List of list of MLEs num_vars (f1*f2 + f1*f3*f4 + ... )
+    pub fn from_mle_list_dimensions(product_list: &[Vec<usize>]) -> Self {
+        let mut max_num_vars = 0;
+        let mut max_degree = 0;
+        for product in product_list {
+            max_degree = max(max_degree, product.len());
+            max_num_vars = max(
+                max_num_vars,
+                *product
+                    .iter()
+                    .max()
+                    .expect("At least one MLE in the product is required"),
+            );
+        }
+        Self {
+            max_degree,
+            max_num_variables: max_num_vars,
+            phantom: PhantomData,
+        }
+    }
 }
 
 impl<'a, E: ExtensionField> VirtualPolynomial<'a, E> {
@@ -121,7 +152,10 @@ impl<'a, E: ExtensionField> VirtualPolynomial<'a, E> {
             mle_list
                 .iter()
                 .map(|m| {
-                    assert!(m.num_vars() <= self.aux_info.max_num_variables);
+                    assert!(
+                        m.num_vars() <= self.aux_info.max_num_variables,
+                        "invalid max num vars"
+                    );
                     m.num_vars()
                 })
                 .all_equal()
