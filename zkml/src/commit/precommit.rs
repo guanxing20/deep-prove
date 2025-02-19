@@ -418,7 +418,7 @@ mod test {
 
         let mut prover = CommitProver::new();
         for (id, point, eval) in claims.iter() {
-            prover.add_claim(*id, Claim::from(point.clone(), eval.clone()))?;
+            prover.add_claim(*id, Claim::new(point.clone(), eval.clone()))?;
         }
 
         let mut t = default_transcript();
@@ -428,7 +428,7 @@ mod test {
         let mut verifier = CommitVerifier::new();
         let mut t = default_transcript();
         for (id, point, eval) in claims {
-            verifier.add_claim(id, Claim::from(point, eval))?;
+            verifier.add_claim(id, Claim::new(point, eval))?;
         }
         verifier.verify(&ctx, proof, &mut t)?;
 
@@ -451,7 +451,7 @@ mod test {
             let p = random_bool_vector(poly.len().ilog2() as usize);
             let eval = vector_to_mle(poly.clone()).evaluate(&p);
             claims.push((id, p.clone(), eval.clone()));
-            prover.add_claim(id, Claim::from(p, eval))?;
+            prover.add_claim(id, Claim::new(p, eval))?;
         }
 
         let mut t = default_transcript();
@@ -461,7 +461,7 @@ mod test {
         let mut verifier = CommitVerifier::new();
         let mut t = default_transcript();
         for (id, point, eval) in claims {
-            verifier.add_claim(id, Claim::from(point, eval))?;
+            verifier.add_claim(id, Claim::new(point, eval))?;
         }
         verifier.verify(&ctx, proof, &mut t)?;
 
