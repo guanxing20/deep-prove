@@ -226,14 +226,14 @@ mod test {
         let mut t = default_transcript();
         let mut prover = Prover::new(poly_mle.clone());
         for (r_i, y_i) in claims.clone().into_iter() {
-            prover.add_claim(Claim::from(r_i, y_i))?;
+            prover.add_claim(Claim::new(r_i, y_i))?;
         }
         let proof = prover.prove(&ctx, &mut t)?;
         // VERIFIER PART
         let mut t = default_transcript();
         let mut verifier = Verifier::new(&ctx);
         for (r_i, y_i) in claims.into_iter() {
-            verifier.add_claim(Claim::from(r_i, y_i))?;
+            verifier.add_claim(Claim::new(r_i, y_i))?;
         }
         let claim = verifier.verify(&proof, &mut t)?;
         let expected = poly_mle.evaluate(&claim.point);
