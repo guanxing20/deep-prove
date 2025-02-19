@@ -1,6 +1,7 @@
 #![feature(iter_next_chunk)]
 
 use ff_ext::ExtensionField;
+use gkr::structs::PointAndEval;
 use itertools::Itertools;
 use multilinear_extensions::mle::DenseMultilinearExtension;
 use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
@@ -9,10 +10,13 @@ use transcript::{BasicTranscript, Transcript};
 mod activation;
 mod commit;
 mod iop;
+
+mod logup;
 mod lookup;
 mod matrix;
 mod model;
 mod onnx_parse;
+
 mod testing;
 
 /// Claim type to accumulate in this protocol, for a certain polynomial, known in the context.
@@ -24,18 +28,43 @@ pub struct Claim<E> {
 }
 
 impl<E> Claim<E> {
-    pub fn from(point: Vec<E>, eval: E) -> Self {
+    pub fn new(point: Vec<E>, eval: E) -> Self {
         Self { point, eval }
     }
 }
+
+impl<E: ExtensionField> From<PointAndEval<E>> for Claim<E> {
+    fn from(value: PointAndEval<E>) -> Self {
+        Claim {
+            point: value.point.clone(),
+            eval: value.eval,
+        }
+    }
+}
+
+impl<E: ExtensionField> From<&PointAndEval<E>> for Claim<E> {
+    fn from(value: &PointAndEval<E>) -> Self {
+        Claim {
+            point: value.point.clone(),
+            eval: value.eval,
+        }
+    }
+}
+
 impl<E: ExtensionField> Claim<E> {
-    /// Pad the point to the new size given 
+    /// Pad the point to the new size given
     /// This is necessary for passing from output of padded lookups to next dense layer proving for example.
     /// NOTE: you can use it to pad or reduce size
-    pub fn pad(&self,new_num_vars: usize) -> Claim<E> {
+    pub fn pad(&self, new_num_vars: usize) -> Claim<E> {
         Self {
             eval: self.eval,
-            point: self.point.iter().chain(std::iter::repeat(&E::ZERO)).take(new_num_vars).cloned().collect_vec(),
+            point: self
+                .point
+                .iter()
+                .chain(std::iter::repeat(&E::ZERO))
+                .take(new_num_vars)
+                .cloned()
+                .collect_vec(),
         }
     }
 }
@@ -109,22 +138,21 @@ mod test {
     use multilinear_extensions::mle::MultilinearExtension;
 
     use crate::{
-        Element, default_transcript,
-        iop::{
-            Context,
-            prover::Prover,
-            verifier::{IO, verify},
-        },
-        onnx_parse::load_mlp,
-        testing::random_vector,
-        to_bit_sequence_le, vector_to_field_par, vector_to_mle,
+        default_transcript, iop::{
+            prover::Prover, verifier::{verify, IO}, Context
+        }, lookup::{LogUp, LookupProtocol}, onnx_parse::load_mlp, testing::random_vector, to_bit_sequence_le, vector_to_field_par, vector_to_mle, Element
     };
     use ff_ext::ff::Field;
 
     type E = GoldilocksExt2;
 
     #[test]
-    fn test_model_run() {
+    fn test_model_run() -> anyhow::Result<()> {
+        test_model_run_helper::<LogUp<E>>()?;
+        Ok(())
+    }
+
+    fn test_model_run_helper<L: LookupProtocol<E>>() -> anyhow::Result<()> {
         let filepath = "assets/model.onnx";
         let model = load_mlp::<Element>(&filepath).unwrap();
         println!("[+] Loaded onnx file");
@@ -140,14 +168,15 @@ mod test {
         println!("[+] Run inference. Result: {:?}", output);
 
         let mut prover_transcript = default_transcript();
-        let prover = Prover::new(&ctx, &mut prover_transcript);
+        let prover = Prover::<_, _, L>::new(&ctx, &mut prover_transcript);
         println!("[+] Run prover");
         let proof = prover.prove(trace).expect("unable to generate proof");
 
         let mut verifier_transcript = default_transcript();
         let io = IO::new(vector_to_field_par(&input), output.to_vec());
-        verify(ctx, proof, io, &mut verifier_transcript).expect("invalid proof");
+        verify::<_, _, L>(ctx, proof, io, &mut verifier_transcript).expect("invalid proof");
         println!("[+] Verify proof: valid");
+        Ok(())
     }
 
     // TODO: move below code to a vector module

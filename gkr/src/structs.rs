@@ -104,6 +104,7 @@ pub struct IOPProverStepMessage<E: ExtensionField> {
     pub sumcheck_eval_values: Vec<E>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IOPProof<E: ExtensionField> {
     pub sumcheck_proofs: Vec<IOPProverStepMessage<E>>,
 }

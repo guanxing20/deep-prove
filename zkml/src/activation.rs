@@ -7,7 +7,7 @@ use crate::Element;
 /// Context holding information related to the lookup tables used in the proving
 /// steps for the verifier and the prover.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ActivationCtx<E> {
+pub struct ActivationCtx<E: ExtensionField> {
     relu_mle_input: Vec<E>,
     relu_mle_output: Vec<E>,
 }
@@ -21,7 +21,7 @@ impl<E: ExtensionField> ActivationCtx<E> {
         }
     }
     /// Returns the input and output MLE of the RELU table
-    pub fn relu_polys(&self) -> (Vec<Vec<E>>) {
+    pub fn relu_polys(&self) -> Vec<Vec<E>> {
         vec![self.relu_mle_input.clone(), self.relu_mle_output.clone()]
     }
 }

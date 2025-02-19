@@ -1,22 +1,34 @@
-use super::{context::{ActivationInfo, DenseInfo, StepInfo}, Context, Proof, StepProof};
-use crate::{
-    activation::Activation, commit::{precommit, same_poly}, iop::{ActivationProof, Matrix2VecProof}, lookup::{self, LookupProtocol}, matrix::Matrix, model::{InferenceStep, InferenceTrace, Layer}, vector_to_mle, Claim, Element, VectorTranscript
+use super::{
+    Context, Proof, StepProof,
+    context::{ActivationInfo, DenseInfo, StepInfo},
 };
-use anyhow::{bail, Context as CC};
+use crate::{
+    Claim, Element, VectorTranscript,
+    activation::{Activation, Relu},
+    commit::{precommit, same_poly},
+    iop::{ActivationProof, Matrix2VecProof},
+    logup::{compute_multiplicity_poly, merge_columns},
+    lookup::{self, LookupProtocol},
+    matrix::Matrix,
+    model::{InferenceStep, InferenceTrace, Layer},
+    vector_to_mle,
+};
+use anyhow::{Context as CC, anyhow, bail, ensure};
 use ff_ext::ExtensionField;
 use itertools::Itertools;
 use log::{debug, warn};
+use mpcs::util::{field_type_as_ext, field_type_to_ext_vec};
 use multilinear_extensions::{
-    mle::{IntoMLE, IntoMLEs, MultilinearExtension},
+    mle::{DenseMultilinearExtension, FieldType, IntoMLE, IntoMLEs, MultilinearExtension},
     virtual_poly::VirtualPolynomial,
 };
 use serde::{Serialize, de::DeserializeOwned};
-use std::cmp::max;
+use std::{cmp::max, marker::PhantomData};
 use sumcheck::structs::{IOPProverState, IOPVerifierState};
 use transcript::Transcript;
 
 /// Prover generates a series of sumcheck proofs to prove the inference of a model
-pub struct Prover<'a, E: ExtensionField, T: Transcript<E>>
+pub struct Prover<'a, E: ExtensionField, T: Transcript<E>, L: LookupProtocol<E>>
 where
     E::BaseField: Serialize + DeserializeOwned,
     E: Serialize + DeserializeOwned,
@@ -33,14 +45,16 @@ where
     witness_ctx: Option<precommit::Context<E>>,
     /// The prover related to proving multiple claims about different witness polyy (io of lookups etc)
     witness_prover: precommit::CommitProver<E>,
+    _phantom: PhantomData<L>,
 }
 
-impl<'a, E, T> Prover<'a, E, T>
+impl<'a, E, T, L> Prover<'a, E, T, L>
 where
     T: Transcript<E>,
     E: ExtensionField,
     E::BaseField: Serialize + DeserializeOwned,
     E: Serialize + DeserializeOwned,
+    L: LookupProtocol<E>,
 {
     pub fn new(ctx: &'a Context<E>, transcript: &'a mut T) -> Self {
         Self {
@@ -51,6 +65,7 @@ where
             // at this step, we can't build the ctx since we don't know the individual polys
             witness_ctx: None,
             witness_prover: precommit::CommitProver::new(),
+            _phantom: PhantomData,
         }
     }
     fn prove_step<'b>(
@@ -68,7 +83,7 @@ where
                 // This is the case here since we treat each matrix as a different poly
                 self.prove_dense_step(last_claim, input, &step.output, info, matrix)
             }
-            (Layer::Activation(Activation::Relu(relu)),StepInfo::Activation(info)) => {
+            (Layer::Activation(Activation::Relu(relu)), StepInfo::Activation(info)) => {
                 self.prove_relu(last_claim, input, &step.output, info)
             }
             _ => bail!("inconsistent proof step {} and info step {} from ctx",step.layer.to_string(),info.variant_name()),
@@ -84,16 +99,69 @@ where
         output: &[E],
         info: &ActivationInfo,
     ) -> anyhow::Result<Claim<E>> {
-        assert_eq!(input.len(),output.len(),"input/output of lookup don't have same size");
+        assert_eq!(
+            input.len(),
+            output.len(),
+            "input/output of lookup don't have same size"
+        );
+
+        // Debug check to see that all the pairs looked up are rows in the table
+        debug_assert!({
+            let (relu_one, relu_two) = Relu::to_mle::<E>();
+
+            let mut bool_out = true;
+            for (in_val, out_val) in input.iter().zip(output.iter()) {
+                let pos = relu_one
+                    .iter()
+                    .position(|relu_one_val| *relu_one_val == *in_val)
+                    .ok_or(anyhow!("Input value was not in the table: {:?}", in_val))?;
+                debug_assert_eq!(relu_two[pos], *out_val);
+
+                bool_out ^= relu_two[pos] == *out_val;
+            }
+            bool_out
+        });
+
         // First call the lookup with the right arguments:
         // * table mle: one mle per column
         // * lookup mle: one mle per column, where the evals are just the list of inputs and output ordered by access
-        let table_mles = self.ctx.activation.relu_polys().into_mles();
-        let lookup_mles = vec![input.to_vec(), output.to_vec()].into_mles();
+        let lookup_num_vars = input.len().ilog2() as usize;
+        let table_mles = self
+            .ctx
+            .activation
+            .relu_polys()
+            .iter()
+            .map(|evals| {
+                DenseMultilinearExtension::from_evaluations_vec(
+                    Relu::num_vars(),
+                    evals
+                        .iter()
+                        .map(|val| val.as_bases()[0])
+                        .collect::<Vec<E::BaseField>>(),
+                )
+            })
+            .collect::<Vec<DenseMultilinearExtension<E>>>();
+        let lookup_mles = vec![
+            DenseMultilinearExtension::<E>::from_evaluations_vec(
+                lookup_num_vars,
+                input
+                    .iter()
+                    .map(|val| val.as_bases()[0])
+                    .collect::<Vec<E::BaseField>>(),
+            ),
+            DenseMultilinearExtension::<E>::from_evaluations_vec(
+                lookup_num_vars,
+                output
+                    .iter()
+                    .map(|val| val.as_bases()[0])
+                    .collect::<Vec<E::BaseField>>(),
+            ),
+        ];
 
         // TODO: replace via proper lookup protocol
-        let mut lookup_proof =
-            lookup::DummyLookup::prove(table_mles, lookup_mles, self.transcript)?;
+        let lookup_ctx =
+            lookup::Context::<E>::new(Relu::num_vars(), input.len().ilog2() as usize, 1, 1);
+        let lookup_proof = L::prove(&lookup_ctx, table_mles, lookup_mles, self.transcript)?;
         // in our case, the output of the RELU is ALSO the same poly that previous proving
         // step (likely dense) has "outputted" to evaluate at a random point. So here we accumulate the two claims,
         // the one from previous proving step and the one given by the lookup protocol into one. Since they're claims
@@ -101,20 +169,34 @@ where
         let same_poly_ctx = same_poly::Context::<E>::new(info.num_vars);
         let mut same_poly_prover = same_poly::Prover::<E>::new(output.to_vec().into_mle());
         same_poly_prover.add_claim(last_claim)?;
-        let (input_claim, output_claim) =
-            (lookup_proof.input_claim().context("no input lookup claim")?, lookup_proof.output_claim().context("no output lookup claim")?);
+        let input_claim = lookup_proof.input_column_claims()[0].clone();
+        let output_claim = lookup_proof.output_column_claims()[0].clone();
+
         same_poly_prover.add_claim(output_claim)?;
         let claim_acc_proof = same_poly_prover.prove(&same_poly_ctx, self.transcript)?;
-        // Add the accumulated claim to the global accumulation for witness
-        // TODO: add multiplicities, etc...
+        // order is (output,mult)
         self.witness_prover
             .add_claim(info.poly_id, claim_acc_proof.extract_claim())?;
+        self.witness_prover.add_claim(
+            info.multiplicity_poly_id,
+            lookup_proof.multiplicity_claim().clone(),
+        )?;
+        // the next step is gonna take care of proving the next claim
+        // TODO: clarify that bit - here cheating because of fake lookup protocol, but inconsistency
+        // between padded input and real inputsize. Next proving step REQUIRES the real input size.
+        let next_claim = {
+            let input_mle = input.to_vec().into_mle();
+            let point = input_claim.pad(input_mle.num_vars()).point;
+            let eval = input_mle.evaluate(&point);
+            Claim::new(point, eval)
+        };
+
+        // Add the proof in
         self.proofs.push(StepProof::Activation(ActivationProof {
             io_accumulation: claim_acc_proof,
             lookup: lookup_proof,
         }));
-        // the next step is gonna take care of proving the next claim. Since we go in reverse, that's the input claim.
-        Ok(input_claim)
+        Ok(next_claim)
     }
 
     fn prove_dense_step(
@@ -129,7 +211,13 @@ where
         matrix: &Matrix<Element>,
     ) -> anyhow::Result<Claim<E>> {
         let (nrows, ncols) = (matrix.nrows(), matrix.ncols());
-        assert_eq!(nrows, output.len(), "dense proving: nrows {} vs output {}",nrows,output.len());
+        assert_eq!(
+            nrows,
+            output.len(),
+            "dense proving: nrows {} vs output {}",
+            nrows,
+            output.len()
+        );
         assert_eq!(
             nrows.ilog2() as usize,
             last_claim.point.len(),
@@ -144,9 +232,10 @@ where
         // mat_mle.fix_variables_in_place_parallel(partial_point);
         mat_mle.fix_high_variables_in_place(&last_claim.point);
         let input_mle = vector_to_mle(input.to_vec());
-        let max_var = max(mat_mle.num_vars(), input_mle.num_vars());
+
         assert_eq!(mat_mle.num_vars(), input_mle.num_vars());
-        let mut vp = VirtualPolynomial::<E>::new(max_var);
+        let num_vars = input_mle.num_vars();
+        let mut vp = VirtualPolynomial::<E>::new(num_vars);
         // TODO: remove the clone once prover+verifier are working
         vp.add_mle_list(
             vec![mat_mle.clone().into(), input_mle.clone().into()],
@@ -159,7 +248,7 @@ where
         debug_assert!({
             let mut t = tmp_transcript;
             // just construct manually here instead of cloning in the non debug code
-            let mut vp = VirtualPolynomial::<E>::new(max_var);
+            let mut vp = VirtualPolynomial::<E>::new(num_vars);
             vp.add_mle_list(vec![mat_mle.into(), input_mle.into()], E::ONE);
             // asserted_sum in this case is the output MLE evaluated at the random point
             let mle_output = vector_to_mle(output.to_vec());
@@ -193,7 +282,7 @@ where
         let point = [proof.point.as_slice(), last_claim.point.as_slice()].concat();
         let eval = state.get_mle_final_evaluations()[0];
         self.commit_prover
-            .add_claim(info.poly_id, Claim::from(point, eval))
+            .add_claim(info.poly_id, Claim::new(point, eval))
             .context("unable to add claim")?;
 
         // the claim that this proving step outputs is the claim about not the matrix but the vector poly.
@@ -211,7 +300,7 @@ where
 
     pub fn prove<'b>(mut self, trace: InferenceTrace<'b, E>) -> anyhow::Result<Proof<E>> {
         // First, create the context for the witness polys -
-        self.instantiate_witness_ctx(&trace,&self.ctx.steps_info)?;
+        self.instantiate_witness_ctx(&trace, &self.ctx.steps_info)?;
         // write commitments and polynomials info to transcript
         self.ctx.write_to_transcript(self.transcript)?;
         // this is the random set of variables to fix at each step derived as the output of
@@ -228,8 +317,13 @@ where
             eval: y_i,
         };
         // we start by the output to prove up to the input, GKR style
-        for (i, ((input, step),info) )in trace.iter().rev().zip(self.ctx.steps_info.iter()).enumerate() {
-            last_claim = self.prove_step(last_claim, input, step,&info)?;
+        for (i, ((input, step), info)) in trace
+            .iter()
+            .rev()
+            .zip(self.ctx.steps_info.iter())
+            .enumerate()
+        {
+            last_claim = self.prove_step(last_claim, input, step, &info)?;
         }
         // now provide opening proofs for all claims accumulated during the proving steps
         let commit_proof = self
@@ -241,22 +335,55 @@ where
             witness: None,
         };
         if let Some(witness_ctx) = self.witness_ctx {
-            let witness_proof = self.witness_prover.prove(&witness_ctx,self.transcript)?;
-            output_proof.witness = Some((witness_proof,witness_ctx));
+            let witness_proof = self.witness_prover.prove(&witness_ctx, self.transcript)?;
+            output_proof.witness = Some((witness_proof, witness_ctx));
         }
         Ok(output_proof)
     }
 
     /// Looks at all the individual polys to accumulate from the witnesses and create the context from that.
-    fn instantiate_witness_ctx<'b>(&mut self, trace: &InferenceTrace<'b, E>,step_infos: &[StepInfo<E>]) -> anyhow::Result<()> {
+    fn instantiate_witness_ctx<'b>(
+        &mut self,
+        trace: &InferenceTrace<'b, E>,
+        step_infos: &[StepInfo<E>],
+    ) -> anyhow::Result<()> {
         let polys = trace
             .iter()
             .rev()
             .zip(step_infos.iter())
-            .filter_map(|((_input, step),info)| {
-                match (step.layer,info) {
+            .filter_map(|((input, step), info)| {
+                match (step.layer, info) {
                     (Layer::Activation(Activation::Relu(_)), StepInfo::Activation(info)) => {
-                        Some(vec![(info.poly_id, step.output.clone())])
+                        let (table_in, table_out) = Relu::to_mle::<E>();
+                        let table_columns = [table_in, table_out].map(|evals| {
+                            DenseMultilinearExtension::from_evaluations_vec(
+                                Relu::num_vars(),
+                                evals
+                                    .iter()
+                                    .map(|val| val.as_bases()[0])
+                                    .collect::<Vec<E::BaseField>>(),
+                            )
+                        });
+                        let lookup_columns = [input, step.output.as_slice()].map(|evals| {
+                            DenseMultilinearExtension::<E>::from_evaluations_vec(
+                                info.num_vars,
+                                evals
+                                    .iter()
+                                    .map(|val| val.as_bases()[0])
+                                    .collect::<Vec<E::BaseField>>(),
+                            )
+                        });
+
+                        let merged_table = merge_columns(&table_columns, E::ONE);
+                        let merged_lookup = merge_columns(&lookup_columns, E::ONE);
+
+                        let m_poly = compute_multiplicity_poly::<E>(&merged_table, &merged_lookup);
+                        let multiplicity_poly_evals = field_type_to_ext_vec(m_poly.evaluations());
+
+                        Some(vec![
+                            (info.poly_id, step.output.clone()),
+                            (info.multiplicity_poly_id, multiplicity_poly_evals),
+                        ])
                     }
                     // the dense layer is handling everything "on its own"
                     _ => None,
@@ -272,5 +399,59 @@ where
             warn!("no activation functions found - no witness commitment");
         }
         Ok(())
+    }
+}
+
+/// Pad all inner vectors to the given size
+fn pad2<E: Clone>(a: Vec<Vec<E>>, nsize: usize, with: E) -> Vec<Vec<E>> {
+    // check vectors inside are all of the same length respectively
+    assert_eq!(
+        a.iter().map(|v| v.len()).sum::<usize>(),
+        a.len() * a[0].len()
+    );
+    // make sure we're not doing anything wrong
+    assert!(a.iter().all(|v| v.len() <= nsize));
+    a.into_iter()
+        .map(|mut v| {
+            v.resize(nsize, with.clone());
+            v
+        })
+        .collect_vec()
+}
+
+#[cfg(test)]
+mod test {
+
+    use goldilocks::GoldilocksExt2;
+    use itertools::Itertools;
+    use multilinear_extensions::mle::{IntoMLE, MultilinearExtension};
+
+    use crate::{
+        Claim,
+        testing::{random_field_vector, random_vector},
+    };
+
+    use ff::Field;
+    type F = GoldilocksExt2;
+
+    #[test]
+    fn test_padding_prover() {
+        let num_vars = 7;
+        let poly_size = 1 << num_vars;
+        let padded_num_vars = 10;
+        let padded_size = 1 << padded_num_vars;
+        let poly = random_field_vector(1 << num_vars);
+        let padded_poly = poly
+            .iter()
+            .chain(std::iter::repeat(&F::ZERO))
+            .take(padded_size)
+            .cloned()
+            .collect_vec();
+        let padded_point = random_field_vector::<F>(padded_num_vars);
+        let padded_eval = padded_poly.into_mle().evaluate(&padded_point);
+        // now resize the claim to the original poly size (emulating what next dense layer proving is doing)
+        let reduced_point = padded_point.iter().take(num_vars).cloned().collect_vec();
+        let eval = poly.into_mle().evaluate(&reduced_point);
+        assert_eq!(padded_eval, eval);
     }
 }

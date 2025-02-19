@@ -1,9 +1,10 @@
+use crate::{
+    commit::{precommit, same_poly},
+    lookup,
+};
 use ff_ext::ExtensionField;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sumcheck::structs::IOPProof;
-use crate::commit::precommit;
-use crate::commit::same_poly;
-use crate::lookup;
 
 pub mod context;
 pub mod prover;
@@ -27,7 +28,7 @@ where
     witness: Option<(precommit::CommitProof<E>, precommit::Context<E>)>,
 }
 
-#[derive(Clone,Serialize,Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub enum StepProof<E: ExtensionField> {
     Dense(Matrix2VecProof<E>),
     Activation(ActivationProof<E>),
@@ -42,7 +43,7 @@ impl<E: ExtensionField> StepProof<E> {
     }
 }
 
-#[derive(Clone,Serialize,Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ActivationProof<E: ExtensionField> {
     /// proof for the accumulation of the claim from m2v + claim from lookup for the same poly
     /// e.g. the "link" between a m2v and relu layer
@@ -74,9 +75,18 @@ impl<E: ExtensionField> Matrix2VecProof<E> {
 mod test {
     use goldilocks::GoldilocksExt2;
 
-    use crate::{default_transcript, model::Model, vector_to_field_par};
+    use crate::{
+        default_transcript,
+        lookup::LogUp,
+        model::Model,
+        vector_to_field_par,
+    };
 
-    use super::{prover::Prover, verifier::{verify, IO}, Context};
+    use super::{
+        Context,
+        prover::Prover,
+        verifier::{IO, verify},
+    };
 
     type F = GoldilocksExt2;
     use tracing_subscriber;
@@ -91,10 +101,11 @@ mod test {
         let ctx = Context::generate(&model).expect("unable to generate context");
         let io = IO::new(vector_to_field_par(&input), output.to_vec());
         let mut prover_transcript = default_transcript();
-        let prover = Prover::new(&ctx, &mut prover_transcript);
+        let prover = Prover::<_, _, LogUp<GoldilocksExt2>>::new(&ctx, &mut prover_transcript);
         let proof = prover.prove(trace).expect("unable to generate proof");
         let mut verifier_transcript = default_transcript();
-        verify(ctx, proof, io, &mut verifier_transcript).expect("invalid proof");
+        verify::<_, _, LogUp<GoldilocksExt2>>(ctx, proof, io, &mut verifier_transcript)
+            .expect("invalid proof");
     }
 
     //#[test]
