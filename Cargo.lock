@@ -2829,6 +2829,7 @@ dependencies = [
  "log",
  "mpcs",
  "multilinear_extensions",
+ "num-traits",
  "rayon",
  "serde",
  "simple-frontend",
