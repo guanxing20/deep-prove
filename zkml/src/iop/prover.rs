@@ -3,15 +3,7 @@ use super::{
     context::{ActivationInfo, DenseInfo, StepInfo},
 };
 use crate::{
-    Claim, Element, VectorTranscript,
-    activation::{Activation, Relu},
-    commit::{precommit, same_poly},
-    iop::{ActivationProof, DenseProof},
-    logup::{compute_multiplicity_poly, merge_columns},
-    lookup::{self, LookupProtocol},
-    matrix::Matrix,
-    model::{InferenceStep, InferenceTrace, Layer},
-    vector_to_mle,
+    activation::{Activation, Relu}, commit::{precommit, same_poly}, iop::{ActivationProof, DenseProof}, logup::{compute_multiplicity_poly, merge_columns}, lookup::{self, LookupProtocol}, matrix::Matrix, model::{InferenceStep, InferenceTrace, Layer}, quantization::QuantInfo, vector_to_mle, Claim, Element, VectorTranscript
 };
 use anyhow::{Context as CC, anyhow, bail, ensure};
 use ff_ext::ExtensionField;
@@ -86,12 +78,20 @@ where
             (Layer::Activation(Activation::Relu(relu)), StepInfo::Activation(info)) => {
                 self.prove_relu(last_claim, input, &step.output, info)
             }
+            (Layer::Requant(info), StepInfo::Requant(info2)) => {
+                assert_eq!(info,info2);
+                self.prove_requant(last_claim, input, &step.output, info)
+            }
             _ => bail!(
                 "inconsistent proof step {} and info step {} from ctx",
                 step.layer.to_string(),
                 info.variant_name()
             ),
         }
+    }
+
+    fn prove_requant(&self, last_claim: Claim<E>,input: &[E],output: &[E],info: &QuantInfo) -> anyhow::Result<Claim<E>> {
+        unimplemented!()
     }
 
     fn prove_relu(

@@ -64,7 +64,7 @@ impl Relu {
             .map(|i| {
                 let input : E = i.to_field();
                 // conversion from QuantInteger -> u64 OK because result is either 0 or strictly positive.
-                let output = E::from(Self::apply(i) as u64);
+                let output = E::from(Self::apply(i as Element) as u64);
                 (input,output)
             })
             .unzip()
@@ -79,7 +79,7 @@ impl Relu {
 
     #[inline(always)]
     pub fn apply(e: Element) -> Element {
-        if e <= ZERO {
+        if e <= ZERO as Element {
             0
         } else {
             e 

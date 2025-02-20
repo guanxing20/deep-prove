@@ -2,10 +2,7 @@ use ff_ext::ExtensionField;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
 use crate::{
-    Element,
-    activation::{Activation, Relu},
-    matrix::Matrix,
-    vector_to_field_par, vector_to_field_par_into,
+    activation::{Activation, Relu}, matrix::Matrix, quantization::{QuantInfo}, vector_to_field_par, vector_to_field_par_into, Element
 };
 
 // The index of the step, starting from the input layer. (proving is done in the opposite flow)
@@ -16,6 +13,9 @@ pub enum Layer {
     // TODO: replace this with a Tensor based implementation
     Dense(Matrix<Element>),
     Activation(Activation),
+    // this is the output quant info. Since we always do a requant layer after each dense,
+    // then we assume the inputs requant info are default()
+    Requant(QuantInfo),
 }
 
 impl Layer {
@@ -26,6 +26,10 @@ impl Layer {
         match self {
             Layer::Dense(ref matrix) => matrix.matmul(input),
             Layer::Activation(activation) => activation.op(input),
+            Layer::Requant(info) => {
+                // NOTE: we assume we have default quant structure as input
+                info.op(input)
+            }
         }
     }
 
@@ -33,6 +37,7 @@ impl Layer {
         match self {
             Layer::Dense(ref matrix) => vec![matrix.nrows(), matrix.ncols()],
             Layer::Activation(Activation::Relu(_)) => Relu::shape(),
+            Layer::Requant(info) => info.shape(),
         }
     }
     pub fn to_string(&self) -> String {
@@ -42,6 +47,9 @@ impl Layer {
             }
             Layer::Activation(Activation::Relu(_)) => {
                 format!("RELU: {}", 1 << Relu::num_vars())
+            }
+            Layer::Requant(info) => {
+                format!("Requant: {}", info.shape()[1])
             }
         }
     }
@@ -61,7 +69,21 @@ impl Model {
         }
     }
     pub fn add_layer(&mut self, l: Layer) {
+        let after_layer = match l {
+            Layer::Dense(ref matrix) => {
+                // append a requantization layer after
+                // NOTE: since we requantize at each dense step currently, we assume
+                // default quantization inputs for matrix and vector
+                Some(Layer::Requant(QuantInfo::from_matrix_default(matrix)))
+            }
+            _ => {
+                None
+            },
+        };
         self.layers.push(l);
+        if let Some(ll) = after_layer  {
+            self.layers.push(ll);
+        }
     }
 
     pub fn run<'a, E: ExtensionField>(&'a self, input: Vec<Element>) -> InferenceTrace<'a, E> {

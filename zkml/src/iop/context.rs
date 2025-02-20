@@ -1,7 +1,7 @@
 use crate::{
     activation::{Activation, ActivationCtx, Relu},
     iop::precommit::{self, PolyID},
-    model::{Layer, Model}, quantization::{QuantInfo, BIT_LEN},
+    model::{Layer, Model}, quantization::{QuantInfo},
 };
 use anyhow::Context as CC;
 use ff_ext::ExtensionField;
@@ -18,7 +18,7 @@ use transcript::Transcript;
 pub enum StepInfo<E> {
     Dense(DenseInfo<E>),
     Activation(ActivationInfo),
-    Requant(QuantInfo<BIT_LEN>),
+    Requant(QuantInfo),
 }
 
 /// Holds the poly info for the polynomials representing each matrix in the dense layers
@@ -80,7 +80,7 @@ where
         let mut current_multiplicity_poly_id = model.layer_count();
         let auxs = model
             .layers()
-            .flat_map(|(id, layer)| {
+            .map(|(id, layer)| {
                 match layer {
                     Layer::Dense(matrix) => {
                         // construct dimension of the polynomial given to the sumcheck
@@ -98,21 +98,21 @@ where
                                 matrix_num_vars,
                                 vector_num_vars,
                             ]]),
-                            // We requantize at each step so each time we have the defaut quantization "format"
                         });
-                        // NOTE: automatically append a requant step
-                        let requant_info = StepInfo::Requant(QuantInfo::<BIT_LEN>::default());
-                        vec![dense_info,requant_info]
+                        dense_info
                     }
                     Layer::Activation(Activation::Relu(_)) => {
                         let multiplicity_poly_id = current_multiplicity_poly_id;
                         current_multiplicity_poly_id += 1;
-                        vec![StepInfo::Activation(ActivationInfo {
+                        StepInfo::Activation(ActivationInfo {
                             poly_id: id,
                             num_vars: last_output_size.ilog2() as usize,
                             multiplicity_poly_id,
                             multiplicity_num_vars: Relu::num_vars(),
-                        })]
+                        })
+                    }
+                    Layer::Requant(info) => {
+                        StepInfo::Requant(info.clone())
                     }
                 }
             })
@@ -135,7 +135,7 @@ where
                     info.poly_aux.write_to_transcript(t);
                 }
                 StepInfo::Requant(info) => {
-                    t.append_field_element(&E::BaseField::from(info.max_range as u64));
+                    info.write_to_transcript(t);
                 }
                 StepInfo::Activation(info) => {
                     t.append_field_element(&E::BaseField::from(info.poly_id as u64));

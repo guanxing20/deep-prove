@@ -163,7 +163,7 @@ fn fetch_weight_bias_as_mat<Q: Quantizer<Element>>(
     Ok(field_matrix)
 }
 
-pub fn load_mlp<Q: Quantizer<QuantInteger>>(filepath: &str) -> Result<Model> {
+pub fn load_mlp<Q: Quantizer<Element>>(filepath: &str) -> Result<Model> {
     if !Path::new(filepath).exists() {
         return Err(Error::msg(format!("File '{}' does not exist", filepath)));
     }

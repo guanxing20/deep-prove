@@ -22,8 +22,10 @@ mod onnx_parse;
 mod testing;
 mod utils;
 
-/// allowed range is [-128;127]
-type Element = QuantInteger;
+/// We allow higher range to account for overflow. Since we do a requant after each layer, we
+/// can support with i128 with 8 bits quant:
+/// 16 + log(c) = 64 => c = 2^48 columns in a dense layer
+type Element = i128;
 
 /// Claim type to accumulate in this protocol, for a certain polynomial, known in the context.
 /// f(point) = eval
