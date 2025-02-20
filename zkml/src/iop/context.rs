@@ -1,8 +1,7 @@
 use crate::{
     activation::{Activation, ActivationCtx, Relu},
     iop::precommit::{self, PolyID},
-    lookup,
-    model::{Layer, Model}, quantization::QuantInfo, BIT_LEN,
+    model::{Layer, Model}, quantization::{QuantInfo, BIT_LEN},
 };
 use anyhow::Context as CC;
 use ff_ext::ExtensionField;
@@ -14,10 +13,12 @@ use transcript::Transcript;
 /// Describes a steps wrt the polynomial to be proven/looked at. Verifier needs to know
 /// the sequence of steps and the type of each step from the setup phase so it can make sure the prover is not
 /// cheating on this.
+/// NOTE: The context automatically appends a requant step after each dense layer.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum StepInfo<E> {
     Dense(DenseInfo<E>),
     Activation(ActivationInfo),
+    Requant(QuantInfo<BIT_LEN>),
 }
 
 /// Holds the poly info for the polynomials representing each matrix in the dense layers
@@ -25,7 +26,6 @@ pub enum StepInfo<E> {
 pub struct DenseInfo<E> {
     pub poly_id: PolyID,
     pub poly_aux: VPAuxInfo<E>,
-    pub quant_info: QuantInfo<BIT_LEN>,
 }
 /// Currently holds the poly info for the output polynomial of the RELU
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -41,6 +41,7 @@ impl<E> StepInfo<E> {
         match self {
             Self::Dense(_) => "Dense".to_string(),
             Self::Activation(_) => "Activation".to_string(),
+            Self::Requant(_) => "Requant".to_string(),
         }
     }
 }
@@ -79,7 +80,7 @@ where
         let mut current_multiplicity_poly_id = model.layer_count();
         let auxs = model
             .layers()
-            .map(|(id, layer)| {
+            .flat_map(|(id, layer)| {
                 match layer {
                     Layer::Dense(matrix) => {
                         // construct dimension of the polynomial given to the sumcheck
@@ -91,24 +92,27 @@ where
                         let matrix_num_vars = ncols.ilog2() as usize;
                         let vector_num_vars = matrix_num_vars;
                         // there is only one product (i.e. quadratic sumcheck)
-                        StepInfo::Dense(DenseInfo {
+                        let dense_info = StepInfo::Dense(DenseInfo {
                             poly_id: id,
                             poly_aux: VPAuxInfo::<E>::from_mle_list_dimensions(&vec![vec![
                                 matrix_num_vars,
                                 vector_num_vars,
                             ]]),
-                            quant_info: QuantInfo::<BIT_LEN>::default(),
-                        })
+                            // We requantize at each step so each time we have the defaut quantization "format"
+                        });
+                        // NOTE: automatically append a requant step
+                        let requant_info = StepInfo::Requant(QuantInfo::<BIT_LEN>::default());
+                        vec![dense_info,requant_info]
                     }
                     Layer::Activation(Activation::Relu(_)) => {
                         let multiplicity_poly_id = current_multiplicity_poly_id;
                         current_multiplicity_poly_id += 1;
-                        StepInfo::Activation(ActivationInfo {
+                        vec![StepInfo::Activation(ActivationInfo {
                             poly_id: id,
                             num_vars: last_output_size.ilog2() as usize,
                             multiplicity_poly_id,
                             multiplicity_num_vars: Relu::num_vars(),
-                        })
+                        })]
                     }
                 }
             })
@@ -129,6 +133,9 @@ where
                 StepInfo::Dense(info) => {
                     t.append_field_element(&E::BaseField::from(info.poly_id as u64));
                     info.poly_aux.write_to_transcript(t);
+                }
+                StepInfo::Requant(info) => {
+                    t.append_field_element(&E::BaseField::from(info.max_range as u64));
                 }
                 StepInfo::Activation(info) => {
                     t.append_field_element(&E::BaseField::from(info.poly_id as u64));

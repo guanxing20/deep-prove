@@ -3,7 +3,7 @@ use goldilocks::SmallField;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use serde::{Deserialize, Serialize};
 
-use crate::{quantization::{self, BIT_LEN, ZERO}, Element};
+use crate::{quantization::{self, Fieldizer, BIT_LEN, ZERO}, Element};
 
 /// Context holding information related to the lookup tables used in the proving
 /// steps for the verifier and the prover.
@@ -62,13 +62,7 @@ impl Relu {
     pub fn to_mle<E: ExtensionField>() -> (Vec<E>, Vec<E>) {
         (quantization::MIN..quantization::MAX)
             .map(|i| {
-                let input = if i < 0 {
-                    // Doing wrapped arithmetic : p-128 ... p-1 means negative number
-                    E::from(<E::BaseField as SmallField>::MODULUS_U64 - i.abs() as u64)
-                } else {
-                    // for positive and zero, it's just the number
-                    E::from(i as u64)
-                }; 
+                let input : E = i.to_field();
                 // conversion from QuantInteger -> u64 OK because result is either 0 or strictly positive.
                 let output = E::from(Self::apply(i) as u64);
                 (input,output)
@@ -99,6 +93,7 @@ mod test {
     use goldilocks::GoldilocksExt2;
     use itertools::Itertools;
     use multilinear_extensions::mle::{DenseMultilinearExtension, MultilinearExtension};
+    use serde::de::Expected;
 
     use super::*;
 
@@ -144,7 +139,7 @@ mod test {
         );
         assert_eq!(input_mle.num_vars(), output_mle.num_vars());
         assert_eq!(input_mle.num_vars(), Relu::num_vars());
-        let inputs = random_vector(10);
+        let inputs = random_vector::<Element>(10);
         let outputs = relu.op(&inputs);
         assert_eq!(inputs.len(), outputs.len());
         for (idx, (input, output)) in inputs.iter().zip(outputs.iter()).enumerate() {
@@ -154,9 +149,11 @@ mod test {
                 .map(|b| F::from(b as u64))
                 .collect_vec();
             let input_field = input_mle.evaluate(&idx_vars);
-            assert_eq!(input_field, F::from(*input));
+            let expected_ified : F = input.to_field();
+            assert_eq!(input_field, expected_ified);
             let output_field = output_mle.evaluate(&idx_vars);
-            assert_eq!(output_field, F::from(*output));
+            let expected_ofield :F = output.to_field();
+            assert_eq!(output_field, expected_ofield);
         }
         // assert_eq!(expected,given);
     }

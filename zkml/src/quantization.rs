@@ -1,5 +1,7 @@
 //! Module that takes care of (re)quantizing 
 
+use ff_ext::ExtensionField;
+use goldilocks::SmallField;
 use serde::{Deserialize, Serialize};
 
 use crate::{matrix::Matrix, Element};
@@ -15,6 +17,10 @@ pub(crate) trait Quantizer<Output> {
     fn from_f32_unsafe(e: &f32) -> Output;
 }
 
+pub(crate) trait Fieldizer<F> {
+    fn to_field(&self) -> F;
+}
+
 impl Quantizer<QuantInteger> for QuantInteger {
     fn from_f32_unsafe(e: &f32) -> Self {
         let max = QuantInteger::MAX;
@@ -27,11 +33,23 @@ impl Quantizer<QuantInteger> for QuantInteger {
         scaled as QuantInteger
     }
 }
+
+impl<F: ExtensionField> Fieldizer<F> for QuantInteger {
+    fn to_field(&self) -> F {
+        if self.is_negative() {
+            // Doing wrapped arithmetic : p-128 ... p-1 means negative number
+            F::from(<F::BaseField as SmallField>::MODULUS_U64 - self.abs() as u64)
+        } else {
+            // for positive and zero, it's just the number
+            F::from(*self as u64)
+        }
+    }
+}
 /// BIT_LEN is the target bit length we want to reduce any number to
 #[derive(Clone,Debug,Serialize,Deserialize)]
 pub struct QuantInfo<const BIT_LEN: usize> {
     // a - b: at the beginning a power of two to simplify requantization
-    max_range: usize,
+    pub(crate) max_range: usize,
 }
 
 
@@ -45,6 +63,8 @@ impl<const BIT_LEN:usize > QuantInfo<BIT_LEN> {
     /// self should be the quant info of the matrix
     /// The quantization info is depending on the number of columns in the matrix
     /// NOTE: this is assuming the vector has the same quantization factor as the matrix coeff
+    /// NOTE2: It is using the simplfiication of finding the max range which is a power of two
+    /// so we only need to "right shift" during requant
     pub fn compute_matvec_quant(&self, m: &Matrix<Element>) -> Self {
         // BIT_LEN * 2 because of multiplication
         // log because of additions

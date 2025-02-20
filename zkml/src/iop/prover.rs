@@ -6,7 +6,7 @@ use crate::{
     Claim, Element, VectorTranscript,
     activation::{Activation, Relu},
     commit::{precommit, same_poly},
-    iop::{ActivationProof, Matrix2VecProof},
+    iop::{ActivationProof, DenseProof},
     logup::{compute_multiplicity_poly, merge_columns},
     lookup::{self, LookupProtocol},
     matrix::Matrix,
@@ -295,7 +295,7 @@ where
             point: proof.point.clone(),
             eval: state.get_mle_final_evaluations()[1],
         };
-        self.proofs.push(StepProof::Dense(Matrix2VecProof {
+        self.proofs.push(StepProof::Dense(DenseProof {
             sumcheck: proof,
             individual_claims: state.get_mle_final_evaluations(),
         }));

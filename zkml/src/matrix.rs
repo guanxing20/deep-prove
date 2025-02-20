@@ -111,7 +111,7 @@ impl Matrix<Element> {
     /// NOTE: doesn't take a rng as argument because to generate it in parallel it needs be sync +
     /// sync which is not true for basic rng core.
     pub fn random((rows, cols): (usize, usize)) -> Self {
-        let coeffs = random_vector(rows * cols)
+        let coeffs = random_vector::<Element>(rows * cols)
             .into_par_iter()
             .chunks(cols)
             .collect();

@@ -99,12 +99,12 @@ fn reshape<T: Clone>(flat_vec: Vec<T>, rows: usize, cols: usize) -> Option<Vec<V
     Some(flat_vec.chunks(cols).map(|chunk| chunk.to_vec()).collect())
 }
 
-fn concat_column(matrix: Vec<Vec<u64>>, column: Vec<Vec<u64>>) -> Result<Vec<Vec<u64>>> {
+fn concat_column(matrix: Vec<Vec<Element>>, column: Vec<Vec<Element>>) -> Result<Vec<Vec<Element>>> {
     if matrix.len() != column.len() {
         bail!("Column length must match matrix row count");
     }
 
-    let new_matrix: Vec<Vec<u64>> = matrix
+    let new_matrix: Vec<Vec<Element>> = matrix
         .into_iter()
         .zip(column.into_iter())
         .map(|(mut row, col_val)| {
@@ -123,7 +123,7 @@ fn fetch_weight_bias_as_mat<Q: Quantizer<Element>>(
     weight_or_bias: &str,
     node: &NodeProto,
     initializers: &HashMap<String, Tensor>,
-) -> Result<Vec<Vec<u64>>> {
+) -> Result<Vec<Vec<Element>>> {
     ensure!(weight_or_bias == "weight" || weight_or_bias == "bias");
 
     let alpha_or_beta = node
@@ -222,6 +222,7 @@ mod tests {
     use super::*;
 
     use goldilocks::GoldilocksExt2;
+    use tract_onnx::tract_hir::infer::rules::ElementProxy;
 
     // cargo test --release --package zkml -- onnx_parse::tests::test_tract --nocapture
 
@@ -240,7 +241,7 @@ mod tests {
         let filepath = "assets/model.onnx";
 
         let model = load_mlp::<Element>(&filepath).unwrap();
-        let input = random_vector(model.input_shape()[0]);
+        let input = random_vector::<Element>(model.input_shape()[0]);
 
         let trace = model.run::<F>(input.clone());
         println!("Result: {:?}", trace.final_output());

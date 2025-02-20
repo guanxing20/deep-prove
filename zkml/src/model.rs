@@ -278,7 +278,7 @@ pub(crate) mod test {
             }
             let input_dims = model.layers.first().unwrap().shape();
             // ncols since matrix2vector is summing over the columns
-            let input = random_vector(input_dims[1]);
+            let input = random_vector::<Element>(input_dims[1]);
             (model, input)
         }
     }
@@ -319,7 +319,7 @@ pub(crate) mod test {
         let relu1 = Activation::Relu(Relu);
         let mat2 = Matrix::random((7, mat1.ncols())).pad_next_power_of_two();
         let relu2 = Activation::Relu(Relu);
-        let input = random_vector(mat1.ncols());
+        let input = random_vector::<Element>(mat1.ncols());
 
         let mut model = Model::new();
         model.add_layer(Layer::Dense(mat1));
@@ -348,7 +348,7 @@ pub(crate) mod test {
     fn test_inference_trace_reverse_iterator() {
         let mat1 = Matrix::random((10, 11)).pad_next_power_of_two();
         let mat2 = Matrix::random((7, mat1.ncols())).pad_next_power_of_two();
-        let input = random_vector(mat1.ncols());
+        let input = random_vector::<Element>(mat1.ncols());
 
         let mut model = Model::new();
         model.add_layer(Layer::Dense(mat1));

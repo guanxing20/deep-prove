@@ -16,7 +16,7 @@ use sumcheck::structs::IOPVerifierState;
 use transcript::Transcript;
 
 use super::{
-    ActivationProof, Context, Matrix2VecProof, Proof,
+    ActivationProof, Context, DenseProof, Proof,
     context::{ActivationInfo, DenseInfo},
 };
 
@@ -157,7 +157,7 @@ where
 
 fn verify_dense<E: ExtensionField, T: Transcript<E>>(
     last_claim: Claim<E>,
-    proof: &Matrix2VecProof<E>,
+    proof: &DenseProof<E>,
     info: &DenseInfo<E>,
     commit_verifier: &mut commit::precommit::CommitVerifier<E>,
     t: &mut T,

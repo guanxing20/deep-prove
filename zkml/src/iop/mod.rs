@@ -30,8 +30,9 @@ where
 
 #[derive(Clone, Serialize, Deserialize)]
 pub enum StepProof<E: ExtensionField> {
-    Dense(Matrix2VecProof<E>),
+    Dense(DenseProof<E>),
     Activation(ActivationProof<E>),
+    Requant(RequantProof<E>),
 }
 
 impl<E: ExtensionField> StepProof<E> {
@@ -39,6 +40,7 @@ impl<E: ExtensionField> StepProof<E> {
         match self {
             Self::Dense(_) => "Dense".to_string(),
             Self::Activation(_) => "Activation".to_string(),
+            Self::Requant(_) => "Requant".to_string(),
         }
     }
 }
@@ -54,7 +56,7 @@ pub struct ActivationProof<E: ExtensionField> {
 
 /// Contains proof material related to one step of the inference
 #[derive(Default, Clone, Serialize, Deserialize)]
-pub struct Matrix2VecProof<E: ExtensionField> {
+pub struct DenseProof<E: ExtensionField> {
     /// the actual sumcheck proof proving the mat2vec protocol
     sumcheck: IOPProof<E>,
     /// The individual evaluations of the individual polynomial for the last random part of the
@@ -63,12 +65,18 @@ pub struct Matrix2VecProof<E: ExtensionField> {
     individual_claims: Vec<E>,
 }
 
-impl<E: ExtensionField> Matrix2VecProof<E> {
+impl<E: ExtensionField> DenseProof<E> {
     /// Returns the individual claims f_1(r) f_2(r)  f_3(r) ... at the end of a sumcheck multiplied
     /// together
     pub fn individual_to_virtual_claim(&self) -> E {
         self.individual_claims.iter().fold(E::ONE, |acc, e| acc * e)
     }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct RequantProof<E: ExtensionField> {
+    /// the lookup proof for the requantization
+    lookup: lookup::Proof<E>,
 }
 
 #[cfg(test)]
