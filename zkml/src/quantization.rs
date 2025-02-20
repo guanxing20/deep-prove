@@ -111,10 +111,10 @@ struct QuantRange<const BIT_LEN: usize> {
     pub(crate) max_range: usize,
 }
 
-impl<const BIT_LEN: usize> QuantRange<BIT_LEN> {
-    pub fn default() -> Self {
+impl<const BIT_LEN: usize> Default for QuantRange<BIT_LEN> {
+    fn default() -> Self {
         QuantRange {
-            max_range: (2 as usize).pow(BIT_LEN as u32),
+            max_range: 1 << BIT_LEN,
         }
     }
 }

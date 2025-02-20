@@ -195,18 +195,15 @@ where
         let same_poly_ctx = same_poly::Context::<E>::new(info.num_vars);
         let mut same_poly_prover = same_poly::Prover::<E>::new(output.to_vec().into_mle());
         same_poly_prover.add_claim(last_claim)?;
-        let input_claim = lookup_proof.input_column_claims()[0].clone();
-        let output_claim = lookup_proof.output_column_claims()[0].clone();
+        let input_claim = lookup_proof.claims()[0].clone();
+        let output_claim = lookup_proof.claims()[1].clone();
 
         same_poly_prover.add_claim(output_claim)?;
         let claim_acc_proof = same_poly_prover.prove(&same_poly_ctx, self.transcript)?;
         // order is (output,mult)
         self.witness_prover
             .add_claim(info.poly_id, claim_acc_proof.extract_claim())?;
-        self.witness_prover.add_claim(
-            info.multiplicity_poly_id,
-            lookup_proof.multiplicity_claim().clone(),
-        )?;
+
         // the next step is gonna take care of proving the next claim
         // TODO: clarify that bit - here cheating because of fake lookup protocol, but inconsistency
         // between padded input and real inputsize. Next proving step REQUIRES the real input size.

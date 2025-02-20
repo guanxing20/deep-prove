@@ -43,6 +43,7 @@ pub struct ActivationInfo {
 /// Info related to the lookup protocol necessary to requantize
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RequantInfo {
+    pub shift: usize,
     pub poly_id: PolyID,
     pub num_vars: usize,
     pub multiplicity_poly_id: PolyID,
@@ -131,6 +132,7 @@ where
                         current_multiplicity_poly_id += 1;
                         let num_vars = info.range.ilog2() as usize;
                         StepInfo::Requant(RequantInfo {
+                            shift: info.right_shift,
                             poly_id: id,
                             num_vars,
                             multiplicity_poly_id,

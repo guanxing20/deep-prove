@@ -225,7 +225,7 @@ impl<C, const FAN_IN: usize> Serialize for Gate<C, FAN_IN> {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct CircuitWitness<'a, E: ExtensionField> {
     /// Three vectors denote 1. layer_id, 2. instance_id || wire_id.
     pub(crate) layers: Vec<ArcMultilinearExtension<'a, E>>,

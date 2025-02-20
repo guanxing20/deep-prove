@@ -29,13 +29,19 @@ where
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-pub enum StepProof<E: ExtensionField> {
+pub enum StepProof<E: ExtensionField>
+where
+    E::BaseField: Serialize + DeserializeOwned,
+{
     Dense(DenseProof<E>),
     Activation(ActivationProof<E>),
     Requant(RequantProof<E>),
 }
 
-impl<E: ExtensionField> StepProof<E> {
+impl<E: ExtensionField> StepProof<E>
+where
+    E::BaseField: Serialize + DeserializeOwned,
+{
     pub fn variant_name(&self) -> String {
         match self {
             Self::Dense(_) => "Dense".to_string(),
@@ -46,7 +52,10 @@ impl<E: ExtensionField> StepProof<E> {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-pub struct ActivationProof<E: ExtensionField> {
+pub struct ActivationProof<E: ExtensionField>
+where
+    E::BaseField: Serialize + DeserializeOwned,
+{
     /// proof for the accumulation of the claim from m2v + claim from lookup for the same poly
     /// e.g. the "link" between a m2v and relu layer
     io_accumulation: same_poly::Proof<E>,
@@ -74,7 +83,10 @@ impl<E: ExtensionField> DenseProof<E> {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-pub struct RequantProof<E: ExtensionField> {
+pub struct RequantProof<E: ExtensionField>
+where
+    E::BaseField: Serialize + DeserializeOwned,
+{
     /// the lookup proof for the requantization
     lookup: lookup::Proof<E>,
 }
