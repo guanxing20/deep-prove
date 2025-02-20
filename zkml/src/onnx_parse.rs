@@ -259,6 +259,59 @@ pub fn load_mlp<Q: Quantizer<Element>>(filepath: &str) -> Result<Model> {
     Ok(sumcheck_model)
 }
 
+pub fn load_cnn<Q: Quantizer<Element>>(filepath: &str) -> Result<Model> {
+    if !Path::new(filepath).exists() {
+        return Err(Error::msg(format!("File '{}' does not exist", filepath)));
+    }
+    let result = is_cnn(filepath)?;
+    if !result {
+        bail!("is_cnn: Failed");
+    }
+
+    let model = tract_onnx::onnx()
+        .proto_model_for_path(filepath)
+        .map_err(|e| Error::msg(format!("Failed to load model: {:?}", e)))?;
+
+    let graph = model.graph.unwrap();
+    let mut initializers: HashMap<String, Tensor> = HashMap::new();
+    for item in graph.initializer {
+        let dt = tract_onnx::pb::tensor_proto::DataType::from_i32(item.data_type)
+            .unwrap()
+            .try_into()?;
+        let shape: Vec<usize> = item.dims.iter().map(|&i| i as usize).collect();
+        let value = create_tensor(shape, dt, &item.raw_data).unwrap();
+        let key = item.name.to_string();
+        initializers.insert(key, value);
+    }
+
+    let mut sumcheck_model = Model::new();
+
+    for node in graph.node.iter() {
+        match node.op_type.as_str() {
+            "Gemm" => {
+                let matrix_weight = fetch_weight_bias_as_mat::<Q>("weight", node, &initializers)?;
+                let matrix_bias = fetch_weight_bias_as_mat::<Q>("bias", node, &initializers)?;
+
+                let matrix = concat_column(matrix_weight, matrix_bias)?;
+                let matrix = Matrix::<Element>::from_coeffs(matrix)
+                    .unwrap()
+                    .pad_next_power_of_two();
+                // let matrix = matrix.transpose();
+                let layer = Layer::Dense(matrix);
+                sumcheck_model.add_layer(layer);
+            }
+            "Relu" => {
+                let layer = Layer::Activation(Activation::Relu(Relu::new()));
+                sumcheck_model.add_layer(layer);
+            }
+            _ => (),
+        };
+    }
+    let sumcheck_model = Model::new();
+    unimplemented!("Yet to add conv, flatten, etc.");
+    Ok(sumcheck_model)
+}
+
 trait Quantizer<Output> {
     fn from_f32_unsafe(e: &f32) -> Output;
 }
@@ -341,6 +394,14 @@ mod tests {
     fn test_is_cnn() {
         let filepath = "assets/models/CNN/cnn-cifar-01.onnx";
         let result = is_cnn(&filepath);
+
+        assert!(result.is_ok(), "Failed: {:?}", result.unwrap_err());
+    }
+
+    #[test]
+    fn test_load_cnn() {
+        let filepath = "assets/models/CNN/cnn-cifar-01.onnx";
+        let result = load_cnn::<Element>(&filepath);
 
         assert!(result.is_ok(), "Failed: {:?}", result.unwrap_err());
     }
