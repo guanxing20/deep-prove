@@ -92,6 +92,46 @@ fn is_mlp(filepath: &str) -> Result<bool> {
     Ok(is_mlp)
 }
 
+fn is_cnn(filepath: &str) -> Result<bool> {
+    let cnn_operations = ["Conv", "ConvTranspose"];
+    let sampling_operations = [
+        "MaxPool",
+        "AveragePool",
+        "GlobalAveragePool",
+        "GlobalMaxPool",
+    ];
+    let activation_functions = ["Relu", "Sigmoid", "Tanh", "LeakyRelu", "Elu", "Selu"];
+    let matrix_operations = ["Gemm", "Einsum", "MatMul"];
+    let flatten_operations = ["Flatten", "Reshape"];
+
+    let is_cnn = true;
+    // let mut prev_op = None;
+
+    // Load the ONNX model
+    let model = tract_onnx::onnx()
+        .proto_model_for_path(filepath)
+        .map_err(|e| Error::msg(format!("Failed to load model: {:?}", e)))?;
+
+    let graph = model.graph.unwrap();
+
+    for node in graph.node.iter() {
+        let op_type = node.op_type.as_str();
+
+        if !cnn_operations.contains(&op_type)
+            && !sampling_operations.contains(&op_type)
+            && !activation_functions.contains(&op_type)
+            && !matrix_operations.contains(&op_type)
+            && !flatten_operations.contains(&op_type)
+        {
+            return Ok(false);
+        }
+
+        // TODO: Need to check if the sequence of operations are correct.
+    }
+
+    Ok(is_cnn)
+}
+
 // Given a flat vector, converts it to matrix in row major form
 fn reshape<T: Clone>(flat_vec: Vec<T>, rows: usize, cols: usize) -> Option<Vec<Vec<T>>> {
     if flat_vec.len() != rows * cols {
@@ -290,5 +330,13 @@ mod tests {
             1.0,
             <Element as Quantizer<Element>>::from_f32_unsafe(&1.0)
         );
+    }
+
+    #[test]
+    fn test_is_cnn() {
+        let filepath = "assets/models/CNN/cnn-cifar-01.onnx";
+        let result = is_cnn(&filepath);
+
+        assert!(result.is_ok(), "Failed: {:?}", result.unwrap_err());
     }
 }
