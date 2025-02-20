@@ -3,7 +3,7 @@ use super::{
     context::{ActivationInfo, DenseInfo, StepInfo},
 };
 use crate::{
-    activation::{Activation, Relu}, commit::{precommit, same_poly}, iop::{ActivationProof, DenseProof}, logup::{compute_multiplicity_poly, merge_columns}, lookup::{self, LookupProtocol}, matrix::Matrix, model::{InferenceStep, InferenceTrace, Layer}, quantization::QuantInfo, vector_to_mle, Claim, Element, VectorTranscript
+    activation::{Activation, Relu}, commit::{precommit, same_poly}, iop::{ActivationProof, DenseProof}, logup::{compute_multiplicity_poly, merge_columns}, lookup::{self, LookupProtocol}, matrix::Matrix, model::{InferenceStep, InferenceTrace, Layer}, quantization::Requant, vector_to_mle, Claim, Element, VectorTranscript
 };
 use anyhow::{Context as CC, anyhow, bail, ensure};
 use ff_ext::ExtensionField;
@@ -79,7 +79,6 @@ where
                 self.prove_relu(last_claim, input, &step.output, info)
             }
             (Layer::Requant(info), StepInfo::Requant(info2)) => {
-                assert_eq!(info,info2);
                 self.prove_requant(last_claim, input, &step.output, info)
             }
             _ => bail!(
@@ -90,7 +89,7 @@ where
         }
     }
 
-    fn prove_requant(&self, last_claim: Claim<E>,input: &[E],output: &[E],info: &QuantInfo) -> anyhow::Result<Claim<E>> {
+    fn prove_requant(&self, last_claim: Claim<E>,input: &[E],output: &[E],info: &Requant) -> anyhow::Result<Claim<E>> {
         unimplemented!()
     }
 

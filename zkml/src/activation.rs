@@ -60,7 +60,7 @@ impl Relu {
     /// f_i: one containing the input column values
     /// f_o: one containing the output column values
     pub fn to_mle<E: ExtensionField>() -> (Vec<E>, Vec<E>) {
-        (quantization::MIN..quantization::MAX)
+        (quantization::MIN..=quantization::MAX)
             .map(|i| {
                 let input : E = i.to_field();
                 // conversion from QuantInteger -> u64 OK because result is either 0 or strictly positive.

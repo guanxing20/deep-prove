@@ -84,7 +84,7 @@ impl<const BIT_LEN:usize > QuantRange<BIT_LEN> {
     ///       and it assumes these are the default range.
     /// NOTE2: It is using the simplfiication of finding the max range which is a power of two
     /// so we only need to "right shift" during requant
-    fn compute_matvec_quant(m: &Matrix<Element>) -> QuantInfo {
+    fn compute_matvec_quant(m: &Matrix<Element>) -> Requant {
         // BIT_LEN * 2 because of multiplication
         // log because of additions
         let bit_len = BIT_LEN * 2  + m.ncols().ilog2() as usize;
@@ -92,7 +92,7 @@ impl<const BIT_LEN:usize > QuantRange<BIT_LEN> {
             max_range: (2 as usize).pow(bit_len as u32),
         };
         let shift = Self::default().mult_shift(&Self::default(), &output_range);
-        QuantInfo {
+        Requant {
             range: output_range.max_range,
             right_shift: shift,
         }
@@ -115,19 +115,24 @@ impl<const BIT_LEN:usize > QuantRange<BIT_LEN> {
 /// * what is the range of the input data
 /// * what should be the shift to get back data in range within QuantInteger range
 #[derive(Clone,Debug,Serialize,Deserialize,PartialEq,Eq)]
-pub struct QuantInfo {
+pub struct Requant {
     // what is the shift that needs to be applied to requantize input number to the correct range of QuantInteger.
     pub right_shift: usize,
     pub range: usize,
 }
 
-impl QuantInfo {
+impl Requant {
     pub fn from_matrix_default(m: &Matrix<Element>) -> Self {
         QuantRange::<BIT_LEN>::compute_matvec_quant(m)
     }
 
     pub fn op(&self, input: &[Element]) -> Vec<Element> {
-        input.iter().map(|e| e >> self.right_shift).collect_vec()
+        input.iter().map(|e| self.apply(e)).collect_vec()
+    }
+
+    #[inline(always)]
+    pub fn apply(&self, e: &Element) -> Element {
+        e >> self.right_shift 
     }
 
     pub fn shape(&self) -> Vec<usize> {
@@ -138,4 +143,24 @@ impl QuantInfo {
         t.append_field_element(&E::BaseField::from(self.right_shift as u64));
         t.append_field_element(&E::BaseField::from(self.range as u64));
     }
+
+    /// to_mle returns two polynomials:
+    /// f_i: one containing the input column values
+    /// f_o: one containing the output column values --> shifted to the right !
+    /// TODO: have a "cache" of lookups for similar ranges
+    pub fn to_mle<E: ExtensionField>(&self) -> (Vec<E>, Vec<E>) {
+        // TODO: make a +1 or -1 somewhere
+        let min_range = - (self.range as Element) / 2;
+        let max_range = (self.range as Element) / 2;
+        (min_range..=max_range)
+            .map(|i| {
+                let input : E = i.to_field();
+                // conversion from QuantInteger -> u64 OK because result is either 0 or strictly positive.
+                let output = E::from(self.apply(&i) as u64);
+                (input,output)
+            })
+            .unzip()
+    }
+
+
 }

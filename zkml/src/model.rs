@@ -2,7 +2,7 @@ use ff_ext::ExtensionField;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
 use crate::{
-    activation::{Activation, Relu}, matrix::Matrix, quantization::{QuantInfo}, vector_to_field_par, vector_to_field_par_into, Element
+    activation::{Activation, Relu}, matrix::Matrix, quantization::{Requant}, vector_to_field_par, vector_to_field_par_into, Element
 };
 
 // The index of the step, starting from the input layer. (proving is done in the opposite flow)
@@ -15,7 +15,7 @@ pub enum Layer {
     Activation(Activation),
     // this is the output quant info. Since we always do a requant layer after each dense,
     // then we assume the inputs requant info are default()
-    Requant(QuantInfo),
+    Requant(Requant),
 }
 
 impl Layer {
@@ -74,7 +74,7 @@ impl Model {
                 // append a requantization layer after
                 // NOTE: since we requantize at each dense step currently, we assume
                 // default quantization inputs for matrix and vector
-                Some(Layer::Requant(QuantInfo::from_matrix_default(matrix)))
+                Some(Layer::Requant(Requant::from_matrix_default(matrix)))
             }
             _ => {
                 None
