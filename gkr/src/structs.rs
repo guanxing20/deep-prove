@@ -184,7 +184,7 @@ impl<E: ExtensionField> Default for Layer<E> {
     }
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Default)]
 pub struct Circuit<E: ExtensionField> {
     pub layers: Vec<Layer<E>>,
 

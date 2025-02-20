@@ -7,8 +7,10 @@ use crate::{
     activation::{Activation, Relu},
     commit::{precommit, same_poly},
     iop::{ActivationProof, DenseProof},
-    logup::{compute_multiplicity_poly, merge_columns},
-    lookup::{self, LookupProtocol},
+    lookup::{
+        self, LookupProtocol,
+        utils::{compute_multiplicity_poly, merge_columns},
+    },
     matrix::Matrix,
     model::{InferenceStep, InferenceTrace, Layer},
     quantization::Requant,
@@ -45,6 +47,8 @@ where
     witness_ctx: Option<precommit::Context<E>>,
     /// The prover related to proving multiple claims about different witness polyy (io of lookups etc)
     witness_prover: precommit::CommitProver<E>,
+    /// The context for the lookups
+    lookup_ctx: lookup::Context<E>,
     _phantom: PhantomData<L>,
 }
 
@@ -65,6 +69,7 @@ where
             // at this step, we can't build the ctx since we don't know the individual polys
             witness_ctx: None,
             witness_prover: precommit::CommitProver::new(),
+            lookup_ctx: lookup::Context::<E>::generate(ctx),
             _phantom: PhantomData,
         }
     }
@@ -176,9 +181,13 @@ where
         ];
 
         // TODO: replace via proper lookup protocol
-        let lookup_ctx =
-            lookup::Context::<E>::new(Relu::num_vars(), input.len().ilog2() as usize, 1, 1);
-        let lookup_proof = L::prove(&lookup_ctx, table_mles, lookup_mles, self.transcript)?;
+
+        let lookup_proof = L::prove(
+            &self.lookup_ctx,
+            &lookup::LookupType::Relu,
+            &lookup_mles,
+            self.transcript,
+        )?;
         // in our case, the output of the RELU is ALSO the same poly that previous proving
         // step (likely dense) has "outputted" to evaluate at a random point. So here we accumulate the two claims,
         // the one from previous proving step and the one given by the lookup protocol into one. Since they're claims

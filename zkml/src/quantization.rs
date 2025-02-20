@@ -117,6 +117,9 @@ impl<const BIT_LEN: usize> QuantRange<BIT_LEN> {
             max_range: (2 as usize).pow(BIT_LEN as u32),
         }
     }
+}
+
+impl<const BIT_LEN: usize> QuantRange<BIT_LEN> {
     /// Computes the quantization info that a matrix x vec will produce
     /// self should be the quant info of the matrix
     /// The quantization info is depending on the number of columns in the matrix

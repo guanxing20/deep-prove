@@ -16,8 +16,9 @@ pub use iop::{
     prover::Prover,
     verifier::{IO, verify},
 };
-mod logup;
+
 pub mod lookup;
+
 mod matrix;
 pub mod model;
 mod onnx_parse;
@@ -156,7 +157,7 @@ mod test {
 
     #[test]
     fn test_model_run() -> anyhow::Result<()> {
-        test_model_run_helper::<LogUp<E>>()?;
+        test_model_run_helper::<LogUp>()?;
         Ok(())
     }
 

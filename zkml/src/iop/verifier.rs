@@ -2,7 +2,7 @@ use crate::{
     Claim, VectorTranscript,
     commit::{self, precommit, same_poly},
     iop::{StepProof, context::StepInfo, precommit::PolyID},
-    lookup::{self, LookupProtocol},
+    lookup::{self, LookupProtocol, LookupType},
 };
 use anyhow::{Context as CC, bail, ensure};
 use ff_ext::ExtensionField;
@@ -45,6 +45,7 @@ where
 {
     let mut commit_verifier = precommit::CommitVerifier::new();
     let mut witness_verifier = precommit::CommitVerifier::new();
+    let lookup_ctx = lookup::Context::<E>::generate(&ctx);
     ctx.write_to_transcript(transcript)?;
     // 0. Derive the first randomness
     let first_randomness = transcript.read_challenges(io.output.len().ilog2() as usize);
@@ -87,6 +88,7 @@ where
                     proof,
                     info,
                     &mut witness_verifier,
+                    &lookup_ctx,
                     transcript,
                 )?
             }
@@ -119,6 +121,7 @@ fn verify_activation<E: ExtensionField, T: Transcript<E>, L: LookupProtocol<E>>(
     proof: &ActivationProof<E>,
     info: &ActivationInfo,
     witness_verifier: &mut commit::precommit::CommitVerifier<E>,
+    lookup_ctx: &lookup::Context<E>,
     t: &mut T,
 ) -> anyhow::Result<Claim<E>>
 where
@@ -126,13 +129,8 @@ where
     E: Serialize + DeserializeOwned,
 {
     // 1. Verify the lookup proof
-    let lookup_context = lookup::Context::<E>::new(
-        info.multiplicity_num_vars,
-        info.num_vars,
-        proof.lookup.input_column_claims().len(),
-        proof.lookup.output_column_claims().len(),
-    );
-    let verifier_claims = L::verify(lookup_context, proof.lookup.clone(), t)?;
+    let lookup_type = LookupType::from(&info.op);
+    let verifier_claims = L::verify(lookup_ctx, &&lookup_type, proof.lookup.clone(), t)?;
     // 1. Verify the accumulation proof from last_claim + lookup claim into the new claim
     let sp_ctx = same_poly::Context::<E>::new(info.num_vars);
     let mut sp_verifier = same_poly::Verifier::<E>::new(&sp_ctx);

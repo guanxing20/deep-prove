@@ -33,6 +33,7 @@ pub struct DenseInfo<E> {
 /// Currently holds the poly info for the output polynomial of the RELU
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ActivationInfo {
+    pub op: Activation,
     pub poly_id: PolyID,
     pub num_vars: usize,
     pub multiplicity_poly_id: PolyID,
@@ -114,10 +115,11 @@ where
                         });
                         dense_info
                     }
-                    Layer::Activation(Activation::Relu(_)) => {
+                    Layer::Activation(Activation::Relu(relu)) => {
                         let multiplicity_poly_id = current_multiplicity_poly_id;
                         current_multiplicity_poly_id += 1;
                         StepInfo::Activation(ActivationInfo {
+                            op: Activation::Relu(*relu),
                             poly_id: id,
                             num_vars: Relu::num_vars(),
                             multiplicity_poly_id,

@@ -128,7 +128,7 @@ fn run(args: Args) -> anyhow::Result<()> {
 
     info!("[+] Running prover");
     let mut prover_transcript = default_transcript();
-    let prover = Prover::<_, _, LogUp<F>>::new(&ctx, &mut prover_transcript);
+    let prover = Prover::<_, _, LogUp>::new(&ctx, &mut prover_transcript);
     let proof = bencher.r(CSV_PROVING, move || {
         prover.prove(trace).expect("unable to generate proof")
     });
@@ -137,7 +137,7 @@ fn run(args: Args) -> anyhow::Result<()> {
     let mut verifier_transcript = default_transcript();
     let io = IO::new(input.to_fields(), output.to_vec());
     bencher.r(CSV_VERIFYING, || {
-        verify::<_, _, LogUp<F>>(ctx, proof, io, &mut verifier_transcript).expect("invalid proof")
+        verify::<_, _, LogUp>(ctx, proof, io, &mut verifier_transcript).expect("invalid proof")
     });
     info!("[+] Verify proof: valid");
 

@@ -104,11 +104,10 @@ mod test {
         let ctx = Context::generate(&model).expect("unable to generate context");
         let io = IO::new(input.to_fields(), output.to_vec());
         let mut prover_transcript = default_transcript();
-        let prover = Prover::<_, _, LogUp<GoldilocksExt2>>::new(&ctx, &mut prover_transcript);
+        let prover = Prover::<_, _, LogUp>::new(&ctx, &mut prover_transcript);
         let proof = prover.prove(trace).expect("unable to generate proof");
         let mut verifier_transcript = default_transcript();
-        verify::<_, _, LogUp<GoldilocksExt2>>(ctx, proof, io, &mut verifier_transcript)
-            .expect("invalid proof");
+        verify::<_, _, LogUp>(ctx, proof, io, &mut verifier_transcript).expect("invalid proof");
     }
 
     //#[test]

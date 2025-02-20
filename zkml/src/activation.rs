@@ -30,7 +30,7 @@ impl<E: ExtensionField> ActivationCtx<E> {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize, Copy)]
 pub enum Activation {
     Relu(Relu),
 }
@@ -43,7 +43,7 @@ impl Activation {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Copy, Serialize, Deserialize)]
 pub struct Relu;
 
 impl Relu {
@@ -82,7 +82,7 @@ impl Relu {
 
     #[inline(always)]
     pub fn apply(e: Element) -> Element {
-        if e <= ZERO as Element { 0 } else { e }
+        if e <= ZERO as i128 { 0 } else { e }
     }
 }
 
