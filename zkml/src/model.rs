@@ -7,7 +7,7 @@ use crate::{
     Element,
     activation::{Activation, Relu},
     matrix::Matrix,
-    quantization::{Fieldizer, Requant, VecFielder},
+    quantization::{Requant, VecFielder},
 };
 
 // The index of the step, starting from the input layer. (proving is done in the opposite flow)
@@ -21,6 +21,12 @@ pub enum Layer {
     // this is the output quant info. Since we always do a requant layer after each dense,
     // then we assume the inputs requant info are default()
     Requant(Requant),
+}
+
+impl std::fmt::Display for Layer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.describe())
+    }
 }
 
 impl Layer {
@@ -105,9 +111,7 @@ impl Model {
                 // append a requantization layer after
                 // NOTE: since we requantize at each dense step currently, we assume
                 // default quantization inputs for matrix and vector
-                // Some(Layer::Requant(Requant::from_matrix_default(matrix)))
-                // TODO: re-enable
-                None
+                Some(Layer::Requant(Requant::from_matrix_default(matrix)))
             }
             _ => None,
         };

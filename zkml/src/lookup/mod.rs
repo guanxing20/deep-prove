@@ -1,11 +1,10 @@
 use anyhow::anyhow;
 use ff::Field;
 use ff_ext::ExtensionField;
-use gkr::structs::{Circuit, CircuitWitness, IOPProof};
-use mpcs::{
-    BasefoldCommitment, BasefoldCommitmentWithWitness, PolynomialCommitmentScheme,
-    util::num_of_bytes,
+use gkr::structs::{
+    Circuit, CircuitWitness, IOPProof, IOPProverState, IOPVerifierState, PointAndEval,
 };
+use mpcs::{BasefoldCommitment, BasefoldCommitmentWithWitness, PolynomialCommitmentScheme};
 use poseidon::poseidon_hash::hash_n_to_hash_no_pad;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -14,11 +13,10 @@ use crate::{
     activation::Activation,
     commit::Pcs,
     iop::context::StepInfo,
-    model::{InferenceStep, InferenceTrace, Layer, StepIdx},
+    model::{InferenceTrace, Layer, StepIdx},
 };
 use gkr_circuits::{
-    logup::logup_circuit, lookups_circuit::lookup_wire_fractional_sumcheck,
-    table_circuit::table_fractional_sumcheck,
+    lookups_circuit::lookup_wire_fractional_sumcheck, table_circuit::table_fractional_sumcheck,
 };
 use multilinear_extensions::mle::{DenseMultilinearExtension, FieldType};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -56,6 +54,10 @@ where
     numerators: Vec<E>,
     /// denominators for all the fractional sumchecks, in the same order as the claims for witness polys
     denominators: Vec<E>,
+    /// the challenges to be used for this lookup, verified at the very end
+    challenges: Vec<E>,
+    /// The number of instances of this circuit this proof is for
+    instance_num_vars: usize,
 }
 impl<E: ExtensionField> Proof<E>
 where
@@ -67,23 +69,34 @@ where
     }
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct VerifierClaims<E: ExtensionField> {
-    input_claims: Vec<Claim<E>>,
-    output_claims: Vec<Claim<E>>,
-    multiplicity_claim: Claim<E>,
+pub struct VerifierClaims<E: ExtensionField>
+where
+    E::BaseField: Serialize + DeserializeOwned,
+{
+    claims: Vec<Claim<E>>,
+    commitment: BasefoldCommitment<E>,
+    numerators: Vec<E>,
+    denominators: Vec<E>,
 }
 
-impl<E: ExtensionField> VerifierClaims<E> {
-    pub fn input_claims(&self) -> &[Claim<E>] {
-        &self.input_claims
+impl<E: ExtensionField> VerifierClaims<E>
+where
+    E::BaseField: Serialize + DeserializeOwned,
+{
+    pub fn claims(&self) -> &[Claim<E>] {
+        &self.claims
     }
 
-    pub fn output_claims(&self) -> &[Claim<E>] {
-        &self.output_claims
+    pub fn commitment(&self) -> &BasefoldCommitment<E> {
+        &self.commitment
     }
 
-    pub fn multiplicity_poly_claim(&self) -> &Claim<E> {
-        &self.multiplicity_claim
+    pub fn numerators(&self) -> &[E] {
+        &self.numerators
+    }
+
+    pub fn denominators(&self) -> &[E] {
+        &self.denominators
     }
 }
 
@@ -158,46 +171,54 @@ impl LookupType {
     }
 }
 
-pub struct Context<E>
+pub struct Context<'a, E>
 where
     E::BaseField: Serialize + DeserializeOwned,
     E: ExtensionField + Serialize + DeserializeOwned,
 {
     circuits: HashMap<LookupType, Circuit<E>>,
-    witness_ctx: WitnessContext<E>,
+    pub witness_ctx: WitnessContext<'a, E>,
 }
 
-#[derive(Clone, Debug, Default)]
-pub struct WitnessContext<E>
+#[derive(Clone, Default)]
+pub struct WitnessContext<'a, E>
 where
     E::BaseField: Serialize + DeserializeOwned,
     E: ExtensionField + Serialize + DeserializeOwned,
 {
-    current_step: StepIdx,
-    witness_storage: BTreeMap<StepIdx, LookupProverInfo<E>>,
+    pub current_step: StepIdx,
+    witness_storage: BTreeMap<StepIdx, LookupProverInfo<'a, E>>,
 }
 
-pub struct LookupProverInfo<E>
+#[derive(Clone)]
+pub struct LookupProverInfo<'a, E>
 where
     E::BaseField: Serialize + DeserializeOwned,
     E: ExtensionField + Serialize + DeserializeOwned,
 {
     pub lookup_type: LookupType,
     pub batch_commitment: BasefoldCommitmentWithWitness<E>,
-    pub challenge: E,
-    pub const_challenge: E,
-    pub circuit_witness: CircuitWitness<E>,
+    pub circuit_witness: CircuitWitness<'a, E>,
+    pub challenges: Vec<E>,
 }
 
-impl<E> Context<E>
+impl<'a, E> Context<'_, E>
 where
     E::BaseField: Serialize + DeserializeOwned,
     E: ExtensionField + Serialize + DeserializeOwned,
 {
     /// Getter for the lookup circuit depending on the [`StepInfo`]
-    pub fn get_circuit(&self, step_info: &StepInfo<E>) -> anyhow::Result<&Circuit<E>> {
+    pub fn get_circuit_step_info(&self, step_info: &StepInfo<E>) -> anyhow::Result<&Circuit<E>> {
         let lookup_type: LookupType = step_info.try_into()?;
         self.circuits.get(&lookup_type).ok_or(anyhow::anyhow!(
+            "Context does not contain a circuit for the lookup type: {:?}",
+            lookup_type
+        ))
+    }
+
+    /// Getter for the lookup circuit depending on the [`LookupType`]
+    pub fn get_circuit(&self, lookup_type: &LookupType) -> anyhow::Result<&Circuit<E>> {
+        self.circuits.get(lookup_type).ok_or(anyhow::anyhow!(
             "Context does not contain a circuit for the lookup type: {:?}",
             lookup_type
         ))
@@ -254,6 +275,8 @@ where
         // make the basefold params to commit to all the polys (we won't open them this is just to save some hashing in the verifier).
         let params = Pcs::<E>::setup(1 << max_vars)?;
 
+        let mut tmp_witness_storage = HashMap::new();
+
         // For each step in the inference trace construct the witness MLEs and also batch commit to them so we can generate seperation challenges.
         trace.iter().try_for_each(|(step_input, step)| {
             let step_idx = step.id;
@@ -273,9 +296,7 @@ where
                         .collect::<Vec<MLE<E>>>();
                     let (pp, _) = Pcs::<E>::trim(params.clone(), 1 << 8)?;
                     let batch_commit = Pcs::<E>::batch_commit(&pp, &mles)?;
-                    self.witness_ctx
-                        .witness_storage
-                        .insert(step_idx, (LookupType::Relu, batch_commit));
+                    tmp_witness_storage.insert(step_idx, (LookupType::Relu, batch_commit));
                     Ok(())
                 }
                 Layer::Requant(requant) => {
@@ -322,7 +343,7 @@ where
                         })
                         .collect::<Vec<MLE<E>>>();
                     let batch_commit = Pcs::<E>::batch_commit(&pp, &witness_mles)?;
-                    self.witness_ctx.witness_storage.insert(
+                    tmp_witness_storage.insert(
                         step_idx,
                         (LookupType::Range(requant.right_shift as u8), batch_commit),
                     );
@@ -333,9 +354,7 @@ where
         })?;
 
         // Now we work out the final challenges using the commitments
-        let commits_in_order = self
-            .witness_ctx
-            .witness_storage
+        let commits_in_order = tmp_witness_storage
             .iter()
             .flat_map(|(_, (_, comm))| comm.get_root_as().0)
             .collect::<Vec<E::BaseField>>();
@@ -353,8 +372,6 @@ where
                 let challenge = E::from(hash_n_to_hash_no_pad(&input).0[0]);
                 (lt.clone(), (challenge, constant_challenge))
             }));
-        // Store them all in the witness context
-        self.witness_ctx.challenge_storage = challenge_hash_map;
 
         // Now we work out the witness for the final table GKR circuit
         // let all_lookups = self.witness_ctx.witness_storage.values().flat_map(|(lt, comm)| {
@@ -380,13 +397,77 @@ where
     // we must pad lookups MLEs to same dim than table
     // table can come from context
     // e.g table[i].num_vars() == lookups[i].num_vars()
-    fn prove<T: Transcript<E>>(
-        lookup_ctx: &Context<E>,
-        lookup_type: &LookupType,
-        mles: &[MLE<E>],
-        t: &mut T,
-    ) -> anyhow::Result<Proof<E>> {
-        todo!()
+    fn prove<T: Transcript<E>>(lookup_ctx: &Context<E>, t: &mut T) -> anyhow::Result<Proof<E>> {
+        let current_step = lookup_ctx.witness_ctx.current_step;
+        // Get all the witness info from the context
+        let LookupProverInfo {
+            lookup_type,
+            batch_commitment,
+            circuit_witness,
+            challenges,
+        } = lookup_ctx
+            .witness_ctx
+            .witness_storage
+            .get(&current_step)
+            .ok_or(anyhow!(
+                "Was not expecting to prove a lookup at step: {:?}",
+                current_step
+            ))?;
+        // Get the circuit based on the lookup type
+        let circuit = lookup_ctx.get_circuit(lookup_type)?;
+        // Get the witness out and use this to calculate a challenge, we shall supply this to the verifier as well
+        let witness_out_ref = circuit_witness.witness_out_ref();
+        // Append the outputs to the transcript
+        let witness_outputs = witness_out_ref
+            .iter()
+            .flat_map(|mle| mle.get_base_field_vec().to_vec())
+            .collect::<Vec<E::BaseField>>();
+        t.append_field_elements(&witness_outputs);
+        // Squeeze a singular value (as all the output MLEs should only require one variable)
+        let output_point = t.get_and_append_challenge(b"lookup_challenge").elements;
+        // Evaluate all the output MLEs at the the challenge point
+        let wires_out_evals = witness_out_ref
+            .iter()
+            .map(|mle| PointAndEval::new(vec![output_point], mle.evaluate(&[output_point])))
+            .collect::<Vec<PointAndEval<E>>>();
+        // Work out how many instances of the same circuit we a re proving at the same time
+        let instance_num_vars = circuit_witness.instance_num_vars();
+        // make the GKR proof
+        let (gkr_proof, _) = IOPProverState::prove_parallel(
+            circuit,
+            circuit_witness,
+            vec![],
+            wires_out_evals,
+            instance_num_vars,
+            t,
+        );
+        // Group numerators and denominators together
+        let (numerators, denominators): (Vec<E>, Vec<E>) = witness_out_ref
+            .chunks(2)
+            .map(|chunk| {
+                let num = E::from_bases(&chunk[0].get_base_field_vec());
+                let denom = E::from_bases(&chunk[1].get_base_field_vec());
+                (num, denom)
+            })
+            .unzip();
+        // Group the claims so that we know what our initial sumcheck eval should be at the next step
+        let last_step_message = gkr_proof.sumcheck_proofs.last().unwrap();
+        let point = &last_step_message.sumcheck_proof.point;
+        let claims = last_step_message
+            .sumcheck_eval_values
+            .iter()
+            .map(|&value| Claim::new(point.clone(), value))
+            .collect::<Vec<Claim<E>>>();
+
+        Ok(Proof {
+            commitment: batch_commitment.to_commitment(),
+            claims,
+            gkr_proof,
+            numerators,
+            denominators,
+            challenges: challenges.clone(),
+            instance_num_vars,
+        })
     }
 
     // commitments to the lookups, one commitment per "column"
@@ -396,6 +477,59 @@ where
         proof: Proof<E>,
         t: &mut T,
     ) -> anyhow::Result<VerifierClaims<E>> {
-        todo!()
+        // Get the circuit by the lookup type
+        let circuit = lookup_ctx.get_circuit(lookup_type)?;
+        // Split the proof into parts
+        let Proof {
+            commitment,
+            gkr_proof,
+            numerators,
+            denominators,
+            challenges,
+            instance_num_vars,
+            ..
+        } = proof;
+        // Compute the expectted output values as the prover should have
+        let output_values = numerators
+            .iter()
+            .zip(denominators.iter())
+            .flat_map(|(num, denom)| [num.as_bases(), denom.as_bases()].concat())
+            .collect::<Vec<E::BaseField>>();
+
+        t.append_field_elements(&output_values);
+        // Squeeze the challenge
+        let output_point = t.get_and_append_challenge(b"lookup_challenge").elements;
+        // We directly evaluate as all the output MLEs should only have one variable
+        let wires_out_evals = output_values
+            .chunks(2)
+            .map(|chunk| {
+                let eval = E::from(chunk[1] - chunk[0]) * output_point + E::from(chunk[0]);
+                PointAndEval::new(vec![output_point], eval)
+            })
+            .collect::<Vec<PointAndEval<E>>>();
+        // Run the GKR verification
+        let gkr_claims = IOPVerifierState::verify_parallel(
+            circuit,
+            &challenges,
+            vec![],
+            wires_out_evals,
+            gkr_proof,
+            instance_num_vars,
+            t,
+        )
+        .map_err(|e| anyhow!("Error when verifying GKR {{ inner: {:?}}}", e))?;
+        // Convert to our `Claim` type
+        let claims = gkr_claims
+            .point_and_evals
+            .iter()
+            .map(Claim::from)
+            .collect::<Vec<Claim<E>>>();
+
+        Ok(VerifierClaims {
+            claims,
+            commitment,
+            numerators,
+            denominators,
+        })
     }
 }

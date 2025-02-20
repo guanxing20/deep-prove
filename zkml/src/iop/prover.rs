@@ -12,7 +12,7 @@ use crate::{
         utils::{compute_multiplicity_poly, merge_columns},
     },
     matrix::Matrix,
-    model::{InferenceStep, InferenceTrace, Layer},
+    model::{InferenceStep, InferenceTrace, Layer, StepIdx},
     quantization::Requant,
 };
 use anyhow::{Context as CC, anyhow, bail};
@@ -48,7 +48,7 @@ where
     /// The prover related to proving multiple claims about different witness polyy (io of lookups etc)
     witness_prover: precommit::CommitProver<E>,
     /// The context for the lookups
-    lookup_ctx: lookup::Context<E>,
+    lookup_ctx: lookup::Context<'a, E>,
     _phantom: PhantomData<L>,
 }
 
@@ -80,8 +80,8 @@ where
         step: &InferenceStep<'b, E>,
         info: &StepInfo<E>,
     ) -> anyhow::Result<Claim<E>> {
-        debug!("PROVER: proving layer {}", step.layer.describe());
-        match (step.layer, info) {
+        println!("PROVER: proving layer {}", step.layer.to_string());
+        let claim = match (step.layer, info) {
             (Layer::Dense(matrix), StepInfo::Dense(info)) => {
                 // NOTE: here we treat the ID of the step AS the ID of the polynomial. THat's okay because we only care
                 // about these IDs being unique, so as long as the mapping between poly <-> id is correct, all good.
@@ -99,7 +99,10 @@ where
                 step.layer.describe(),
                 info.variant_name()
             ),
-        }
+        };
+
+        self.lookup_ctx.witness_ctx.current_step += 1;
+        claim
     }
 
     fn prove_requant(
@@ -182,12 +185,7 @@ where
 
         // TODO: replace via proper lookup protocol
 
-        let lookup_proof = L::prove(
-            &self.lookup_ctx,
-            &lookup::LookupType::Relu,
-            &lookup_mles,
-            self.transcript,
-        )?;
+        let lookup_proof = L::prove(&self.lookup_ctx, self.transcript)?;
         // in our case, the output of the RELU is ALSO the same poly that previous proving
         // step (likely dense) has "outputted" to evaluate at a random point. So here we accumulate the two claims,
         // the one from previous proving step and the one given by the lookup protocol into one. Since they're claims

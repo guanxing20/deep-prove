@@ -8,6 +8,7 @@ use anyhow::{Context as CC, bail, ensure};
 use ff_ext::ExtensionField;
 use itertools::Itertools;
 use log::debug;
+use mpcs::BasefoldCommitment;
 use multilinear_extensions::mle::{IntoMLE, MultilinearExtension};
 use serde::{Serialize, de::DeserializeOwned};
 use sumcheck::structs::IOPVerifierState;
@@ -45,6 +46,9 @@ where
 {
     let mut commit_verifier = precommit::CommitVerifier::new();
     let mut witness_verifier = precommit::CommitVerifier::new();
+    let mut lookup_commits = vec![];
+    let mut lookup_numerators = vec![];
+    let mut lookup_denominators = vec![];
     let lookup_ctx = lookup::Context::<E>::generate(&ctx);
     ctx.write_to_transcript(transcript)?;
     // 0. Derive the first randomness
@@ -90,6 +94,9 @@ where
                     &mut witness_verifier,
                     &lookup_ctx,
                     transcript,
+                    &mut lookup_commits,
+                    &mut lookup_numerators,
+                    &mut lookup_denominators,
                 )?
             }
             (StepProof::Dense(proof), StepInfo::Dense(info)) => {
@@ -123,32 +130,35 @@ fn verify_activation<E: ExtensionField, T: Transcript<E>, L: LookupProtocol<E>>(
     witness_verifier: &mut commit::precommit::CommitVerifier<E>,
     lookup_ctx: &lookup::Context<E>,
     t: &mut T,
+    lookup_commits: &mut Vec<E::BaseField>,
+    lookup_numerators: &mut Vec<E>,
+    lookup_denominators: &mut Vec<E>,
 ) -> anyhow::Result<Claim<E>>
 where
     E::BaseField: Serialize + DeserializeOwned,
     E: Serialize + DeserializeOwned,
 {
     // 1. Verify the lookup proof
-    let lookup_type = LookupType::from(&info.op);
+    let lookup_type = LookupType::Relu;
     let verifier_claims = L::verify(lookup_ctx, &&lookup_type, proof.lookup.clone(), t)?;
-    // 1. Verify the accumulation proof from last_claim + lookup claim into the new claim
+    // 2. Add all the persisted information to the correct vectors.
+    lookup_commits.extend_from_slice(verifier_claims.commitment().root().0.as_slice());
+    lookup_numerators.extend_from_slice(verifier_claims.numerators());
+    lookup_denominators.extend_from_slice(verifier_claims.denominators());
+    // 3. Verify the accumulation proof from last_claim + lookup claim into the new claim
     let sp_ctx = same_poly::Context::<E>::new(info.num_vars);
     let mut sp_verifier = same_poly::Verifier::<E>::new(&sp_ctx);
     sp_verifier.add_claim(last_claim)?;
-    verifier_claims
-        .output_claims()
+    verifier_claims.claims()[1..]
         .iter()
         .try_for_each(|claim| sp_verifier.add_claim(claim.clone()))?;
 
     let new_output_claim = sp_verifier.verify(&proof.io_accumulation, t)?;
     // 2. Accumulate the new claim into the witness commitment protocol
     witness_verifier.add_claim(info.poly_id, new_output_claim)?;
-    witness_verifier.add_claim(
-        info.multiplicity_poly_id,
-        verifier_claims.multiplicity_poly_claim().clone(),
-    )?;
+
     // 3. return the input claim for to be proven at subsequent step
-    Ok(verifier_claims.input_claims()[0].clone())
+    Ok(verifier_claims.claims()[1].clone())
 }
 
 fn verify_dense<E: ExtensionField, T: Transcript<E>>(
