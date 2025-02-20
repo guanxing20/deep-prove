@@ -5,6 +5,7 @@ use tract_onnx::{pb::NodeProto, prelude::*};
 
 use crate::{
     Element,
+    activation::{Activation, Relu},
     matrix::Matrix,
     model::{Layer, Model},
 };
@@ -210,7 +211,9 @@ pub fn load_mlp<Q: Quantizer<Element>>(filepath: &str) -> Result<Model> {
         return Err(Error::msg(format!("File '{}' does not exist", filepath)));
     }
     let result = is_mlp(filepath)?;
-    assert!(result == true, "is_mlp: Failed");
+    if !result {
+        bail!("is_mlp: Failed");
+    }
 
     let model = tract_onnx::onnx()
         .proto_model_for_path(filepath)
@@ -229,7 +232,8 @@ pub fn load_mlp<Q: Quantizer<Element>>(filepath: &str) -> Result<Model> {
         initializers.insert(key, value);
     }
 
-    let mut layers: Vec<Layer> = Vec::new();
+    let mut sumcheck_model = Model::new();
+
     for node in graph.node.iter() {
         match node.op_type.as_str() {
             "Gemm" => {
@@ -241,14 +245,15 @@ pub fn load_mlp<Q: Quantizer<Element>>(filepath: &str) -> Result<Model> {
                     .unwrap()
                     .pad_next_power_of_two();
                 // let matrix = matrix.transpose();
-                layers.push(Layer::Dense(matrix));
+                let layer = Layer::Dense(matrix);
+                sumcheck_model.add_layer(layer);
+            }
+            "Relu" => {
+                let layer = Layer::Activation(Activation::Relu(Relu::new()));
+                sumcheck_model.add_layer(layer);
             }
             _ => (),
         };
-    }
-    let mut sumcheck_model = Model::new();
-    for layer in layers {
-        sumcheck_model.add_layer(layer); // Insert each layer
     }
 
     Ok(sumcheck_model)
