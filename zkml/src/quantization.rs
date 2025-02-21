@@ -18,7 +18,7 @@ pub const MIN: QuantInteger = QuantInteger::MIN;
 pub const ZERO: QuantInteger = 0;
 
 /// Trait used to quantize original floating point number to integer
-pub(crate) trait Quantizer<Output> {
+pub trait Quantizer<Output> {
     fn from_f32_unsafe(e: &f32) -> Output;
 }
 

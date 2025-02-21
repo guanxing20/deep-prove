@@ -136,6 +136,13 @@ impl<T: Transcript<E>, E: ExtensionField> VectorTranscript<E> for T {
     }
 }
 
+pub fn argmax<T: PartialOrd>(v: &[T]) -> Option<usize> {
+    v.iter()
+        .enumerate()
+        .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap()) // Unwrap is safe if T implements PartialOrd properly
+        .map(|(idx, _)| idx)
+}
+
 #[cfg(test)]
 mod test {
     use ark_std::rand::{Rng, thread_rng};

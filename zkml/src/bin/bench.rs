@@ -1,11 +1,12 @@
-use std::{fs::File, io::BufReader, path::Path};
+use std::{collections::HashMap, fs::{File, OpenOptions}, io::BufReader, time};
 
 use anyhow::{ensure, Context as CC};
 use clap::Parser;
+use csv::{ReaderBuilder, WriterBuilder};
 use goldilocks::GoldilocksExt2;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
-use zkml::{default_transcript, load_mlp, lookup::{LogUp,LookupProtocol}, vector_to_field_par, verify, Context, Element, Prover, IO};
+use zkml::{argmax, default_transcript, load_mlp, lookup::LogUp, vector_to_field_par, verify, Context, Element, Prover, IO};
 
 type F = GoldilocksExt2;
 
@@ -14,15 +15,14 @@ struct Args {
     /// onxx file to load
     #[arg(short, long)]
     onnx: String,    
-    /// input vector file in JSON. Format "{ input: [a,b,c] }"
+    /// input / output vector file in JSON. Format "{ input_data: [a,b,c], output_data: [c,d] }"
     #[arg(short,long)]
-    input: String,
+    io: String,
     /// File where to write the benchmarks
     #[arg(short,long,default_value_t = {"bench.csv".to_string()})]
     bench: String,
 }
 pub fn main() -> anyhow::Result<()> {
-    print!("Hello world");
     let args = Args::parse();
     run(args).context("error running bench:")?;
     Ok(())
@@ -30,49 +30,127 @@ pub fn main() -> anyhow::Result<()> {
 
 #[derive(Serialize,Deserialize)]
 struct InputJSON {
-    input: Vec<f64>,
+    input_data: Vec<f64>,
+    output_data: Vec<f64>,
 }
 
 impl InputJSON {
-    pub fn from(path: &str) -> anyhow::Result<Vec<Element>> {
+    /// Returns (input,output) from the path
+    pub fn from(path: &str) -> anyhow::Result<(Vec<Element>,Vec<Element>)> {
         let file = File::open(path)?;
         let reader = BufReader::new(file);
         let u :Self = serde_json::from_reader(reader)?;
         u.validate()?;
-        u.to_elements()
+        Ok(u.to_elements())
     }
     // poor's man validation
     fn validate(&self) -> anyhow::Result<()> {
         let rrange = (-1.0,1.0);
-        let isreal = self.input.iter().all(|v| *v >= rrange.0 && *v <= rrange.1);
-        ensure!(isreal ,"can only support either quant or real");
+        let input_isreal = self.input_data.iter().all(|v| *v >= rrange.0 && *v <= rrange.1);
+        let output_isreal = self.output_data.iter().all(|v| *v >= rrange.0 && *v <= rrange.1);
+        ensure!(input_isreal && output_isreal ,"can only support real model so far (input + output)");
         Ok(())
     }
-    fn to_elements(self) -> anyhow::Result<Vec<Element>> {
-        Ok(self.input.into_iter().map(|e| e as Element).collect_vec())
+    fn to_elements(self) -> (Vec<Element>,Vec<Element>) {
+        let inputs = self.input_data.into_iter().map(|e| e as Element).collect_vec();
+        let outputs = self.output_data.into_iter().map(|e| e as Element).collect_vec();
+        (inputs,outputs)
     }
 }
 
 fn run(args: Args) -> anyhow::Result<()> {
-    let model = load_mlp::<Element>(&args.onnx)?;
-    let input = InputJSON::from(&args.input)?;
-    let ctx = Context::<F>::generate(&model).expect("unable to generate context");
+    let mut bencher = CSVBencher::from_headers(vec!["load_model","setup","inference","proving","verifying","accuracy"]);
+    println!("[+] Reading onnx model");
+    let model = bencher.r("load_model", || load_mlp::<Element>(&args.onnx))?;
+    println!("[+] Reading input/output from pytorch");
+    let (input,given_output) = InputJSON::from(&args.io)?;
+
+    println!("[+] Generating context for proving");
+    let ctx = bencher.r("setup",|| Context::<F>::generate(&model).expect("unable to generate context"));
     let shape = model.input_shape();
     assert_eq!(shape.len(), 1,"only support vector as input for now");
 
-    let trace = model.run(input.clone());
+    println!("[+] Running inference");
+    let trace = bencher.r("inference",|| model.run(input.clone()));
     let output = trace.final_output().to_vec();
-    println!("[+] Run inference. Result: {:?}", output);
-
+    bencher.set("accuracy", compare(&given_output,&output));
+    
+    println!("[+] Running prover");
     let mut prover_transcript = default_transcript();
     let prover = Prover::<_, _, LogUp<F>>::new(&ctx, &mut prover_transcript);
-    println!("[+] Run prover");
-    let proof = prover.prove(trace).expect("unable to generate proof");
+    let proof = bencher.r("proving",move || prover.prove(trace).expect("unable to generate proof"));
 
+    println!("[+] Running verifier");
     let mut verifier_transcript = default_transcript();
     let io = IO::new(vector_to_field_par(&input), output.to_vec());
-    verify::<_, _, LogUp<F>>(ctx, proof, io, &mut verifier_transcript).expect("invalid proof");
+    bencher.r("verifying", || verify::<_, _, LogUp<F>>(ctx, proof, io, &mut verifier_transcript).expect("invalid proof"));
     println!("[+] Verify proof: valid");
 
+    bencher.flush(&args.bench)?;
+    println!("[+] Benchmark results appended to {}",args.bench);
     Ok(())
+}
+
+fn compare<A: PartialOrd, B: PartialOrd>(given_output: &[A],computed_output: &[B]) -> usize {
+    let a_max = argmax(given_output);
+    let b_max = argmax(computed_output);
+    if a_max == b_max { 1 } else { 0 }
+}
+
+type Ms = u128;
+
+struct CSVBencher {
+    data: HashMap<String,String>,
+    headers: Vec<String>,
+}
+
+impl CSVBencher {
+    pub fn from_headers<S: IntoIterator<Item = T>, T: Into<String>>(headers: S) -> Self {
+        let strings: Vec<String> = headers.into_iter().map(Into::into).collect();
+        Self {
+            data: Default::default(),
+            headers: strings,
+        } 
+    }
+
+    pub fn r<A,F: FnOnce() -> A>(&mut self, column: &str, f: F) -> A{
+        self.check(column);
+        let now = time::Instant::now();
+        let output = f();
+        let elapsed = now.elapsed().as_millis();
+
+        self.data.insert(column.to_string(), elapsed.to_string());
+        output
+    }
+
+    fn check(&self, column: &str) {
+        if self.data.contains_key(column) {
+            panic!("CSVBencher only handles one row for now");
+        }
+        if !self.headers.contains(&column.to_string()) {
+            panic!("column {} non existing",column);
+        }
+    }
+
+
+    pub fn set<I: ToString>(&mut self, column: &str, data: I) {
+        self.check(column);
+        self.data.insert(column.to_string(), data.to_string());
+    }
+
+    fn flush(self,fname: &str) -> anyhow::Result<()> {
+        let file = OpenOptions::new().create(true).append(true).open(&fname)?;
+        let mut writer = WriterBuilder::new().has_headers(false).from_writer(file);
+
+        let keys: Vec<_> = self.data.keys().cloned().collect();
+        let values: Vec<_> = keys.iter().map(|k| self.data[k].to_string()).collect();
+
+        if ReaderBuilder::new().has_headers(true).from_path(&fname).is_err() {
+            writer.write_record(&keys)?;
+        }
+
+        writer.write_record(&values)?;
+        writer.flush()?;
+        Ok(())
+    }
 }
