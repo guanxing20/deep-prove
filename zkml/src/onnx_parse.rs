@@ -262,7 +262,40 @@ pub fn load_mlp<Q: Quantizer<Element>>(filepath: &str) -> Result<Model> {
     Ok(sumcheck_model)
 }
 
-pub fn load_cnn<Q: Quantizer<Element>>(filepath: &str) -> Result<Model> {
+fn fetch_weight_bias_as_tensor<Q: Quantizer<Element>>(
+    weight_or_bias: &str,
+    node: &NodeProto,
+    initializers: &HashMap<String, Tensor>,
+) -> Result<crate::tensor::Tensor<Element>> {
+    ensure!(weight_or_bias == "weight" || weight_or_bias == "bias");
+
+    // let mut inputs = node.input.clone();
+    // inputs.sort();
+    // inputs.reverse();
+    // println!("Inputs: {:?}", inputs);
+    // for tensor in tensor_vec.iter() {
+    //     println!("Tensor: {:?}", tensor);
+    // }
+
+    let tensor_vec = node
+        .input
+        .iter()
+        .filter(|x| x.contains(weight_or_bias))
+        .filter_map(|key| initializers.get(key).cloned())
+        .collect_vec();
+
+    // If a node is Gemm, then it has only one tensor of the form "fcN.weight"
+    let tensor_t = tensor_vec[0].clone();
+    let tensor_t_f32 = tensor_t.as_slice::<f32>().unwrap().to_vec();
+    let tensor_f = tensor_t_f32.iter().map(Q::from_f32_unsafe).collect_vec();
+    let tensor_result = crate::tensor::Tensor::new(tensor_t.shape().to_vec(), tensor_f);
+
+    Ok(tensor_result)
+}
+
+pub fn load_cnn<Q: Quantizer<Element>>(
+    filepath: &str,
+) -> Result<Vec<crate::tensor::Tensor<Element>>> {
     if !Path::new(filepath).exists() {
         return Err(Error::msg(format!("File '{}' does not exist", filepath)));
     }
@@ -287,32 +320,35 @@ pub fn load_cnn<Q: Quantizer<Element>>(filepath: &str) -> Result<Model> {
         initializers.insert(key, value);
     }
 
-    let mut sumcheck_model = Model::new();
+    let mut tensors = Vec::new();
 
     for node in graph.node.iter() {
         match node.op_type.as_str() {
-            "Gemm" => {
-                let matrix_weight = fetch_weight_bias_as_mat::<Q>("weight", node, &initializers)?;
-                let matrix_bias = fetch_weight_bias_as_mat::<Q>("bias", node, &initializers)?;
+            // "Gemm" => {
+            //     let matrix_tensor =
+            //         fetch_weight_bias_as_tensor::<Q>("weight", node, &initializers)?;
+            //     let matrix_weight = fetch_weight_bias_as_mat::<Q>("weight", node, &initializers)?;
+            //     let matrix_bias = fetch_weight_bias_as_mat::<Q>("bias", node, &initializers)?;
 
-                let matrix = concat_column(matrix_weight, matrix_bias)?;
-                let matrix = Matrix::<Element>::from_coeffs(matrix)
-                    .unwrap()
-                    .pad_next_power_of_two();
-                // let matrix = matrix.transpose();
-                let layer = Layer::Dense(matrix);
-                sumcheck_model.add_layer(layer);
-            }
-            "Relu" => {
-                let layer = Layer::Activation(Activation::Relu(Relu::new()));
-                sumcheck_model.add_layer(layer);
+            //     let matrix = concat_column(matrix_weight, matrix_bias)?;
+            //     let matrix = crate::tensor::Tensor::<Element>::from_coeffs_2d(matrix)
+            //         .unwrap()
+            //         .pad_next_power_of_two_2d();
+
+            //     // let layer = Layer::Dense(matrix);
+            //     // sumcheck_model.add_layer(layer);
+            //     tensors.push(matrix);
+            // }
+            "Conv" => {
+                let weights = fetch_weight_bias_as_tensor::<Q>("weight", node, &initializers)?;
+                let _ = fetch_weight_bias_as_tensor::<Q>("bias", node, &initializers)?;
+                tensors.push(weights);
             }
             _ => (),
         };
     }
-    let sumcheck_model = Model::new();
-    unimplemented!("Yet to add conv, flatten, etc.");
-    Ok(sumcheck_model)
+
+    Ok(tensors)
 }
 
 trait Quantizer<Output> {
