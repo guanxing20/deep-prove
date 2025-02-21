@@ -108,8 +108,8 @@ model.eval()
 y_pred = model(test_X[0])
 print("Expected:", test_y[0], "Predicted", torch.argmax(y_pred, dim=0))
 
-model_path = os.path.join('model-mlp.onnx')
-data_path = os.path.join('input.json')
+model_path = os.path.join('mlp-model.onnx')
+data_path = os.path.join('mlp-input.json')
 
 x = test_X[0].reshape(1, 4)
 model.eval()
@@ -125,6 +125,7 @@ torch.onnx.export(model,
                                 'output': {0: 'batch_size'}})
 
 data_array = ((x).detach().numpy()).reshape([-1]).tolist()
+output_array = ((y_pred).detach().numpy()).reshape([-1]).tolist()
 
-data = dict(input_data=[data_array])
-json.dump(data, open(data_path, 'w'))
+data = dict(input_data=[data_array],output_data=[output_array])
+json.dump(data, open(data_path, 'w'),indent=2)
