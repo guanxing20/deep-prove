@@ -139,8 +139,8 @@ where
     E: Serialize + DeserializeOwned,
 {
     // 1. Verify the lookup proof
-    let lookup_type = LookupType::Relu;
-    let verifier_claims = L::verify(lookup_ctx, &&lookup_type, proof.lookup.clone(), t)?;
+    let lookup_type = LookupType::Relu(0);
+    let verifier_claims = L::verify(lookup_ctx, &lookup_type, proof.lookup.clone(), t)?;
     // 2. Add all the persisted information to the correct vectors.
     lookup_commits.extend_from_slice(verifier_claims.commitment().root().0.as_slice());
     lookup_numerators.extend_from_slice(verifier_claims.numerators());

@@ -404,10 +404,7 @@ where
                         let m_poly = compute_multiplicity_poly::<E>(&merged_table, &merged_lookup);
                         let multiplicity_poly_evals = field_type_to_ext_vec(m_poly.evaluations());
 
-                        Some(vec![
-                            (info.poly_id, step.output.clone()),
-                            (info.multiplicity_poly_id, multiplicity_poly_evals),
-                        ])
+                        Some(vec![(info.poly_id, step.output.clone())])
                     }
                     // the dense layer is handling everything "on its own"
                     _ => None,

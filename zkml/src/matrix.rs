@@ -15,7 +15,7 @@ use crate::{
     to_bit_sequence_le,
 };
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct Matrix<E> {
     dim: (usize, usize),
     // dimension is [n_rows,n_cols]

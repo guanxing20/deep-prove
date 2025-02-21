@@ -36,18 +36,14 @@ pub struct ActivationInfo {
     pub op: Activation,
     pub poly_id: PolyID,
     pub num_vars: usize,
-    pub multiplicity_poly_id: PolyID,
-    pub multiplicity_num_vars: usize,
 }
 
 /// Info related to the lookup protocol necessary to requantize
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RequantInfo {
-    pub shift: usize,
+    pub requant: Requant,
     pub poly_id: PolyID,
     pub num_vars: usize,
-    pub multiplicity_poly_id: PolyID,
-    pub multiplicity_num_vars: usize,
 }
 
 impl<E> StepInfo<E> {
@@ -91,8 +87,6 @@ where
     /// INFO: it _assumes_ the model is already well padded to power of twos.
     pub fn generate(model: &Model) -> anyhow::Result<Self> {
         let mut last_output_size = model.first_output_shape()[0];
-        let mut current_multiplicity_poly_id = model.layer_count();
-        println!("CTX STEP A");
         let auxs = model
             .layers()
             .map(|(id, layer)| {
@@ -117,28 +111,17 @@ where
                         dense_info
                     }
                     Layer::Activation(Activation::Relu(relu)) => {
-                        let multiplicity_poly_id = current_multiplicity_poly_id;
-                        current_multiplicity_poly_id += 1;
                         StepInfo::Activation(ActivationInfo {
                             op: Activation::Relu(*relu),
                             poly_id: id,
-                            num_vars: Relu::num_vars(),
-                            multiplicity_poly_id,
-                            multiplicity_num_vars: Relu::num_vars(),
+                            num_vars: last_output_size,
                         })
                     }
-                    Layer::Requant(info) => {
-                        let multiplicity_poly_id = current_multiplicity_poly_id;
-                        current_multiplicity_poly_id += 1;
-                        let num_vars = info.range.ilog2() as usize;
-                        StepInfo::Requant(RequantInfo {
-                            shift: info.right_shift,
-                            poly_id: id,
-                            num_vars,
-                            multiplicity_poly_id,
-                            multiplicity_num_vars: num_vars,
-                        })
-                    }
+                    Layer::Requant(info) => StepInfo::Requant(RequantInfo {
+                        requant: *info,
+                        poly_id: id,
+                        num_vars: last_output_size,
+                    }),
                 }
             })
             .collect_vec();
@@ -165,14 +148,10 @@ where
                 StepInfo::Requant(info) => {
                     t.append_field_element(&E::BaseField::from(info.poly_id as u64));
                     t.append_field_element(&E::BaseField::from(info.num_vars as u64));
-                    t.append_field_element(&E::BaseField::from(info.multiplicity_poly_id as u64));
-                    t.append_field_element(&E::BaseField::from(info.multiplicity_num_vars as u64));
                 }
                 StepInfo::Activation(info) => {
                     t.append_field_element(&E::BaseField::from(info.poly_id as u64));
                     t.append_field_element(&E::BaseField::from(info.num_vars as u64));
-                    t.append_field_element(&E::BaseField::from(info.multiplicity_poly_id as u64));
-                    t.append_field_element(&E::BaseField::from(info.multiplicity_num_vars as u64));
                 }
             }
         }

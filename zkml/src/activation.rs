@@ -63,14 +63,25 @@ impl Relu {
     /// f_i: one containing the input column values
     /// f_o: one containing the output column values
     pub fn to_mle<E: ExtensionField>() -> (Vec<E>, Vec<E>) {
-        (quantization::MIN..=quantization::MAX)
+        // We construct this way so that (0,0) is the first row of the table
+        let (input_one, output_one): (Vec<E>, Vec<E>) = (0..=quantization::MAX)
             .map(|i| {
-                let input: E = i.to_field();
-                // conversion from QuantInteger -> u64 OK because result is either 0 or strictly positive.
-                let output = E::from(Self::apply(i as Element) as u64);
-                (input, output)
+                let val: E = i.to_field();
+                (val, val)
             })
-            .unzip()
+            .unzip();
+
+        let (input_two, output_two): (Vec<E>, Vec<E>) = (quantization::MIN..0)
+            .map(|i| {
+                let val: E = i.to_field();
+                (val, E::ZERO)
+            })
+            .unzip();
+
+        (
+            [input_one, input_two].concat(),
+            [output_one, output_two].concat(),
+        )
     }
 
     pub fn op(&self, input: &[Element]) -> Vec<Element> {
@@ -82,7 +93,7 @@ impl Relu {
 
     #[inline(always)]
     pub fn apply(e: Element) -> Element {
-        if e <= ZERO as i128 { 0 } else { e }
+        if e.is_negative() { 0 } else { e }
     }
 }
 

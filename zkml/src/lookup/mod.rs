@@ -15,6 +15,7 @@ use crate::{
     commit::Pcs,
     iop::context::StepInfo,
     model::{InferenceTrace, Layer, StepIdx},
+    quantization::{Fieldizer, Requant},
 };
 use gkr_circuits::{
     lookups_circuit::lookup_wire_fractional_sumcheck, table_circuit::table_fractional_sumcheck,
@@ -103,8 +104,8 @@ where
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum LookupType {
-    Relu,
-    Range(u8),
+    Relu(usize),
+    Requant(Requant, usize),
     FinalTable(Vec<usize>, usize),
     NoLookup,
 }
@@ -112,24 +113,22 @@ pub enum LookupType {
 impl<E: ExtensionField> From<&StepInfo<E>> for LookupType {
     fn from(value: &StepInfo<E>) -> LookupType {
         match value {
-            StepInfo::Requant(info) => LookupType::Range(info.shift as u8),
-            StepInfo::Activation(info) => LookupType::from(&info.op),
+            StepInfo::Requant(info) => LookupType::Requant(info.requant, info.num_vars),
+            StepInfo::Activation(info) => LookupType::Relu(info.num_vars),
             _ => LookupType::NoLookup,
         }
-    }
-}
-
-impl From<&Activation> for LookupType {
-    fn from(_: &Activation) -> Self {
-        LookupType::Relu
     }
 }
 
 impl LookupType {
     pub fn make_circuit<E: ExtensionField>(&self) -> Circuit<E> {
         match self {
-            LookupType::Range(bit_size) => lookup_wire_fractional_sumcheck(1, *bit_size as usize),
-            LookupType::Relu => lookup_wire_fractional_sumcheck(2, 8),
+            LookupType::Requant(info, num_vars) => {
+                let output_range_log = info.range.ilog2() as usize;
+                let num_chunks = (output_range_log / 8) + 1;
+                lookup_wire_fractional_sumcheck(num_chunks, *num_vars)
+            }
+            LookupType::Relu(num_vars) => lookup_wire_fractional_sumcheck(2, *num_vars),
             LookupType::FinalTable(table_partitioning, table_vars) => {
                 table_fractional_sumcheck(table_partitioning, *table_vars)
             }
@@ -139,8 +138,11 @@ impl LookupType {
 
     pub fn number_of_columns(&self) -> usize {
         match self {
-            LookupType::Range(..) => 1,
-            LookupType::Relu => 2,
+            LookupType::Requant(info, ..) => {
+                let output_range_log = info.range.ilog2() as usize;
+                (output_range_log / 8) + 1
+            }
+            LookupType::Relu(..) => 2,
             LookupType::FinalTable(partition, ..) => partition.iter().sum::<usize>(),
             LookupType::NoLookup => 0,
         }
@@ -148,8 +150,8 @@ impl LookupType {
 
     pub fn num_vars(&self) -> usize {
         match self {
-            LookupType::Range(bit_size) => *bit_size as usize,
-            LookupType::Relu => 8,
+            LookupType::Requant(.., num_vars) => *num_vars,
+            LookupType::Relu(num_vars) => *num_vars,
             LookupType::FinalTable(.., table_num_vars) => *table_num_vars,
             LookupType::NoLookup => 0,
         }
@@ -165,8 +167,8 @@ impl LookupType {
     pub fn get_dom_sep(&self) -> &[u8] {
         match &self {
             LookupType::NoLookup => NO_LOOKUP_DOM_SEP,
-            LookupType::Range(..) => RANGE_CHECK_DOM_SEP,
-            LookupType::Relu => RELU_DOM_SEP,
+            LookupType::Requant(..) => RANGE_CHECK_DOM_SEP,
+            LookupType::Relu(..) => RELU_DOM_SEP,
             LookupType::FinalTable(..) => FINAL_TABLE_DOM_SEP,
         }
     }
@@ -177,6 +179,15 @@ impl LookupType {
             _ => false,
         }
     }
+
+    pub fn name(&self) -> String {
+        match self {
+            LookupType::Requant(..) => "Requant".to_string(),
+            LookupType::Relu(..) => "Relu".to_string(),
+            LookupType::FinalTable(..) => "Table".to_string(),
+            LookupType::NoLookup => "NoLookup".to_string(),
+        }
+    }
 }
 
 pub struct Context<'a, E>
@@ -184,7 +195,7 @@ where
     E::BaseField: Serialize + DeserializeOwned,
     E: ExtensionField + Serialize + DeserializeOwned,
 {
-    circuits: HashMap<LookupType, Circuit<E>>,
+    circuits: HashMap<StepIdx, (LookupType, Circuit<E>)>,
     pub witness_ctx: WitnessContext<'a, E>,
 }
 
@@ -215,21 +226,15 @@ where
     E::BaseField: Serialize + DeserializeOwned,
     E: ExtensionField + Serialize + DeserializeOwned,
 {
-    /// Getter for the lookup circuit depending on the [`StepInfo`]
-    pub fn get_circuit_step_info(&self, step_info: &StepInfo<E>) -> anyhow::Result<&Circuit<E>> {
-        let lookup_type: LookupType = step_info.try_into()?;
-        self.circuits.get(&lookup_type).ok_or(anyhow::anyhow!(
-            "Context does not contain a circuit for the lookup type: {:?}",
-            lookup_type
-        ))
-    }
-
     /// Getter for the lookup circuit depending on the [`LookupType`]
-    pub fn get_circuit(&self, lookup_type: &LookupType) -> anyhow::Result<&Circuit<E>> {
-        self.circuits.get(lookup_type).ok_or(anyhow::anyhow!(
-            "Context does not contain a circuit for the lookup type: {:?}",
-            lookup_type
-        ))
+    pub fn get_circuit(&self, step_idx: StepIdx) -> anyhow::Result<&Circuit<E>> {
+        self.circuits
+            .get(&step_idx)
+            .and_then(|(_, circuit)| Some(circuit))
+            .ok_or(anyhow::anyhow!(
+                "Context does not contain a circuit for the step: {:?}",
+                step_idx
+            ))
     }
 
     /// Generate [`Context`] from a [ModelContext](`crate::iop::context::Context`)
@@ -253,13 +258,28 @@ where
 
         keys_hash_set.insert(LookupType::FinalTable(table_partition, table_num_vars));
 
-        let circuits = keys_hash_set
-            .into_iter()
-            .map(|k| {
-                let circuit = k.make_circuit();
-                (k, circuit)
+        let mut info = ctx
+            .steps_info
+            .iter()
+            .enumerate()
+            .filter_map(|(stp_idx, step)| {
+                if let &StepInfo::Dense(..) = step {
+                    None
+                } else {
+                    let lookup_type = LookupType::from(step);
+                    let circuit = lookup_type.make_circuit::<E>();
+
+                    Some((stp_idx, (lookup_type, circuit)))
+                }
             })
-            .collect::<HashMap<LookupType, Circuit<E>>>();
+            .collect::<Vec<(StepIdx, (LookupType, Circuit<E>))>>();
+
+        let final_idx = ctx.steps_info.len();
+        let final_lookup_type = LookupType::FinalTable(vec![1, 2], 8);
+        let final_circuit = final_lookup_type.make_circuit::<E>();
+        info.push((final_idx, (final_lookup_type, final_circuit)));
+
+        let circuits = HashMap::<StepIdx, (LookupType, Circuit<E>)>::from_iter(info.into_iter());
 
         Context {
             circuits,
@@ -291,6 +311,11 @@ where
             match step.layer {
                 Layer::Dense(..) => Result::<(), anyhow::Error>::Ok(()),
                 Layer::Activation(Activation::Relu(..)) => {
+                    let (lookup_type, circuit) = self
+                        .circuits
+                        .get(&step_idx)
+                        .expect("The index didn't have a circuit when it was expected to");
+                    let num_vars = lookup_type.num_vars();
                     let mle_evals = [step_input, step.output.as_slice()]
                         .iter()
                         .map(|val| {
@@ -301,16 +326,21 @@ where
                         .collect::<Vec<Vec<E::BaseField>>>();
                     let mles = mle_evals
                         .iter()
-                        .map(|val| DenseMultilinearExtension::from_evaluations_slice(8, val))
+                        .map(|val| DenseMultilinearExtension::from_evaluations_slice(num_vars, val))
                         .collect::<Vec<MLE<E>>>();
-                    let (pp, _) = Pcs::<E>::trim(params.clone(), 1 << 8)?;
+                    let (pp, _) = Pcs::<E>::trim(params.clone(), 1 << num_vars)?;
                     let batch_commit = Pcs::<E>::batch_commit(&pp, &mles)?.to_commitment();
                     commits_in_order.extend_from_slice(batch_commit.root().0.as_slice());
                     tmp_witness_storage
-                        .insert(step_idx, (LookupType::Relu, batch_commit, mle_evals));
+                        .insert(step_idx, (lookup_type.clone(), batch_commit, mle_evals));
                     Ok(())
                 }
                 Layer::Requant(requant) => {
+                    let (lookup_type, circuit) = self
+                        .circuits
+                        .get(&step_idx)
+                        .expect("The index didn't have a circuit when it was expected to");
+                    let num_columns = lookup_type.number_of_columns();
                     // We ceiling divide the right shift by 8 and add one for now (because the quant size is constant currently)
                     // TODO: update this to work if we let quant size vary. This gives us the number of chunks we split the part we discard into.
                     let num_discarded_chunks = (requant.right_shift as usize - 1) / 8 + 1;
@@ -319,18 +349,24 @@ where
                     let padded_chunks = num_chunks.next_power_of_two();
 
                     let mut relu_input = vec![];
-                    let mut discarded_chunks = vec![vec![]; num_discarded_chunks];
+                    let mut discarded_chunks = vec![vec![]; num_columns - 1];
 
                     // Make a mask for so we can get ridd of the relu input
                     let top_mask = 255u64 << requant.right_shift;
+                    let max_bit = requant.range << 1;
+                    let subtract = max_bit >> requant.right_shift;
                     // Bit mask for the bytes
                     let bit_mask = 255u64;
                     step_input.iter().for_each(|val| {
                         // First we take the relu input
-                        let u64val = val.to_canonical_u64_vec()[0];
-                        relu_input.push(E::BaseField::from(u64val >> requant.right_shift));
+                        let u64val = val.to_canonical_u64_vec()[0] as i128;
+                        let pre_shift = u64val + max_bit as i128;
+                        let tmp = pre_shift >> requant.right_shift;
+                        let relu_in = tmp - subtract as i128;
+                        let relu_in_field: E = relu_in.to_field();
+                        relu_input.push(relu_in_field.as_bases()[0]);
                         // the value of an input should always be basefield elements
-                        let mut masked_val = u64val & top_mask;
+                        let mut masked_val = u64val as u64 & top_mask;
                         (0..num_discarded_chunks).rev().for_each(|j| {
                             let chunk = masked_val & bit_mask;
                             discarded_chunks[j].push(E::BaseField::from(chunk));
@@ -340,14 +376,10 @@ where
 
                     discarded_chunks.insert(0, relu_input);
 
-                    let num_vars = step_input.len().next_power_of_two().ilog2() as usize;
-                    let witness_evals = [
-                        vec![vec![E::BaseField::ZERO; 1 << num_vars]; padded_chunks - num_chunks],
-                        discarded_chunks,
-                    ]
-                    .concat();
+                    let num_vars = lookup_type.num_vars();
+
                     let (pp, _) = Pcs::<E>::trim(params.clone(), 1 << num_vars)?;
-                    let witness_mles = witness_evals
+                    let witness_mles = discarded_chunks
                         .iter()
                         .map(|evals| {
                             DenseMultilinearExtension::from_evaluations_slice(num_vars, evals)
@@ -357,7 +389,7 @@ where
                     commits_in_order.extend_from_slice(batch_commit.root().0.as_slice());
                     tmp_witness_storage.insert(
                         step_idx,
-                        (LookupType::Range(8), batch_commit, witness_evals),
+                        (lookup_type.clone(), batch_commit, discarded_chunks),
                     );
                     Ok(())
                 }
@@ -367,22 +399,20 @@ where
 
         // Now we work out the final challenges using the commitments
         let constant_challenge = E::from(hash_n_to_hash_no_pad(&commits_in_order).0[0]);
+        let requant_extra = RANGE_CHECK_DOM_SEP
+            .iter()
+            .map(|byte| E::BaseField::from(*byte as u64))
+            .collect::<Vec<E::BaseField>>();
+        let input = [commits_in_order.clone(), requant_extra].concat();
+        let requant_challenge = E::from(hash_n_to_hash_no_pad(&input).0[0]);
+        let relu_extra = RELU_DOM_SEP
+            .iter()
+            .map(|byte| E::BaseField::from(*byte as u64))
+            .collect::<Vec<E::BaseField>>();
+        let input = [commits_in_order.clone(), relu_extra].concat();
+        let relu_challenge = E::from(hash_n_to_hash_no_pad(&input).0[0]);
 
-        let challenge_hash_map =
-            HashMap::<LookupType, (E, E)>::from_iter(self.circuits.keys().filter_map(|lt| {
-                if !lt.is_final_table() {
-                    let extra = lt
-                        .get_dom_sep()
-                        .iter()
-                        .map(|byte| E::BaseField::from(*byte as u64))
-                        .collect::<Vec<E::BaseField>>();
-                    let input = [commits_in_order.clone(), extra].concat();
-                    let challenge = E::from(hash_n_to_hash_no_pad(&input).0[0]);
-                    Some((lt.clone(), (challenge, constant_challenge)))
-                } else {
-                    None
-                }
-            }));
+        let mut challenge_hash_map = HashMap::<LookupType, Vec<E>>::new();
 
         let (merged_lookups, to_store): (Vec<Vec<E>>, Vec<(StepIdx, LookupProverInfo<E>)>) =
             tmp_witness_storage
