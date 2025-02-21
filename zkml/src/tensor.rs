@@ -244,6 +244,17 @@ impl Tensor<Element> {
             }
         }
 
+        // Parallelize row-wise copying
+        padded
+            .data
+            .par_chunks_mut(new_cols)
+            .enumerate()
+            .for_each(|(i, row)| {
+                if i < rows {
+                    row[..cols].copy_from_slice(&self.data[i * cols..(i + 1) * cols]);
+                }
+            });
+
         self = padded;
 
         self
