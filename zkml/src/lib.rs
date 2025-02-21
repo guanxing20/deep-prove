@@ -23,6 +23,7 @@ pub mod model;
 mod onnx_parse;
 pub mod quantization;
 pub use onnx_parse::load_mlp;
+mod tensor;
 
 mod testing;
 mod utils;
@@ -138,9 +139,17 @@ mod test {
     use multilinear_extensions::mle::{IntoMLE, MultilinearExtension};
 
     use crate::{
-        default_transcript, iop::{
-            prover::Prover, verifier::{verify, IO}, Context
-        }, lookup::{LogUp, LookupProtocol}, onnx_parse::load_mlp, quantization::{QuantInteger, VecFielder}, testing::random_vector, to_bit_sequence_le, Element
+        Element, default_transcript,
+        iop::{
+            Context,
+            prover::Prover,
+            verifier::{IO, verify},
+        },
+        lookup::{LogUp, LookupProtocol},
+        onnx_parse::load_mlp,
+        quantization::{QuantInteger, VecFielder},
+        testing::random_vector,
+        to_bit_sequence_le,
     };
     use ff_ext::ff::Field;
 
@@ -161,7 +170,10 @@ mod test {
 
         let shape = model.input_shape();
         assert_eq!(shape.len(), 1);
-        let input = random_vector::<QuantInteger>(shape[0]).into_iter().map(|i| i as Element).collect_vec();
+        let input = random_vector::<QuantInteger>(shape[0])
+            .into_iter()
+            .map(|i| i as Element)
+            .collect_vec();
         let input = model.prepare_input(input);
 
         let trace = model.run(input.clone());
