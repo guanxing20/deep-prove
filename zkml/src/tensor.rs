@@ -2,9 +2,12 @@ use anyhow::{bail, ensure};
 use ff_ext::ExtensionField;
 use itertools::Itertools;
 use multilinear_extensions::mle::DenseMultilinearExtension;
-use rayon::iter::{
-    IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator,
-    IntoParallelRefMutIterator, ParallelIterator,
+use rayon::{
+    iter::{
+        IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator,
+        IntoParallelRefMutIterator, ParallelIterator,
+    },
+    slice::ParallelSliceMut,
 };
 use std::{cmp::PartialEq, fmt, fmt::Write};
 
@@ -241,6 +244,17 @@ impl Tensor<Element> {
             }
         }
 
+        // Parallelize row-wise copying
+        padded
+            .data
+            .par_chunks_mut(new_cols)
+            .enumerate()
+            .for_each(|(i, row)| {
+                if i < rows {
+                    row[..cols].copy_from_slice(&self.data[i * cols..(i + 1) * cols]);
+                }
+            });
+
         self = padded;
 
         self
@@ -305,7 +319,7 @@ impl Tensor<Element> {
 
     /// Transpose the matrix (2D tensor)
     pub fn transpose(&self) -> Tensor<Element> {
-        assert!(self.shape.len() == 2, "Only 2D tensors can be transposed.");
+        assert!(self.is_matrix(), "Tensor is not a matrix.");
         let (m, n) = (self.shape[0], self.shape[1]);
 
         let mut result = Tensor::zeros(vec![n, m]);
@@ -314,6 +328,34 @@ impl Tensor<Element> {
                 result.data[j * m + i] = self.data[i * n + j];
             }
         }
+        result
+    }
+
+    /// Concatenate a matrix (2D tensor) with a vector (1D tensor) as columns
+    pub fn concat_matvec_col(&self, vector: &Tensor<Element>) -> Tensor<Element> {
+        assert!(self.is_matrix(), "First tensor is not a matrix.");
+        assert!(vector.is_vector(), "Second tensor is not a vector.");
+
+        let (rows, cols) = (self.shape[0], self.shape[1]);
+        let vector_len = vector.shape[0];
+
+        assert!(
+            rows == vector_len,
+            "Matrix row count must match vector length."
+        );
+
+        let new_cols = cols + 1;
+        let mut result = Tensor::zeros(vec![rows, new_cols]);
+
+        result
+            .data
+            .par_chunks_mut(new_cols)
+            .enumerate()
+            .for_each(|(i, row)| {
+                row[..cols].copy_from_slice(&self.data[i * cols..(i + 1) * cols]); // Copy matrix row
+                row[cols] = vector.data[i]; // Append vector element as the last column
+            });
+
         result
     }
 }
@@ -445,6 +487,7 @@ mod test {
             self.data[i * self.dims()[1] + j]
         }
     }
+
     #[test]
     fn test_tensor_mle() {
         let mat = Tensor::<Element>::random(vec![3, 5]).pad_next_power_of_two_2d();
@@ -467,5 +510,19 @@ mod test {
         let col_input = mat.col_to_boolean_2d(chosen_col);
         let output = mle.evaluate(&col_input.collect_vec());
         assert_eq!(E::from(elem as u64), output);
+    }
+
+    #[test]
+    fn test_tensor_matvec_concatenate() {
+        let matrix = Tensor::new(vec![3, 3], vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
+        let vector = Tensor::new(vec![3], vec![10, 20, 30]);
+
+        let result = matrix.concat_matvec_col(&vector);
+
+        assert_eq!(
+            result,
+            Tensor::new(vec![3, 4], vec![1, 2, 3, 10, 4, 5, 6, 20, 7, 8, 9, 30]),
+            "Concatenate matrix vector as columns failed."
+        );
     }
 }
