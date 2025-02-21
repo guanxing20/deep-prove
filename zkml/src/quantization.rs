@@ -85,11 +85,18 @@ impl<const BIT_LEN:usize > QuantRange<BIT_LEN> {
     /// NOTE2: It is using the simplfiication of finding the max range which is a power of two
     /// so we only need to "right shift" during requant
     fn compute_matvec_quant(m: &Matrix<Element>) -> Requant {
+        // NOTE this way below is correct but is taking a huge loss
         // BIT_LEN * 2 because of multiplication
         // log because of additions
-        let bit_len = BIT_LEN * 2  + m.ncols().ilog2() as usize;
+        //let bit_len = BIT_LEN * 2  + m.ncols().ilog2() as usize;
+        //let output_range = Self {
+        //    max_range: (2 as usize).pow(bit_len as u32),
+        //};
+        // 
+        // NOTE 2: this way is more precise
+        let ind_range = (MAX - MIN) as usize;
         let output_range = Self {
-            max_range: (2 as usize).pow(bit_len as u32),
+            max_range: (ind_range.pow(2) + m.ncols() as usize * ind_range).next_power_of_two(),
         };
         let shift = Self::default().mult_shift(&Self::default(), &output_range);
         Requant {
@@ -151,7 +158,7 @@ impl Requant {
     pub fn to_mle<E: ExtensionField>(&self) -> (Vec<E>, Vec<E>) {
         // TODO: make a +1 or -1 somewhere
         let min_range = - (self.range as Element) / 2;
-        let max_range = (self.range as Element) / 2;
+        let max_range = (self.range as Element) / 2 - 1;
         (min_range..=max_range)
             .map(|i| {
                 let input : E = i.to_field();
