@@ -325,6 +325,8 @@ where
         self.instantiate_witness_ctx(&trace, &self.ctx.steps_info)?;
         // write commitments and polynomials info to transcript
         self.ctx.write_to_transcript(self.transcript)?;
+        // Create the witness context for the lookups
+        self.lookup_ctx.initialise_witness_ctx(&trace)?;
         // this is the random set of variables to fix at each step derived as the output of
         // sumcheck.
         // For the first step, so before the first sumcheck, we generate it from FS.

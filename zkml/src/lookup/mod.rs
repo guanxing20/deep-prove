@@ -7,10 +7,11 @@ use gkr::structs::{
 use mpcs::{BasefoldCommitment, BasefoldCommitmentWithWitness, PolynomialCommitmentScheme};
 use poseidon::poseidon_hash::hash_n_to_hash_no_pad;
 use std::collections::{BTreeMap, HashMap, HashSet};
+use utils::compute_multiplicity_poly;
 
 use crate::{
     Claim,
-    activation::Activation,
+    activation::{Activation, Relu},
     commit::Pcs,
     iop::context::StepInfo,
     model::{InferenceTrace, Layer, StepIdx},
@@ -169,6 +170,13 @@ impl LookupType {
             LookupType::FinalTable(..) => FINAL_TABLE_DOM_SEP,
         }
     }
+
+    pub fn is_final_table(&self) -> bool {
+        match self {
+            LookupType::FinalTable(..) => true,
+            _ => false,
+        }
+    }
 }
 
 pub struct Context<'a, E>
@@ -197,7 +205,7 @@ where
     E: ExtensionField + Serialize + DeserializeOwned,
 {
     pub lookup_type: LookupType,
-    pub batch_commitment: BasefoldCommitmentWithWitness<E>,
+    pub batch_commitment: BasefoldCommitment<E>,
     pub circuit_witness: CircuitWitness<'a, E>,
     pub challenges: Vec<E>,
 }
@@ -276,27 +284,30 @@ where
         let params = Pcs::<E>::setup(1 << max_vars)?;
 
         let mut tmp_witness_storage = HashMap::new();
-
+        let mut commits_in_order = vec![];
         // For each step in the inference trace construct the witness MLEs and also batch commit to them so we can generate seperation challenges.
         trace.iter().try_for_each(|(step_input, step)| {
             let step_idx = step.id;
             match step.layer {
                 Layer::Dense(..) => Result::<(), anyhow::Error>::Ok(()),
                 Layer::Activation(Activation::Relu(..)) => {
-                    let mles = [step_input, step.output.as_slice()]
+                    let mle_evals = [step_input, step.output.as_slice()]
                         .iter()
                         .map(|val| {
-                            DenseMultilinearExtension::from_evaluations_vec(
-                                8,
-                                val.iter()
-                                    .map(|eval| eval.as_bases()[0])
-                                    .collect::<Vec<E::BaseField>>(),
-                            )
+                            val.iter()
+                                .map(|eval| eval.as_bases()[0])
+                                .collect::<Vec<E::BaseField>>()
                         })
+                        .collect::<Vec<Vec<E::BaseField>>>();
+                    let mles = mle_evals
+                        .iter()
+                        .map(|val| DenseMultilinearExtension::from_evaluations_slice(8, val))
                         .collect::<Vec<MLE<E>>>();
                     let (pp, _) = Pcs::<E>::trim(params.clone(), 1 << 8)?;
-                    let batch_commit = Pcs::<E>::batch_commit(&pp, &mles)?;
-                    tmp_witness_storage.insert(step_idx, (LookupType::Relu, batch_commit));
+                    let batch_commit = Pcs::<E>::batch_commit(&pp, &mles)?.to_commitment();
+                    commits_in_order.extend_from_slice(batch_commit.root().0.as_slice());
+                    tmp_witness_storage
+                        .insert(step_idx, (LookupType::Relu, batch_commit, mle_evals));
                     Ok(())
                 }
                 Layer::Requant(requant) => {
@@ -342,10 +353,11 @@ where
                             DenseMultilinearExtension::from_evaluations_slice(num_vars, evals)
                         })
                         .collect::<Vec<MLE<E>>>();
-                    let batch_commit = Pcs::<E>::batch_commit(&pp, &witness_mles)?;
+                    let batch_commit = Pcs::<E>::batch_commit(&pp, &witness_mles)?.to_commitment();
+                    commits_in_order.extend_from_slice(batch_commit.root().0.as_slice());
                     tmp_witness_storage.insert(
                         step_idx,
-                        (LookupType::Range(requant.right_shift as u8), batch_commit),
+                        (LookupType::Range(8), batch_commit, witness_evals),
                     );
                     Ok(())
                 }
@@ -354,36 +366,172 @@ where
         })?;
 
         // Now we work out the final challenges using the commitments
-        let commits_in_order = tmp_witness_storage
-            .iter()
-            .flat_map(|(_, (_, comm))| comm.get_root_as().0)
-            .collect::<Vec<E::BaseField>>();
-
-        let constant_challenge = E::from(hash_n_to_hash_no_pad(&commits_in_order.clone()).0[0]);
+        let constant_challenge = E::from(hash_n_to_hash_no_pad(&commits_in_order).0[0]);
 
         let challenge_hash_map =
-            HashMap::<LookupType, (E, E)>::from_iter(self.circuits.keys().map(|lt| {
-                let extra = lt
-                    .get_dom_sep()
-                    .iter()
-                    .map(|byte| E::BaseField::from(*byte as u64))
-                    .collect::<Vec<E::BaseField>>();
-                let input = [commits_in_order.clone(), extra].concat();
-                let challenge = E::from(hash_n_to_hash_no_pad(&input).0[0]);
-                (lt.clone(), (challenge, constant_challenge))
+            HashMap::<LookupType, (E, E)>::from_iter(self.circuits.keys().filter_map(|lt| {
+                if !lt.is_final_table() {
+                    let extra = lt
+                        .get_dom_sep()
+                        .iter()
+                        .map(|byte| E::BaseField::from(*byte as u64))
+                        .collect::<Vec<E::BaseField>>();
+                    let input = [commits_in_order.clone(), extra].concat();
+                    let challenge = E::from(hash_n_to_hash_no_pad(&input).0[0]);
+                    Some((lt.clone(), (challenge, constant_challenge)))
+                } else {
+                    None
+                }
             }));
 
-        // Now we work out the witness for the final table GKR circuit
-        // let all_lookups = self.witness_ctx.witness_storage.values().flat_map(|(lt, comm)| {
-        //     let (challenge, const_challenge) = self.witness_ctx.challenge_storage.get(lt).ok_or(anyhow!("No challenges stored for lookup type: {:?}", lt))?;
-        //     let evals = comm.get_evals_ref().iter().map(|ft| match ft {
-        //         FieldType::Base(inner) => inner.clone(),
-        //         _ => unreachable!(),
-        //     }).collect::<Vec<Vec<E::BaseField>>>();
-        //     let size = comm.poly_size();
-        //     (0..size).map(|j| evals.iter().enumerate())
-        // })
-        todo!()
+        let (merged_lookups, to_store): (Vec<Vec<E>>, Vec<(StepIdx, LookupProverInfo<E>)>) =
+            tmp_witness_storage
+                .into_iter()
+                .map(|(step_idx, (lt, batch_commit, mle_evals))| {
+                    let (challenge, const_challenge) = challenge_hash_map
+                        .get(&lt)
+                        .expect("No challenges stored for lookup type");
+
+                    let challenge_powers = std::iter::successors(Some(*challenge), |previous| {
+                        Some(*previous * *challenge)
+                    })
+                    .take(mle_evals.len())
+                    .collect::<Vec<E>>();
+                    let merged_eval = (0..1 << batch_commit.num_vars().unwrap())
+                        .map(|i| {
+                            mle_evals
+                                .iter()
+                                .zip(challenge_powers.iter())
+                                .fold(*const_challenge, |acc, (col, current_chal)| {
+                                    acc + E::from(col[i]) * *current_chal
+                                })
+                        })
+                        .collect::<Vec<E>>();
+                    let circuit: &Circuit<E> = self
+                        .get_circuit(&lt)
+                        .expect("No circuit stored for lookup type");
+                    let mut circuit_witness =
+                        CircuitWitness::new(circuit, vec![*challenge, *const_challenge]);
+                    let wits_in = mle_evals
+                        .iter()
+                        .map(|evaluations| {
+                            DenseMultilinearExtension::from_evaluations_slice(
+                                evaluations.len().ilog2() as usize,
+                                evaluations,
+                            )
+                        })
+                        .collect::<Vec<DenseMultilinearExtension<E>>>();
+                    circuit_witness.add_instance(circuit, wits_in);
+
+                    let lookup_witness_data = LookupProverInfo {
+                        lookup_type: lt,
+                        batch_commitment: batch_commit,
+                        circuit_witness,
+                        challenges: vec![*challenge, *const_challenge],
+                    };
+
+                    (merged_eval, (step_idx, lookup_witness_data))
+                })
+                .unzip();
+
+        let flat_merged_lookups = merged_lookups.into_iter().flatten().collect::<Vec<E>>();
+        // This next bit is kind of hacky because it relies on us only quantizing to 8 bits and using Relu but it will do for now
+        // TODO: make this work in a more generic way
+        let final_witness = self
+            .circuits
+            .keys()
+            .find_map(|lt| {
+                if let LookupType::FinalTable(partition, vars) = lt {
+                    let table_evals = partition
+                        .iter()
+                        .flat_map(|col_count| match *col_count {
+                            1 => vec![
+                                (0..1 << vars)
+                                    .map(|j| E::BaseField::from(j as u64))
+                                    .collect::<Vec<E::BaseField>>(),
+                            ],
+                            2 => {
+                                let (in_col, out_col) = Relu::to_mle::<E>();
+                                [in_col, out_col]
+                                    .iter()
+                                    .map(|col| {
+                                        col.iter()
+                                            .map(|val| val.as_bases()[0])
+                                            .collect::<Vec<E::BaseField>>()
+                                    })
+                                    .collect::<Vec<Vec<E::BaseField>>>()
+                            }
+                            _ => unreachable!(),
+                        })
+                        .collect::<Vec<Vec<E::BaseField>>>();
+                    let mut challenges = vec![];
+                    partition.iter().for_each(|col_count| match col_count {
+                        1 => {
+                            let (challenge, const_challenge) =
+                                challenge_hash_map.get(&LookupType::Range(8)).unwrap();
+                            challenges.push(*challenge)
+                        }
+                        2 => {
+                            let (challenge, const_challenge) =
+                                challenge_hash_map.get(&LookupType::Relu).unwrap();
+                            challenges.push(*challenge);
+                            challenges.push(*challenge * *challenge)
+                        }
+                        _ => unreachable!(),
+                    });
+                    let final_challenge_index = challenges.len();
+                    challenge_hash_map
+                        .values()
+                        .take(1)
+                        .for_each(|(_, const_challenge)| challenges.push(*const_challenge));
+
+                    let merged_table = (0..1 << vars)
+                        .map(|i| {
+                            table_evals
+                                .iter()
+                                .enumerate()
+                                .fold(challenges[final_challenge_index], |acc, (j, col)| {
+                                    acc + challenges[j] * E::from(col[i])
+                                })
+                        })
+                        .collect::<Vec<E>>();
+                    let multiplicity_poly =
+                        compute_multiplicity_poly(&merged_table, &flat_merged_lookups);
+                    let mut table_polys = table_evals
+                        .iter()
+                        .map(|evaluations| {
+                            DenseMultilinearExtension::from_evaluations_slice(*vars, evaluations)
+                        })
+                        .collect::<Vec<DenseMultilinearExtension<E>>>();
+                    table_polys.push(multiplicity_poly.clone());
+
+                    let (pp, _) = Pcs::<E>::trim(params.clone(), 1 << vars).ok()?;
+                    let commitment = Pcs::<E>::commit(&pp, &multiplicity_poly)
+                        .ok()?
+                        .to_commitment();
+                    let step_idx = trace.last_step().id;
+                    let circuit = self
+                        .get_circuit(lt)
+                        .expect("Couldn't get final table circuit");
+                    let mut circuit_witness = CircuitWitness::new(circuit, challenges.clone());
+                    circuit_witness.add_instance(circuit, table_polys);
+
+                    let lookup_prover_info = LookupProverInfo {
+                        lookup_type: lt.clone(),
+                        batch_commitment: commitment,
+                        circuit_witness,
+                        challenges,
+                    };
+                    Some((step_idx, lookup_prover_info))
+                } else {
+                    None
+                }
+            })
+            .ok_or(anyhow!("Could not generate final circuit witness"))?;
+
+        self.witness_ctx.witness_storage =
+            BTreeMap::from_iter(to_store.into_iter().chain(std::iter::once(final_witness)));
+        Ok(())
     }
 }
 
@@ -460,7 +608,7 @@ where
             .collect::<Vec<Claim<E>>>();
 
         Ok(Proof {
-            commitment: batch_commitment.to_commitment(),
+            commitment: batch_commitment.clone(),
             claims,
             gkr_proof,
             numerators,
@@ -531,5 +679,61 @@ where
             numerators,
             denominators,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{default_transcript, iop::verifier::IO, model::Model};
+
+    use super::*;
+
+    type F = GoldilocksExt2;
+    use goldilocks::GoldilocksExt2;
+    use tracing_subscriber;
+
+    #[test]
+    fn test_prover_steps() {
+        tracing_subscriber::fmt::init();
+        let (model, input) = Model::random(4);
+        model.describe();
+        let trace = model.run::<F>(input.clone());
+        let output = trace.final_output();
+        let ctx = crate::iop::Context::generate(&model).expect("unable to generate context");
+        let mut lookup_context = Context::<F>::generate(&ctx);
+        lookup_context.initialise_witness_ctx(&trace).unwrap();
+        let mut prover_transcript = default_transcript();
+        let storage = lookup_context.witness_ctx.witness_storage.clone();
+        let lookup_proofs = storage
+            .iter()
+            .map(|(step, _)| {
+                lookup_context.witness_ctx.current_step = *step;
+                LogUp::prove(&lookup_context, &mut prover_transcript)
+            })
+            .collect::<Result<Vec<Proof<F>>, _>>()
+            .unwrap();
+
+        let mut numerators = vec![];
+        let mut denominators = vec![];
+        lookup_proofs.iter().for_each(|proof| {
+            numerators.extend_from_slice(proof.numerators.as_slice());
+            denominators.extend_from_slice(proof.denominators.as_slice());
+        });
+
+        let start_num = numerators[0];
+        let start_denom = denominators[0];
+
+        let (num, denom) = numerators.iter().zip(denominators.iter()).skip(1).fold(
+            (start_num, start_denom),
+            |(acc_num, acc_denom), (num_i, denom_i)| {
+                (
+                    acc_num * *denom_i + acc_denom * *num_i,
+                    acc_denom * *denom_i,
+                )
+            },
+        );
+
+        println!("final numerator: {:?}", num);
+        println!("final denominator: {:?}", denom);
     }
 }

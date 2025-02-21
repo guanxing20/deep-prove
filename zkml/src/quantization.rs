@@ -154,7 +154,7 @@ impl<const BIT_LEN: usize> QuantRange<BIT_LEN> {
         let slog = self.max_range.ilog2() as usize;
         let rlog = rhs.max_range.ilog2() as usize;
         let olog = output.max_range.ilog2() as usize;
-        slog + rlog - olog - BIT_LEN
+        olog + BIT_LEN - slog - rlog
     }
 }
 

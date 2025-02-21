@@ -9,6 +9,8 @@ use gkr::{
 use multilinear_extensions::mle::{DenseMultilinearExtension, MultilinearExtension};
 use simple_frontend::structs::{CellId, CircuitBuilder, ExtCellId};
 
+use crate::lookup::gkr_circuits::add_fractions;
+
 use super::super::utils::{compute_multiplicity_poly, merge_columns};
 use transcript::Transcript;
 /// Function that builds the LogUp GKR circuit, the input `num_vars` is the number of variables the `p` and `q` MLEs will have.
@@ -231,28 +233,6 @@ pub fn verify_logup<E: ExtensionField, T: Transcript<E>>(
         0,
         transcript,
     )
-}
-
-/// GKR circuit utility function to pairwise add a series of fractions of the form (p1, q1), (p2, q2) to obtain (p1q2+p2q1, q1q2)
-fn add_fractions<E: ExtensionField>(
-    cb: &mut CircuitBuilder<E>,
-    numerators: &[ExtCellId<E>],
-    denominators: &[ExtCellId<E>],
-) -> (Vec<ExtCellId<E>>, Vec<ExtCellId<E>>) {
-    numerators
-        .chunks(2)
-        .zip(denominators.chunks(2))
-        .map(|(nums, denoms)| {
-            let num_out = cb.create_ext_cell();
-            cb.mul2_ext(&num_out, &nums[0], &denoms[1], E::BaseField::ONE);
-
-            cb.mul2_ext(&num_out, &nums[1], &denoms[0], E::BaseField::ONE);
-
-            let denom_out = cb.create_ext_cell();
-            cb.mul2_ext(&denom_out, &denoms[0], &denoms[1], E::BaseField::ONE);
-            (num_out, denom_out)
-        })
-        .unzip()
 }
 
 #[cfg(test)]
