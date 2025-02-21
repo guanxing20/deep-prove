@@ -16,6 +16,7 @@ mod lookup;
 mod matrix;
 mod model;
 mod onnx_parse;
+mod tensor;
 
 mod testing;
 mod utils;
