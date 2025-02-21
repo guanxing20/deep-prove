@@ -94,7 +94,7 @@ impl<const BIT_LEN:usize > QuantRange<BIT_LEN> {
         //};
         // 
         // NOTE 2: this way is more precise
-        let ind_range = (MAX - MIN) as usize;
+        let ind_range = (MAX as i64 - MIN as i64) as usize;
         let output_range = Self {
             max_range: (ind_range.pow(2) + m.ncols() as usize * ind_range).next_power_of_two(),
         };

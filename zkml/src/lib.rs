@@ -8,16 +8,17 @@ use quantization::QuantInteger;
 use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use serde::{Deserialize, Serialize};
 use transcript::{BasicTranscript, Transcript};
-mod activation;
+pub mod activation;
 mod commit;
-mod iop;
-
+pub mod iop;
+pub use iop::{Context,Proof,prover::Prover,verifier::{IO,verify}};
 mod logup;
 mod quantization;
-mod lookup;
+pub mod lookup;
 mod matrix;
-mod model;
+pub mod model;
 mod onnx_parse;
+pub use onnx_parse::load_mlp;
 
 mod testing;
 mod utils;
@@ -25,7 +26,7 @@ mod utils;
 /// We allow higher range to account for overflow. Since we do a requant after each layer, we
 /// can support with i128 with 8 bits quant:
 /// 16 + log(c) = 64 => c = 2^48 columns in a dense layer
-type Element = i128;
+pub type Element = i128;
 
 /// Claim type to accumulate in this protocol, for a certain polynomial, known in the context.
 /// f(point) = eval

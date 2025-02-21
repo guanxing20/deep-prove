@@ -218,11 +218,9 @@ pub fn load_mlp<Q: Quantizer<Element>>(filepath: &str) -> Result<Model> {
 mod tests {
 
     use crate::testing::random_vector;
-
     use super::*;
 
     use goldilocks::GoldilocksExt2;
-    use tract_onnx::tract_hir::infer::rules::ElementProxy;
 
     // cargo test --release --package zkml -- onnx_parse::tests::test_tract --nocapture
 
