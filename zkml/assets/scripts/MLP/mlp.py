@@ -31,16 +31,16 @@ class Model(nn.Module):
 
         # First hidden layer
         layers.append(nn.Linear(input_size, layer_width))
-        layers.append(nn.ReLU())
+        #layers.append(nn.ReLU())
 
         # Additional hidden layers
         for _ in range(num_hidden - 1):
             layers.append(nn.Linear(layer_width, layer_width))
-            layers.append(nn.ReLU())
+            #layers.append(nn.ReLU())
 
         # Output layer
         layers.append(nn.Linear(layer_width, output_size))
-        layers.append(nn.ReLU())
+        #layers.append(nn.ReLU())
 
         # Combine layers into a Sequential module
         self.network = nn.Sequential(*layers)

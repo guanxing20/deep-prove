@@ -5,17 +5,17 @@ use super::{
 use crate::{
     activation::{Activation, Relu}, commit::{precommit, same_poly}, iop::{ActivationProof, DenseProof}, logup::{compute_multiplicity_poly, merge_columns}, lookup::{self, LookupProtocol}, matrix::Matrix, model::{InferenceStep, InferenceTrace, Layer}, quantization::Requant, vector_to_mle, Claim, Element, VectorTranscript
 };
-use anyhow::{Context as CC, anyhow, bail, ensure};
+use anyhow::{Context as CC, anyhow, bail};
 use ff_ext::ExtensionField;
 use itertools::Itertools;
 use log::{debug, warn};
-use mpcs::util::{field_type_as_ext, field_type_to_ext_vec};
+use mpcs::util::field_type_to_ext_vec;
 use multilinear_extensions::{
-    mle::{DenseMultilinearExtension, FieldType, IntoMLE, IntoMLEs, MultilinearExtension},
+    mle::{DenseMultilinearExtension, IntoMLE, MultilinearExtension},
     virtual_poly::VirtualPolynomial,
 };
 use serde::{Serialize, de::DeserializeOwned};
-use std::{cmp::max, marker::PhantomData};
+use std::{marker::PhantomData};
 use sumcheck::structs::{IOPProverState, IOPVerifierState};
 use transcript::Transcript;
 
@@ -213,6 +213,7 @@ where
         info: &DenseInfo<E>,
         matrix: &Matrix<Element>,
     ) -> anyhow::Result<Claim<E>> {
+        println!("PROVER: claim {:?}",last_claim);
         let (nrows, ncols) = (matrix.nrows(), matrix.ncols());
         assert_eq!(
             nrows,
@@ -234,7 +235,7 @@ where
         // endian so (rows,cols) is actually given in (cols, rows)
         // mat_mle.fix_variables_in_place_parallel(partial_point);
         mat_mle.fix_high_variables_in_place(&last_claim.point);
-        let input_mle = vector_to_mle(input.to_vec());
+        let input_mle = input.to_vec().into_mle();
 
         assert_eq!(mat_mle.num_vars(), input_mle.num_vars());
         let num_vars = input_mle.num_vars();
@@ -256,8 +257,8 @@ where
             // asserted_sum in this case is the output MLE evaluated at the random point
             let mle_output = vector_to_mle(output.to_vec());
             let claimed_sum = mle_output.evaluate(&last_claim.point);
+            debug_assert_eq!(claimed_sum, last_claim.eval,"sumcheck eval weird");
             debug_assert_eq!(claimed_sum, proof.extract_sum(), "sumcheck output weird");
-            debug_assert_eq!(claimed_sum, last_claim.eval);
 
             debug!("prover: claimed sum: {:?}", claimed_sum);
             let subclaim = IOPVerifierState::<E>::verify(claimed_sum, &proof, &vp.aux_info, &mut t);
@@ -314,7 +315,7 @@ where
         let r_i = self
             .transcript
             .read_challenges(trace.final_output().len().ilog2() as usize);
-        let y_i = vector_to_mle(trace.last_step().output.clone()).evaluate(&r_i);
+        let y_i = trace.last_step().output.clone().into_mle().evaluate(&r_i);
         let mut last_claim = Claim {
             point: r_i,
             eval: y_i,

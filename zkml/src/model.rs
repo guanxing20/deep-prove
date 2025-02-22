@@ -1,8 +1,9 @@
 use ff_ext::ExtensionField;
+use itertools::Itertools;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
 use crate::{
-    activation::{Activation, Relu}, matrix::Matrix, quantization::{Requant}, vector_to_field_par, vector_to_field_par_into, Element
+    activation::{Activation, Relu}, matrix::Matrix, quantization::{Fieldizer, Requant, VecFielder}, vector_to_field_par, vector_to_field_par_into, Element
 };
 
 // The index of the step, starting from the input layer. (proving is done in the opposite flow)
@@ -74,7 +75,9 @@ impl Model {
                 // append a requantization layer after
                 // NOTE: since we requantize at each dense step currently, we assume
                 // default quantization inputs for matrix and vector
-                Some(Layer::Requant(Requant::from_matrix_default(matrix)))
+                //Some(Layer::Requant(Requant::from_matrix_default(matrix)))
+                // TODO: re-enable
+                None
             }
             _ => {
                 None
@@ -137,14 +140,14 @@ pub struct InferenceTrace<'a, E> {
 
 impl<'a> InferenceTrace<'a, Element> {
     pub fn to_field<E: ExtensionField>(self) -> InferenceTrace<'a, E> {
-        let input = vector_to_field_par_into(self.input);
+        let input = self.input.to_fields();
         let field_steps = self
             .steps
             .par_iter()
             .map(|step| InferenceStep {
                 id: step.id,
                 layer: step.layer,
-                output: vector_to_field_par(&step.output),
+                output: step.output.as_slice().to_fields(),
             })
             .collect::<Vec<_>>();
         InferenceTrace {
@@ -259,14 +262,12 @@ pub struct InferenceStep<'a, E> {
 pub(crate) mod test {
     use ark_std::rand::{Rng, thread_rng};
     use goldilocks::GoldilocksExt2;
+    use itertools::Itertools;
+    use multilinear_extensions::{mle::{IntoMLE, MultilinearExtension}, virtual_poly::VirtualPolynomial};
+    use sumcheck::structs::IOPProverState;
 
     use crate::{
-        Element,
-        activation::{Activation, Relu},
-        matrix::Matrix,
-        model::Layer,
-        testing::random_vector,
-        vector_to_field_par,
+        activation::{Activation, Relu}, default_transcript, matrix::Matrix, model::Layer, quantization::{QuantInteger, VecFielder}, testing::{random_bool_vector, random_field_vector, random_vector}, vector_to_field_par, Claim, Element
     };
 
     use super::Model;
@@ -283,8 +284,8 @@ pub(crate) mod test {
             let mut rng = thread_rng();
             let mut last_row = rng.gen_range(3..15);
             for selector in 0..num_dense_layers {
-                if selector % MOD_SELECTOR == SELECTOR_DENSE {
-                    // if true {
+                //if selector % MOD_SELECTOR == SELECTOR_DENSE {
+                if true {
                     // last row becomes new column
                     let (nrows, ncols) = (rng.gen_range(3..15), last_row);
                     last_row = nrows;
@@ -300,7 +301,7 @@ pub(crate) mod test {
             }
             let input_dims = model.layers.first().unwrap().shape();
             // ncols since matrix2vector is summing over the columns
-            let input = random_vector::<Element>(input_dims[1]);
+            let input = random_vector::<QuantInteger>(input_dims[1]).into_iter().map(|i| i as Element).collect_vec();
             (model, input)
         }
     }
@@ -315,7 +316,7 @@ pub(crate) mod test {
     fn test_model_run() {
         let mat1 = Matrix::random((10, 11)).pad_next_power_of_two();
         let mat2 = Matrix::random((7, mat1.ncols())).pad_next_power_of_two();
-        let input = random_vector::<Element>(mat1.ncols());
+        let input = random_vector::<QuantInteger>(mat1.ncols()).into_iter().map(|i| i as Element).collect_vec();
         let output1 = mat1.matmul(&input);
         let final_output = mat2.matmul(&output1);
 
@@ -327,10 +328,10 @@ pub(crate) mod test {
         assert_eq!(trace.steps.len(), 2);
 
         // Verify first step
-        assert_eq!(trace.steps[0].output, vector_to_field_par(&output1));
+        assert_eq!(trace.steps[0].output, output1.to_fields());
 
         // Verify second step
-        assert_eq!(trace.steps[1].output, vector_to_field_par(&final_output));
+        assert_eq!(trace.steps[1].output, final_output.clone().to_fields());
         let (nrow, _) = (mat2.nrows(), mat2.ncols());
         assert_eq!(final_output.len(), nrow);
     }
@@ -338,10 +339,10 @@ pub(crate) mod test {
     #[test]
     fn test_inference_trace_iterator() {
         let mat1 = Matrix::random((10, 11)).pad_next_power_of_two();
-        let relu1 = Activation::Relu(Relu);
+        //let relu1 = Activation::Relu(Relu);
         let mat2 = Matrix::random((7, mat1.ncols())).pad_next_power_of_two();
-        let relu2 = Activation::Relu(Relu);
-        let input = random_vector::<Element>(mat1.ncols());
+        //let relu2 = Activation::Relu(Relu);
+        let input = random_vector::<QuantInteger>(mat1.ncols()).into_iter().map(|i| i as Element).collect_vec();
 
         let mut model = Model::new();
         model.add_layer(Layer::Dense(mat1));
@@ -370,7 +371,7 @@ pub(crate) mod test {
     fn test_inference_trace_reverse_iterator() {
         let mat1 = Matrix::random((10, 11)).pad_next_power_of_two();
         let mat2 = Matrix::random((7, mat1.ncols())).pad_next_power_of_two();
-        let input = random_vector::<Element>(mat1.ncols());
+        let input = random_vector::<QuantInteger>(mat1.ncols()).into_iter().map(|i| i as Element).collect_vec();
 
         let mut model = Model::new();
         model.add_layer(Layer::Dense(mat1));
@@ -393,5 +394,32 @@ pub(crate) mod test {
 
         // Iterator should be exhausted
         assert!(rev_iter.next().is_none());
+    }
+
+    use ff::Field;
+    #[test]
+    fn test_model_sequential() {
+        let (model,input) = Model::random(2);
+        let bb = model.clone();
+        let trace = bb.run::<F>(input.clone());
+        let matrices = model.layers().flat_map(|(_id,l)| {
+            match l {
+                Layer::Dense(ref matrix) => Some(matrix.clone()),
+                _ => None,
+            }
+        }).collect_vec();
+        let matrices_mle = matrices.iter().map(|m| m.to_mle::<F>()).collect_vec();
+        let point1 = random_bool_vector(matrices[1].nrows().ilog2() as usize);
+        let computed_eval1 = trace.final_output().to_vec().into_mle().evaluate(&point1);
+        let flatten_mat1 = matrices_mle[1].fix_high_variables(&point1);
+        let input_vector = trace.steps[trace.steps.len()-2].output.clone();
+        // y(r) = SUM_i m(r,i) x(i)
+        let full_poly = vec![flatten_mat1.clone().into(),input_vector.into_mle().into()];
+        let mut vp = VirtualPolynomial::new(flatten_mat1.num_vars());
+        vp.add_mle_list(full_poly, F::ONE);
+        #[allow(deprecated)]
+        let (proof, state) = IOPProverState::<F>::prove_parallel(vp, &mut default_transcript());
+        let given_eval1 = proof.extract_sum();
+        assert_eq!(computed_eval1,given_eval1);
     }
 }

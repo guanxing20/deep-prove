@@ -166,6 +166,8 @@ where
     E::BaseField: Serialize + DeserializeOwned,
     E: Serialize + DeserializeOwned,
 {
+
+    println!("VERIFIER: claim {:?}",last_claim);
     // TODO: currently that API can panic - should remove panic for error
     let subclaim =
         IOPVerifierState::<E>::verify(last_claim.eval, &proof.sumcheck, &info.poly_aux, t);

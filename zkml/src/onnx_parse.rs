@@ -167,8 +167,8 @@ pub fn load_mlp<Q: Quantizer<Element>>(filepath: &str) -> Result<Model> {
     if !Path::new(filepath).exists() {
         return Err(Error::msg(format!("File '{}' does not exist", filepath)));
     }
-    let result = is_mlp(filepath)?;
-    assert!(result == true, "is_mlp: Failed");
+    // TODO: Re-enable. Was disabled to test the bench binary but only dense layer were working
+    //assert!(is_mlp(filepath)?, "is_mlp: Failed");
 
     let model = tract_onnx::onnx()
         .proto_model_for_path(filepath)

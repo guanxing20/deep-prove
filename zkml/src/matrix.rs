@@ -8,7 +8,7 @@ use rayon::iter::{
     IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator, ParallelIterator,
 };
 
-use crate::{Element, testing::random_vector, to_bit_sequence_le};
+use crate::{quantization::QuantInteger, testing::random_vector, to_bit_sequence_le, Element};
 
 #[derive(Clone, Debug)]
 pub struct Matrix<E> {
@@ -111,8 +111,9 @@ impl Matrix<Element> {
     /// NOTE: doesn't take a rng as argument because to generate it in parallel it needs be sync +
     /// sync which is not true for basic rng core.
     pub fn random((rows, cols): (usize, usize)) -> Self {
-        let coeffs = random_vector::<Element>(rows * cols)
+        let coeffs = random_vector::<QuantInteger>(rows * cols)
             .into_par_iter()
+            .map(|r| r as Element )
             .chunks(cols)
             .collect();
         Self {
@@ -276,4 +277,6 @@ mod test {
         let result = trans_mat.is_equal(&res);
         assert!(result == true);
     }
+
+    
 }

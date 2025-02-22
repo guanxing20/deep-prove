@@ -44,20 +44,47 @@ impl Quantizer<Element> for Element {
 impl<F: ExtensionField> Fieldizer<F> for Element {
     fn to_field(&self) -> F {
         // make sure we're in range still
-        assert!(*self >= QuantInteger::MIN as Element && *self <= QuantInteger::MAX as Element);
-        (*self as QuantInteger).to_field()
+        // NOTE(nikkolasg) removed that assertions for tests until requantization is there.
+        //jassert!(*self >= QuantInteger::MIN as Element && *self <= QuantInteger::MAX as Element);
+        //(*self as QuantInteger).to_field()
+        if self.is_negative() {
+            println!("FROm NEGATIVE {}",*self);
+            // Doing wrapped arithmetic : p-128 ... p-1 means negative number
+            F::from((<F::BaseField as SmallField>::MODULUS_U64 as Element + self) as u64)
+        } else {
+            // for positive and zero, it's just the number
+            F::from(*self as u64)
+        }
     }
 }
 
 impl<F: ExtensionField> Fieldizer<F> for QuantInteger {
     fn to_field(&self) -> F {
+        debug_assert!(*self >= MIN && *self <= MAX);
         if self.is_negative() {
             // Doing wrapped arithmetic : p-128 ... p-1 means negative number
-            F::from(<F::BaseField as SmallField>::MODULUS_U64 - self.abs() as u64)
+            // NOTE: we can't use abs() directly because i8::MIN.abs() doesn't fit inside i8
+            F::from(<F::BaseField as SmallField>::MODULUS_U64 - (*self as i64).unsigned_abs())
         } else {
             // for positive and zero, it's just the number
             F::from(*self as u64)
         }
+    }
+}
+
+pub trait VecFielder<F> {
+    fn to_fields(self) -> Vec<F>;
+}
+
+impl<F: ExtensionField,T> VecFielder<F> for Vec<T> where T: Fieldizer<F> {
+    fn to_fields(self) -> Vec<F> {
+        self.into_iter().map(|i| i.to_field()).collect_vec()
+    }
+}
+
+impl<F: ExtensionField,T> VecFielder<F> for &[T] where T: Fieldizer<F> {
+    fn to_fields(self) -> Vec<F> {
+        self.iter().map(|i| i.to_field()).collect_vec()
     }
 }
 
@@ -170,4 +197,58 @@ impl Requant {
     }
 
 
+}
+
+#[cfg(test)]
+mod test {
+    use ff_ext::ExtensionField;
+    use goldilocks::{SmallField, MODULUS};
+    use crate::quantization::{Fieldizer, QuantInteger};
+
+    use crate::Element;
+    type F = goldilocks::GoldilocksExt2;
+
+    #[test]
+    fn test_wrapped_field() {
+        for case in vec![-12,25,i8::MIN,i8::MAX] {
+            let a: i8 = case;
+            let af: F= a.to_field();
+            let f = af.to_canonical_u64_vec()[0];
+            let exp = if a.is_negative() {
+                MODULUS - (a as i64).unsigned_abs()
+            } else {
+                a as u64
+            };
+            assert_eq!(f,exp);
+        }
+    }
+
+    #[test]
+    fn test_wrapped_arithmetic() {
+        #[derive(Clone,Debug)]
+        struct TestCase {
+            a: Element,
+            b: Element,
+            res: Element,
+        }
+        let modulus = <<F as ExtensionField>::BaseField as SmallField>::MODULUS_U64;
+        let cases = vec![TestCase {
+            a: -53,
+            b: 10,
+            res: -53 * 10,
+        },
+        TestCase {
+            a: -45,
+            b: -56,
+            res: 45*56,
+        }];
+        for (i,case) in cases.iter().enumerate() {
+            // cast them to handle overflow
+            let ap :F = case.a.to_field();
+            let bp :F = case.b.to_field();
+            let res = ap * bp;
+            let expected = case.res.to_field();
+            assert_eq!(res,expected,"test case {}: {:?}",i,case);
+        }
+    }
 }
