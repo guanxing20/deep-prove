@@ -6,7 +6,9 @@ use csv::{ReaderBuilder, WriterBuilder};
 use goldilocks::GoldilocksExt2;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
+use serde_json::Number;
 use zkml::{argmax, default_transcript, load_mlp, lookup::LogUp, vector_to_field_par, verify, Context, Element, Prover, IO};
+use zkml::quantization::Quantizer;
 
 type F = GoldilocksExt2;
 
@@ -30,8 +32,8 @@ pub fn main() -> anyhow::Result<()> {
 
 #[derive(Serialize,Deserialize)]
 struct InputJSON {
-    input_data: Vec<f64>,
-    output_data: Vec<f64>,
+    input_data: Vec<Vec<f64>>,
+    output_data: Vec<Vec<f64>>,
 }
 
 impl InputJSON {
@@ -45,15 +47,16 @@ impl InputJSON {
     }
     // poor's man validation
     fn validate(&self) -> anyhow::Result<()> {
-        let rrange = (-1.0,1.0);
-        let input_isreal = self.input_data.iter().all(|v| *v >= rrange.0 && *v <= rrange.1);
-        let output_isreal = self.output_data.iter().all(|v| *v >= rrange.0 && *v <= rrange.1);
+        let rrange = (-1.0..=1.0);
+        ensure!(self.input_data.len() == 1);
+        let input_isreal = self.input_data[0].iter().all(|v| rrange.contains(v));
+        let output_isreal = self.output_data[0].iter().all(|v| rrange.contains(v));
         ensure!(input_isreal && output_isreal ,"can only support real model so far (input + output)");
         Ok(())
     }
-    fn to_elements(self) -> (Vec<Element>,Vec<Element>) {
-        let inputs = self.input_data.into_iter().map(|e| e as Element).collect_vec();
-        let outputs = self.output_data.into_iter().map(|e| e as Element).collect_vec();
+    fn to_elements(mut self) -> (Vec<Element>,Vec<Element>) {
+        let inputs = self.input_data.remove(0).into_iter().map(|e| Element::from_f32_unsafe(&(e as f32))).collect_vec();
+        let outputs = self.output_data.remove(0).into_iter().map(|e| Element::from_f32_unsafe(&(e as f32))).collect_vec();
         (inputs,outputs)
     }
 }
@@ -61,9 +64,9 @@ impl InputJSON {
 fn run(args: Args) -> anyhow::Result<()> {
     let mut bencher = CSVBencher::from_headers(vec!["load_model","setup","inference","proving","verifying","accuracy"]);
     println!("[+] Reading onnx model");
-    let model = bencher.r("load_model", || load_mlp::<Element>(&args.onnx))?;
+    let model = bencher.r("load_model", || load_mlp::<Element>(&args.onnx)).context("loading model:")?;
     println!("[+] Reading input/output from pytorch");
-    let (input,given_output) = InputJSON::from(&args.io)?;
+    let (input,given_output) = InputJSON::from(&args.io).context("loading input:")?;
 
     println!("[+] Generating context for proving");
     let ctx = bencher.r("setup",|| Context::<F>::generate(&model).expect("unable to generate context"));

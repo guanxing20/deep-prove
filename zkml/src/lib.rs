@@ -13,7 +13,7 @@ mod commit;
 pub mod iop;
 pub use iop::{Context,Proof,prover::Prover,verifier::{IO,verify}};
 mod logup;
-mod quantization;
+pub mod quantization;
 pub mod lookup;
 mod matrix;
 pub mod model;
