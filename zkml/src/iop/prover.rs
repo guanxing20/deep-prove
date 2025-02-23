@@ -67,7 +67,7 @@ where
         step: &InferenceStep<'b, E>,
         info: &StepInfo<E>,
     ) -> anyhow::Result<Claim<E>> {
-        println!("PROVER: proving layer {}", step.layer.to_string());
+        println!("PROVER: proving layer {}", step.layer.describe());
         match (step.layer, info) {
             (Layer::Dense(matrix), StepInfo::Dense(info)) => {
                 // NOTE: here we treat the ID of the step AS the ID of the polynomial. THat's okay because we only care
@@ -83,7 +83,7 @@ where
             }
             _ => bail!(
                 "inconsistent proof step {} and info step {} from ctx",
-                step.layer.to_string(),
+                step.layer.describe(),
                 info.variant_name()
             ),
         }

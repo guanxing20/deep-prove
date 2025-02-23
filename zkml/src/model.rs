@@ -41,10 +41,10 @@ impl Layer {
             Layer::Requant(info) => info.shape(),
         }
     }
-    pub fn to_string(&self) -> String {
+    pub fn describe(&self) -> String {
         match self {
             Layer::Dense(ref matrix) => {
-                format!("Dense: ({},{})", matrix.nrows(), matrix.ncols())
+                format!("Dense: ({},{}) : {}", matrix.nrows(), matrix.ncols(),matrix.fmt_integer())
             }
             Layer::Activation(Activation::Relu(_)) => {
                 format!("RELU: {}", 1 << Relu::num_vars())
@@ -121,7 +121,7 @@ impl Model {
     pub fn describe(&self) {
         println!("MATRIX description:");
         for (idx, layer) in self.layers() {
-            println!("\t- {}: {:?}", idx, layer.to_string());
+            println!("\t- {}: {}", idx, layer.describe());
         }
         println!("\n");
     }
@@ -400,6 +400,8 @@ pub(crate) mod test {
     #[test]
     fn test_model_sequential() {
         let (model,input) = Model::random(2);
+        model.describe();
+        println!("INPUT: {:?}",input);
         let bb = model.clone();
         let trace = bb.run::<F>(input.clone());
         let matrices = model.layers().flat_map(|(_id,l)| {
@@ -410,6 +412,7 @@ pub(crate) mod test {
         }).collect_vec();
         let matrices_mle = matrices.iter().map(|m| m.to_mle::<F>()).collect_vec();
         let point1 = random_bool_vector(matrices[1].nrows().ilog2() as usize);
+        println!("point1: {:?}",point1);
         let computed_eval1 = trace.final_output().to_vec().into_mle().evaluate(&point1);
         let flatten_mat1 = matrices_mle[1].fix_high_variables(&point1);
         let input_vector = trace.steps[trace.steps.len()-2].output.clone();
@@ -418,8 +421,10 @@ pub(crate) mod test {
         let mut vp = VirtualPolynomial::new(flatten_mat1.num_vars());
         vp.add_mle_list(full_poly, F::ONE);
         #[allow(deprecated)]
-        let (proof, state) = IOPProverState::<F>::prove_parallel(vp, &mut default_transcript());
+        let (proof, state) = IOPProverState::<F>::prove_parallel(vp.clone(), &mut default_transcript());
+        let (p2,s2) = IOPProverState::prove_batch_polys(1, vec![vp], &mut default_transcript());
         let given_eval1 = proof.extract_sum();
+        assert_eq!(p2.extract_sum(),proof.extract_sum());
         assert_eq!(computed_eval1,given_eval1);
     }
 }
