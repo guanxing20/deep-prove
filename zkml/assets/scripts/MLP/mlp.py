@@ -12,6 +12,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
 import tqdm
+from sklearn.preprocessing import MinMaxScaler
 
 # Load the iris data
 iris = load_iris()
@@ -50,12 +51,23 @@ class Model(nn.Module):
 
 
 model = Model(num_hidden=1, layer_width=20)
+# Extract input features
+X = dataset[dataset.columns[0:4]].values
+y = dataset.target
 
+# Normalize inputs to [-1,1] range
+scaler = MinMaxScaler(feature_range=(-1, 1))
+X = scaler.fit_transform(X)
+
+# Train-test split after normalization
 train_X, test_X, train_y, test_y = train_test_split(
-    dataset[dataset.columns[0:4]].values,  # use columns 0-4 as X
-    dataset.target,  # use target as y
-    test_size=0.2  # use 20% of data for testing
+    X, y, test_size=0.2
 )
+#train_X, test_X, train_y, test_y = train_test_split(
+#    dataset[dataset.columns[0:4]].values,  # use columns 0-4 as X
+#    dataset.target,  # use target as y
+#    test_size=0.2  # use 20% of data for testing
+#)
 print("Divided the data into testing and training.")
 
 loss_fn = nn.CrossEntropyLoss()

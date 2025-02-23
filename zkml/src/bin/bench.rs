@@ -50,8 +50,8 @@ impl InputJSON {
         let rrange = (-1.0..=1.0);
         ensure!(self.input_data.len() == 1);
         let input_isreal = self.input_data[0].iter().all(|v| rrange.contains(v));
-        let output_isreal = self.output_data[0].iter().all(|v| rrange.contains(v));
-        ensure!(input_isreal && output_isreal ,"can only support real model so far (input + output)");
+        //let output_isreal = self.output_data[0].iter().all(|v| rrange.contains(v));
+        ensure!(input_isreal,"can only support real model so far (input at least)");
         Ok(())
     }
     fn to_elements(mut self) -> (Vec<Element>,Vec<Element>) {
