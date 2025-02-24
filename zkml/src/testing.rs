@@ -5,7 +5,7 @@ use ark_std::rand::{
 use ff_ext::ExtensionField;
 use itertools::Itertools;
 
-use crate::Element;
+use crate::{Element, tensor::Tensor};
 
 pub fn random_vector<T>(n: usize) -> Vec<T>
 where
@@ -13,6 +13,15 @@ where
 {
     let mut rng = thread_rng();
     (0..n).map(|_| rng.gen::<T>()).collect_vec()
+}
+
+pub fn random_tensor(shape: &Vec<usize>) -> Tensor<Element> {
+    let mut rng = thread_rng();
+    let n = shape.iter().product::<usize>();
+    Tensor::new(
+        shape.clone(),
+        (0..n).map(|_| rng.gen::<u8>() as Element).collect_vec(),
+    )
 }
 
 pub fn random_vector_seed(n: usize, seed: Option<u64>) -> Vec<Element> {
