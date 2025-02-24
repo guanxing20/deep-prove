@@ -153,7 +153,7 @@ mod test {
     }
 
     fn test_model_run_helper<L: LookupProtocol<E>>() -> anyhow::Result<()> {
-        let filepath = "assets/model.onnx";
+        let filepath = "assets/scripts/mlp/mlp-model.onnx";
         let model = load_mlp::<Element>(&filepath).unwrap();
         println!("[+] Loaded onnx file");
         let ctx = Context::<E>::generate(&model).expect("unable to generate context");
@@ -162,6 +162,7 @@ mod test {
         let shape = model.input_shape();
         assert_eq!(shape.len(), 1);
         let input = random_vector::<QuantInteger>(shape[0]).into_iter().map(|i| i as Element).collect_vec();
+        let input = model.prepare_input(input);
 
         let trace = model.run(input.clone());
         let output = trace.final_output().to_vec();
