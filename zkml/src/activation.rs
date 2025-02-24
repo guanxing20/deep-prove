@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     Element,
     quantization::{self, BIT_LEN, Fieldizer, ZERO},
+    tensor::Tensor,
 };
 
 /// Context holding information related to the lookup tables used in the proving
@@ -36,7 +37,7 @@ pub enum Activation {
 }
 
 impl Activation {
-    pub fn op(&self, input: &[Element]) -> Vec<Element> {
+    pub fn op(&self, input: &Tensor<Element>) -> Tensor<Element> {
         match self {
             Activation::Relu(relu) => relu.op(input),
         }
@@ -73,11 +74,15 @@ impl Relu {
             .unzip()
     }
 
-    pub fn op(&self, input: &[Element]) -> Vec<Element> {
-        input
-            .par_iter()
-            .map(|e| Self::apply(*e))
-            .collect::<Vec<_>>()
+    pub fn op(&self, input: &Tensor<Element>) -> Tensor<Element> {
+        Tensor::new(
+            input.dims(),
+            input
+                .get_data()
+                .par_iter()
+                .map(|e| Self::apply(*e))
+                .collect::<Vec<_>>(),
+        )
     }
 
     #[inline(always)]
@@ -138,10 +143,15 @@ mod test {
         );
         assert_eq!(input_mle.num_vars(), output_mle.num_vars());
         assert_eq!(input_mle.num_vars(), Relu::num_vars());
-        let inputs = random_vector::<Element>(10);
+        let inputs = Tensor::<Element>::random(vec![10]);
         let outputs = relu.op(&inputs);
-        assert_eq!(inputs.len(), outputs.len());
-        for (idx, (input, output)) in inputs.iter().zip(outputs.iter()).enumerate() {
+        assert_eq!(inputs.dims(), outputs.dims());
+        for (idx, (input, output)) in inputs
+            .get_data()
+            .iter()
+            .zip(outputs.get_data().iter())
+            .enumerate()
+        {
             // here putting input works because every random input is a u8, so it's already within [0;256] so
             // its value "is" the index. Normally if this is not true, we should get the index of the row corresponding to that input
             let idx_vars = to_bit_sequence_le(*input as usize, Relu::num_vars())

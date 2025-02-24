@@ -1,11 +1,10 @@
-use anyhow::{bail, ensure};
+use anyhow::bail;
 use ark_std::rand::{self, SeedableRng, rngs::StdRng, thread_rng};
 use ff::Field;
 use ff_ext::ExtensionField;
 use goldilocks::GoldilocksExt2;
 use itertools::Itertools;
 use multilinear_extensions::mle::DenseMultilinearExtension;
-// use num_traits::Zero;
 use rayon::{
     iter::{
         IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator,
@@ -13,7 +12,10 @@ use rayon::{
     },
     slice::ParallelSliceMut,
 };
-use std::{cmp::PartialEq, fmt, fmt::Write};
+use std::{
+    cmp::PartialEq,
+    fmt::{self},
+};
 
 use crate::{
     Element,
@@ -21,35 +23,13 @@ use crate::{
     to_bit_sequence_le,
 };
 
-pub trait Zero {
-    fn zero() -> Self;
-}
-
-impl Zero for Element {
-    fn zero() -> Self {
-        0
-    }
-}
-
-impl<T: ExtensionField> Zero for T {
-    fn zero() -> Self {
-        ExtensionField::from(0 as u64)
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct Tensor<T> {
     data: Vec<T>,
     shape: Vec<usize>,
 }
 
-impl<T> Tensor<T>
-where
-    T: Copy + Clone + Send + Sync + Zero,
-    T: std::iter::Sum,
-    T: std::ops::Add<Output = T> + std::ops::Sub<Output = T> + std::ops::Mul<Output = T>,
-    // T: std::ops::Add<Output = T> + std::ops::Sub<Output = T> + std::ops::Mul<Output = T>,
-{
+impl<T> Tensor<T> {
     /// Create a new tensor with given shape and data
     pub fn new(shape: Vec<usize>, data: Vec<T>) -> Self {
         assert!(
@@ -65,15 +45,52 @@ where
         self.shape.clone()
     }
 
-    /// Create a tensor filled with zeros
-    pub fn zeros(shape: Vec<usize>) -> Self {
-        let size = shape.iter().product();
-        Self {
-            data: vec![T::zero(); size],
-            shape,
-        }
+    /// Is vector
+    pub fn is_vector(&self) -> bool {
+        self.dims().len() == 1
     }
 
+    /// Is matrix
+    pub fn is_matrix(&self) -> bool {
+        self.dims().len() == 2
+    }
+
+    /// Get the number of rows from the matrix
+    pub fn nrows_2d(&self) -> usize {
+        assert!(self.is_matrix(), "Tensor is not a matrix");
+        let dims = self.dims();
+        return dims[0];
+    }
+
+    /// Get the number of cols from the matrix
+    pub fn ncols_2d(&self) -> usize {
+        assert!(self.is_matrix(), "Tensor is not a matrix");
+        let dims = self.dims();
+        return dims[1];
+    }
+
+    /// Returns the number of boolean variables needed to address any row, and any columns
+    pub fn num_vars_2d(&self) -> (usize, usize) {
+        assert!(self.is_matrix(), "Tensor is not a matrix");
+        (
+            self.nrows_2d().ilog2() as usize,
+            self.ncols_2d().ilog2() as usize,
+        )
+    }
+
+    ///
+    pub fn get_data(&self) -> &[T] {
+        &self.data
+    }
+}
+
+impl<T> Tensor<T>
+where
+    T: Copy + Clone + Send + Sync,
+    T: std::iter::Sum,
+    T: std::ops::Add<Output = T> + std::ops::Sub<Output = T> + std::ops::Mul<Output = T>,
+    T: std::default::Default,
+{
     /// Element-wise addition
     pub fn add(&self, other: &Tensor<T>) -> Tensor<T> {
         assert!(self.shape == other.shape, "Shape mismatch for addition.");
@@ -127,16 +144,6 @@ where
         }
     }
 
-    /// Is vector
-    pub fn is_vector(&self) -> bool {
-        self.dims().len() == 1
-    }
-
-    /// Is matrix
-    pub fn is_matrix(&self) -> bool {
-        self.dims().len() == 2
-    }
-
     pub fn from_coeffs_2d(data: Vec<Vec<T>>) -> anyhow::Result<Self> {
         let n_rows = data.len();
         let n_cols = data.first().expect("at least one row in a matrix").len();
@@ -148,29 +155,6 @@ where
         };
         let shape = vec![n_rows, n_cols];
         Ok(Self { data, shape })
-    }
-
-    /// Get the number of rows from the matrix
-    pub fn nrows_2d(&self) -> usize {
-        assert!(self.is_matrix(), "Tensor is not a matrix");
-        let dims = self.dims();
-        return dims[0];
-    }
-
-    /// Get the number of cols from the matrix
-    pub fn ncols_2d(&self) -> usize {
-        assert!(self.is_matrix(), "Tensor is not a matrix");
-        let dims = self.dims();
-        return dims[1];
-    }
-
-    /// Returns the number of boolean variables needed to address any row, and any columns
-    pub fn num_vars_2d(&self) -> (usize, usize) {
-        assert!(self.is_matrix(), "Tensor is not a matrix");
-        (
-            self.nrows_2d().ilog2() as usize,
-            self.ncols_2d().ilog2() as usize,
-        )
     }
 
     /// Returns the boolean iterator indicating the given row in the right endianness to be
@@ -197,6 +181,16 @@ where
         self.col_to_boolean_2d(col)
             .chain(self.row_to_boolean_2d(row))
             .collect_vec()
+    }
+
+    /// Create a tensor filled with zeros
+    pub fn zeros(shape: Vec<usize>) -> Self {
+        let size = shape.iter().product();
+        Self {
+            // data: vec![T::zero(); size],
+            data: vec![Default::default(); size],
+            shape,
+        }
     }
 
     pub fn pad_next_power_of_two_2d(mut self) -> Self {
@@ -343,8 +337,37 @@ where
         result
     }
 
-    pub fn get_data(&self) -> &[T] {
-        &self.data
+    /// Reshapes the matrix to have at least the specified dimensions while preserving all data.
+    pub fn reshape_to_fit_inplace_2d(&mut self, new_shape: Vec<usize>) {
+        let old_rows = self.nrows_2d();
+        let old_cols = self.ncols_2d();
+
+        assert!(new_shape.len() == 2, "Tensor is not matrix");
+        let new_rows = new_shape[0];
+        let new_cols = new_shape[1];
+        // Ensure we never lose information by requiring the new dimensions to be at least
+        // as large as the original ones
+        assert!(
+            new_rows >= old_rows,
+            "Cannot shrink matrix rows from {} to {} - would lose information",
+            old_rows,
+            new_rows
+        );
+        assert!(
+            new_cols >= old_cols,
+            "Cannot shrink matrix columns from {} to {} - would lose information",
+            old_cols,
+            new_cols
+        );
+
+        let mut result = Tensor::<T>::zeros(new_shape);
+
+        // Create a new matrix with expanded dimensions
+        for i in 0..old_rows {
+            for j in 0..old_cols {
+                result.data[i * old_rows + j] = self.data[i * old_rows + j];
+            }
+        }
     }
 }
 
@@ -555,6 +578,12 @@ mod test {
         pub fn get(&self, i: usize, j: usize) -> Element {
             self.data[i * self.dims()[1] + j]
         }
+        pub fn random_eval_point(&self) -> Vec<E> {
+            let mut rng = thread_rng();
+            let r = rng.gen_range(0..self.nrows_2d());
+            let c = rng.gen_range(0..self.ncols_2d());
+            self.position_to_boolean_2d(r, c)
+        }
     }
 
     #[test]
@@ -605,11 +634,26 @@ mod test {
         let vector_a_data = vec![10 as Element, 20, 30];
         let vector_b_data = vec![140 as Element, 320, 500];
 
-        let matrix_a_data = matrix_a_data.iter().map(|x| E::from(*x)).collect_vec();
-        let matrix_b_data = matrix_b_data.iter().map(|x| E::from(*x)).collect_vec();
-        let matrix_c_data = matrix_c_data.iter().map(|x| E::from(*x)).collect_vec();
-        let vector_a_data = vector_a_data.iter().map(|x| E::from(*x)).collect_vec();
-        let vector_b_data = vector_b_data.iter().map(|x| E::from(*x)).collect_vec();
+        let matrix_a_data = matrix_a_data
+            .iter()
+            .map(|x| E::from(*x as u64))
+            .collect_vec();
+        let matrix_b_data = matrix_b_data
+            .iter()
+            .map(|x| E::from(*x as u64))
+            .collect_vec();
+        let matrix_c_data = matrix_c_data
+            .iter()
+            .map(|x| E::from(*x as u64))
+            .collect_vec();
+        let vector_a_data = vector_a_data
+            .iter()
+            .map(|x| E::from(*x as u64))
+            .collect_vec();
+        let vector_b_data = vector_b_data
+            .iter()
+            .map(|x| E::from(*x as u64))
+            .collect_vec();
 
         let matrix = Tensor::new(vec![3usize, 3], matrix_a_data.clone());
         let vector = Tensor::new(vec![3usize], vector_a_data);

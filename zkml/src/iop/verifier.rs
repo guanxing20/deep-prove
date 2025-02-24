@@ -3,6 +3,7 @@ use crate::{
     commit::{self, precommit, same_poly},
     iop::{StepProof, context::StepInfo, precommit::PolyID},
     lookup::{self, LookupProtocol},
+    tensor::Tensor,
 };
 use anyhow::{Context as CC, bail, ensure};
 use ff_ext::ExtensionField;
@@ -21,13 +22,13 @@ use super::{
 /// What the verifier must have besides the proof
 pub struct IO<E> {
     /// Input of the inference given to the model
-    input: Vec<E>,
+    input: Tensor<E>,
     /// Output of the inference
-    output: Vec<E>,
+    output: Tensor<E>,
 }
 
 impl<E> IO<E> {
-    pub fn new(input: Vec<E>, output: Vec<E>) -> Self {
+    pub fn new(input: Tensor<E>, output: Tensor<E>) -> Self {
         Self { input, output }
     }
 }
@@ -47,11 +48,11 @@ where
     let mut witness_verifier = precommit::CommitVerifier::new();
     ctx.write_to_transcript(transcript)?;
     // 0. Derive the first randomness
-    let first_randomness = transcript.read_challenges(io.output.len().ilog2() as usize);
+    let first_randomness = transcript.read_challenges(io.output.get_data().len().ilog2() as usize);
     // 1. For the output, we manually evaluate the MLE and check if it's the same as what prover
     //    gave. Note prover could ellude that but it's simpler to avoid that special check right
     //    now.
-    let output_mle = io.output.into_mle();
+    let output_mle = io.output.get_data().to_vec().into_mle();
     let computed_sum = output_mle.evaluate(&first_randomness);
     let mut output_claim = Claim {
         point: first_randomness,
@@ -102,7 +103,7 @@ where
         }
     }
     // 3. input verification: evaluating the input at the random evaluation point from the sumcheck
-    let input_mle = io.input.into_mle();
+    let input_mle = io.input.get_data().to_vec().into_mle();
     let computed_randomized_input = input_mle.evaluate(&output_claim.point);
     let given_randomized_input = output_claim.eval;
     ensure!(

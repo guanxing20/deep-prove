@@ -9,9 +9,9 @@ use crate::{
     iop::{ActivationProof, DenseProof},
     logup::{compute_multiplicity_poly, merge_columns},
     lookup::{self, LookupProtocol},
-    matrix::Matrix,
     model::{InferenceStep, InferenceTrace, Layer},
     quantization::Requant,
+    tensor::Tensor,
 };
 use anyhow::{Context as CC, anyhow, bail};
 use ff_ext::ExtensionField;
@@ -71,7 +71,7 @@ where
     fn prove_step<'b>(
         &mut self,
         last_claim: Claim<E>,
-        input: &[E],
+        input: &Tensor<E>,
         step: &InferenceStep<'b, E>,
         info: &StepInfo<E>,
     ) -> anyhow::Result<Claim<E>> {
@@ -100,8 +100,8 @@ where
     fn prove_requant(
         &self,
         last_claim: Claim<E>,
-        input: &[E],
-        output: &[E],
+        input: &Tensor<E>,
+        output: &Tensor<E>,
         info: &Requant,
     ) -> anyhow::Result<Claim<E>> {
         unimplemented!()
@@ -111,14 +111,14 @@ where
         &mut self,
         last_claim: Claim<E>,
         // input to the relu
-        input: &[E],
+        input: &Tensor<E>,
         // output of the relu
-        output: &[E],
+        output: &Tensor<E>,
         info: &ActivationInfo,
     ) -> anyhow::Result<Claim<E>> {
         assert_eq!(
-            input.len(),
-            output.len(),
+            input.get_data().len(),
+            output.get_data().len(),
             "input/output of lookup don't have same size"
         );
 
@@ -127,7 +127,7 @@ where
             let (relu_one, relu_two) = Relu::to_mle::<E>();
 
             let mut bool_out = true;
-            for (in_val, out_val) in input.iter().zip(output.iter()) {
+            for (in_val, out_val) in input.get_data().iter().zip(output.get_data().iter()) {
                 let pos = relu_one
                     .iter()
                     .position(|relu_one_val| *relu_one_val == *in_val)
@@ -142,7 +142,7 @@ where
         // First call the lookup with the right arguments:
         // * table mle: one mle per column
         // * lookup mle: one mle per column, where the evals are just the list of inputs and output ordered by access
-        let lookup_num_vars = input.len().ilog2() as usize;
+        let lookup_num_vars = input.get_data().len().ilog2() as usize;
         let table_mles = self
             .ctx
             .activation
@@ -162,6 +162,7 @@ where
             DenseMultilinearExtension::<E>::from_evaluations_vec(
                 lookup_num_vars,
                 input
+                    .get_data()
                     .iter()
                     .map(|val| val.as_bases()[0])
                     .collect::<Vec<E::BaseField>>(),
@@ -169,6 +170,7 @@ where
             DenseMultilinearExtension::<E>::from_evaluations_vec(
                 lookup_num_vars,
                 output
+                    .get_data()
                     .iter()
                     .map(|val| val.as_bases()[0])
                     .collect::<Vec<E::BaseField>>(),
@@ -176,15 +178,20 @@ where
         ];
 
         // TODO: replace via proper lookup protocol
-        let lookup_ctx =
-            lookup::Context::<E>::new(Relu::num_vars(), input.len().ilog2() as usize, 1, 1);
+        let lookup_ctx = lookup::Context::<E>::new(
+            Relu::num_vars(),
+            input.get_data().len().ilog2() as usize,
+            1,
+            1,
+        );
         let lookup_proof = L::prove(&lookup_ctx, table_mles, lookup_mles, self.transcript)?;
         // in our case, the output of the RELU is ALSO the same poly that previous proving
         // step (likely dense) has "outputted" to evaluate at a random point. So here we accumulate the two claims,
         // the one from previous proving step and the one given by the lookup protocol into one. Since they're claims
         // about the same poly, we can use the "same_poly" protocol.
         let same_poly_ctx = same_poly::Context::<E>::new(info.num_vars);
-        let mut same_poly_prover = same_poly::Prover::<E>::new(output.to_vec().into_mle());
+        let mut same_poly_prover =
+            same_poly::Prover::<E>::new(output.get_data().to_vec().into_mle());
         same_poly_prover.add_claim(last_claim)?;
         let input_claim = lookup_proof.input_column_claims()[0].clone();
         let output_claim = lookup_proof.output_column_claims()[0].clone();
@@ -202,7 +209,7 @@ where
         // TODO: clarify that bit - here cheating because of fake lookup protocol, but inconsistency
         // between padded input and real inputsize. Next proving step REQUIRES the real input size.
         let next_claim = {
-            let input_mle = input.to_vec().into_mle();
+            let input_mle = input.get_data().to_vec().into_mle();
             let point = input_claim.pad(input_mle.num_vars()).point;
             let eval = input_mle.evaluate(&point);
             Claim::new(point, eval)
@@ -221,35 +228,39 @@ where
         // last random claim made
         last_claim: Claim<E>,
         // input to the dense layer
-        input: &[E],
+        input: &Tensor<E>,
         // output of dense layer evaluation
-        output: &[E],
+        output: &Tensor<E>,
         info: &DenseInfo<E>,
-        matrix: &Matrix<Element>,
+        matrix: &Tensor<Element>,
     ) -> anyhow::Result<Claim<E>> {
-        //println!("PROVER: claim {:?}", last_claim);
-        let (nrows, ncols) = (matrix.nrows(), matrix.ncols());
+        // println!("PROVER: claim {:?}", last_claim);
+        let (nrows, ncols) = (matrix.nrows_2d(), matrix.ncols_2d());
         assert_eq!(
             nrows,
-            output.len(),
+            output.get_data().len(),
             "dense proving: nrows {} vs output {}",
             nrows,
-            output.len()
+            output.get_data().len()
         );
         assert_eq!(
             nrows.ilog2() as usize,
             last_claim.point.len(),
             "something's wrong with the randomness"
         );
-        assert_eq!(ncols, input.len(), "something's wrong with the input");
+        assert_eq!(
+            ncols,
+            input.get_data().len(),
+            "something's wrong with the input"
+        );
         // contruct the MLE combining the input and the matrix
-        let mut mat_mle = matrix.to_mle();
+        let mut mat_mle = matrix.to_mle_2d();
         // fix the variables from the random input
         // NOTE: here we must fix the HIGH variables because the MLE is addressing in little
         // endian so (rows,cols) is actually given in (cols, rows)
         // mat_mle.fix_variables_in_place_parallel(partial_point);
         mat_mle.fix_high_variables_in_place(&last_claim.point);
-        let input_mle = input.to_vec().into_mle();
+        let input_mle = input.get_data().to_vec().into_mle();
 
         assert_eq!(mat_mle.num_vars(), input_mle.num_vars());
         let num_vars = input_mle.num_vars();
@@ -269,7 +280,7 @@ where
             let mut vp = VirtualPolynomial::<E>::new(num_vars);
             vp.add_mle_list(vec![mat_mle.into(), input_mle.into()], E::ONE);
             // asserted_sum in this case is the output MLE evaluated at the random point
-            let mle_output = output.to_vec().into_mle();
+            let mle_output = output.get_data().to_vec().into_mle();
             let claimed_sum = mle_output.evaluate(&last_claim.point);
             debug_assert_eq!(claimed_sum, last_claim.eval, "sumcheck eval weird");
             debug_assert_eq!(claimed_sum, proof.extract_sum(), "sumcheck output weird");
@@ -328,8 +339,15 @@ where
         // input vector.
         let r_i = self
             .transcript
-            .read_challenges(trace.final_output().len().ilog2() as usize);
-        let y_i = trace.last_step().output.clone().into_mle().evaluate(&r_i);
+            .read_challenges(trace.final_output().get_data().len().ilog2() as usize);
+        let y_i = trace
+            .last_step()
+            .output
+            .clone()
+            .get_data()
+            .to_vec()
+            .into_mle()
+            .evaluate(&r_i);
         let mut last_claim = Claim {
             point: r_i,
             eval: y_i,
@@ -382,10 +400,11 @@ where
                                     .collect::<Vec<E::BaseField>>(),
                             )
                         });
-                        let lookup_columns = [input, step.output.as_slice()].map(|evals| {
+                        let lookup_columns = [input, &step.output].map(|evals| {
                             DenseMultilinearExtension::<E>::from_evaluations_vec(
                                 info.num_vars,
                                 evals
+                                    .get_data()
                                     .iter()
                                     .map(|val| val.as_bases()[0])
                                     .collect::<Vec<E::BaseField>>(),
@@ -399,7 +418,7 @@ where
                         let multiplicity_poly_evals = field_type_to_ext_vec(m_poly.evaluations());
 
                         Some(vec![
-                            (info.poly_id, step.output.clone()),
+                            (info.poly_id, step.output.clone().get_data().to_vec()),
                             (info.multiplicity_poly_id, multiplicity_poly_evals),
                         ])
                     }

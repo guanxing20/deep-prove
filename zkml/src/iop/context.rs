@@ -97,8 +97,8 @@ where
                 match layer {
                     Layer::Dense(matrix) => {
                         // construct dimension of the polynomial given to the sumcheck
-                        let ncols = matrix.ncols();
-                        last_output_size = matrix.nrows();
+                        let ncols = matrix.ncols_2d();
+                        last_output_size = matrix.nrows_2d();
                         // each poly is only two polynomial right now: matrix and vector
                         // for matrix, each time we fix the variables related to rows so we are only left
                         // with the variables related to columns

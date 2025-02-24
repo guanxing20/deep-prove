@@ -18,7 +18,8 @@ use serde::{Deserialize, Serialize};
 use zkml::{
     Context, Element, IO, Prover, argmax, default_transcript, load_mlp,
     lookup::LogUp,
-    quantization::{Quantizer, VecFielder},
+    quantization::{Quantizer, TensorFielder},
+    tensor::Tensor,
     verify,
 };
 
@@ -110,6 +111,7 @@ fn run(args: Args) -> anyhow::Result<()> {
     model.describe();
     info!("[+] Reading input/output from pytorch");
     let (input, given_output) = InputJSON::from(&args.io).context("loading input:")?;
+    let input = Tensor::<Element>::new(vec![input.len()], input);
     let input = model.prepare_input(input);
     // model.describe();
     // println!("input: {:?}",input);
@@ -123,8 +125,11 @@ fn run(args: Args) -> anyhow::Result<()> {
 
     info!("[+] Running inference");
     let trace = bencher.r(CSV_INFERENCE, || model.run(input.clone()));
-    let output = trace.final_output().to_vec();
-    bencher.set(CSV_ACCURACY, compare(&given_output, &output));
+    let output = trace.final_output().clone();
+    bencher.set(
+        CSV_ACCURACY,
+        compare(&given_output, &output.get_data().to_vec()),
+    );
 
     info!("[+] Running prover");
     let mut prover_transcript = default_transcript();
@@ -135,7 +140,7 @@ fn run(args: Args) -> anyhow::Result<()> {
 
     info!("[+] Running verifier");
     let mut verifier_transcript = default_transcript();
-    let io = IO::new(input.to_fields(), output.to_vec());
+    let io = IO::new(input.to_fields(), output);
     bencher.r(CSV_VERIFYING, || {
         verify::<_, _, LogUp<F>>(ctx, proof, io, &mut verifier_transcript).expect("invalid proof")
     });
@@ -174,7 +179,7 @@ impl CSVBencher {
         let now = time::Instant::now();
         let output = f();
         let elapsed = now.elapsed().as_millis();
-        info!("STEP: {} took {}ms",column, elapsed);
+        info!("STEP: {} took {}ms", column, elapsed);
         self.data.insert(column.to_string(), elapsed.to_string());
         output
     }

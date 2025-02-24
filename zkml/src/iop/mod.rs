@@ -83,7 +83,7 @@ pub struct RequantProof<E: ExtensionField> {
 mod test {
     use goldilocks::GoldilocksExt2;
 
-    use crate::{default_transcript, lookup::LogUp, model::Model, quantization::VecFielder};
+    use crate::{default_transcript, lookup::LogUp, model::Model, quantization::TensorFielder};
 
     use super::{
         Context,
@@ -100,9 +100,9 @@ mod test {
         let (model, input) = Model::random(2);
         model.describe();
         let trace = model.run::<F>(input.clone());
-        let output = trace.final_output();
+        let output = trace.final_output().clone();
         let ctx = Context::generate(&model).expect("unable to generate context");
-        let io = IO::new(input.to_fields(), output.to_vec());
+        let io = IO::new(input.to_fields(), output);
         let mut prover_transcript = default_transcript();
         let prover = Prover::<_, _, LogUp<GoldilocksExt2>>::new(&ctx, &mut prover_transcript);
         let proof = prover.prove(trace).expect("unable to generate proof");

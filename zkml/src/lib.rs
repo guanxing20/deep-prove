@@ -18,13 +18,13 @@ pub use iop::{
 };
 mod logup;
 pub mod lookup;
-mod matrix;
+// mod matrix;
 pub mod model;
 mod onnx_parse;
 pub mod quantization;
 pub use onnx_parse::load_mlp;
-mod tensor;
 
+pub mod tensor;
 mod testing;
 mod utils;
 
@@ -88,23 +88,6 @@ pub fn default_transcript<E: ExtensionField>() -> BasicTranscript<E> {
     BasicTranscript::new(b"m2vec")
 }
 
-// pub fn tensor_to_field_par<E: ExtensionField>(v: &Tensor<Element>) -> Tensor<E> {
-//     let shape = v.dims();
-//     let data = v
-//         .get_data()
-//         .par_iter()
-//         .map(|x| E::from(*x as u64))
-//         .collect::<Vec<_>>();
-//     let result = Tensor::new(shape, data);
-//     result
-// }
-
-// pub fn tensor_to_field_par_into<E: ExtensionField>(v: Tensor<Element>) -> Tensor<E> {
-//     v.into_par_iter()
-//         .map(|v| E::from(v as u64))
-//         .collect::<Vec<_>>()
-// }
-
 pub fn pad_vector<E: ExtensionField>(mut v: Vec<E>) -> Vec<E> {
     if !v.len().is_power_of_two() {
         v.resize(v.len().next_power_of_two(), E::ZERO);
@@ -164,7 +147,8 @@ mod test {
         },
         lookup::{LogUp, LookupProtocol},
         onnx_parse::load_mlp,
-        quantization::{QuantInteger, VecFielder},
+        quantization::{QuantInteger, TensorFielder},
+        tensor::Tensor,
         testing::random_vector,
         to_bit_sequence_le,
     };
@@ -187,14 +171,11 @@ mod test {
 
         let shape = model.input_shape();
         assert_eq!(shape.len(), 1);
-        let input = random_vector::<QuantInteger>(shape[0])
-            .into_iter()
-            .map(|i| i as Element)
-            .collect_vec();
+        let input = Tensor::<Element>::random(vec![shape[0]]);
         let input = model.prepare_input(input);
 
         let trace = model.run(input.clone());
-        let output = trace.final_output().to_vec();
+        let output = trace.final_output().clone();
         println!("[+] Run inference. Result: {:?}", output);
 
         let mut prover_transcript = default_transcript();
@@ -203,7 +184,7 @@ mod test {
         let proof = prover.prove(trace).expect("unable to generate proof");
 
         let mut verifier_transcript = default_transcript();
-        let io = IO::new(input.to_fields(), output.to_vec());
+        let io = IO::new(input.to_fields(), output);
         verify::<_, _, L>(ctx, proof, io, &mut verifier_transcript).expect("invalid proof");
         println!("[+] Verify proof: valid");
         Ok(())

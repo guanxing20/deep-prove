@@ -6,7 +6,7 @@ use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use transcript::Transcript;
 
-use crate::{Element, matrix::Matrix};
+use crate::{Element, tensor::Tensor};
 
 /// The type of integer we do arithmetics over. Note this is NOT the type we run the inference over actually
 /// We run it over `[Element]` since we need to handle overflows. But all the quantization and requantization
@@ -49,7 +49,7 @@ impl<F: ExtensionField> Fieldizer<F> for Element {
         //(*self as QuantInteger).to_field()
         if self.is_negative() {
             // Doing wrapped arithmetic : p-128 ... p-1 means negative number
-            //F::from((<F::BaseField as SmallField>::MODULUS_U64 as Element + self) as u64)
+            // F::from((<F::BaseField as SmallField>::MODULUS_U64 as Element + self) as u64)
             F::ZERO - F::from(self.unsigned_abs() as u64)
         } else {
             // for positive and zero, it's just the number
@@ -80,25 +80,44 @@ impl<F: ExtensionField> Fieldizer<F> for u8 {
     }
 }
 
-pub trait VecFielder<F> {
-    fn to_fields(self) -> Vec<F>;
+// pub trait VecFielder<F> {
+//     fn to_fields(self) -> Vec<F>;
+// }
+
+// impl<F: ExtensionField, T> VecFielder<F> for Vec<T>
+// where
+//     T: Fieldizer<F>,
+// {
+//     fn to_fields(self) -> Vec<F> {
+//         self.into_iter().map(|i| i.to_field()).collect_vec()
+//     }
+// }
+
+// impl<F: ExtensionField, T> VecFielder<F> for &[T]
+// where
+//     T: Fieldizer<F>,
+// {
+//     fn to_fields(self) -> Vec<F> {
+//         self.iter().map(|i| i.to_field()).collect_vec()
+//     }
+// }
+
+pub trait TensorFielder<F> {
+    fn to_fields(self) -> Tensor<F>;
 }
 
-impl<F: ExtensionField, T> VecFielder<F> for Vec<T>
+impl<F: ExtensionField, T> TensorFielder<F> for Tensor<T>
 where
     T: Fieldizer<F>,
 {
-    fn to_fields(self) -> Vec<F> {
-        self.into_iter().map(|i| i.to_field()).collect_vec()
-    }
-}
-
-impl<F: ExtensionField, T> VecFielder<F> for &[T]
-where
-    T: Fieldizer<F>,
-{
-    fn to_fields(self) -> Vec<F> {
-        self.iter().map(|i| i.to_field()).collect_vec()
+    fn to_fields(self) -> Tensor<F> {
+        Tensor::new(
+            self.dims(),
+            self.get_data()
+                .into_iter()
+                .map(|i| i.to_field())
+                .collect_vec(),
+        )
     }
 }
 
@@ -124,7 +143,7 @@ impl<const BIT_LEN: usize> QuantRange<BIT_LEN> {
     ///       and it assumes these are the default range.
     /// NOTE2: It is using the simplfiication of finding the max range which is a power of two
     /// so we only need to "right shift" during requant
-    fn compute_matvec_quant(m: &Matrix<Element>) -> Requant {
+    fn compute_matvec_quant(m: &crate::tensor::Tensor<Element>) -> Requant {
         // NOTE this way below is correct but is taking a huge loss
         // BIT_LEN * 2 because of multiplication
         // log because of additions
@@ -135,7 +154,7 @@ impl<const BIT_LEN: usize> QuantRange<BIT_LEN> {
         // NOTE 2: this way is more precise
         let ind_range = (MAX as i64 - MIN as i64) as usize;
         let output_range = Self {
-            max_range: (ind_range.pow(2) + m.ncols() as usize * ind_range).next_power_of_two(),
+            max_range: (ind_range.pow(2) + m.ncols_2d() as usize * ind_range).next_power_of_two(),
         };
         let shift = Self::default().mult_shift(&Self::default(), &output_range);
         Requant {
@@ -166,12 +185,15 @@ pub struct Requant {
 }
 
 impl Requant {
-    pub fn from_matrix_default(m: &Matrix<Element>) -> Self {
+    pub fn from_matrix_default(m: &crate::tensor::Tensor<Element>) -> Self {
         QuantRange::<BIT_LEN>::compute_matvec_quant(m)
     }
 
-    pub fn op(&self, input: &[Element]) -> Vec<Element> {
-        input.iter().map(|e| self.apply(e)).collect_vec()
+    pub fn op(&self, input: &crate::tensor::Tensor<Element>) -> crate::tensor::Tensor<Element> {
+        crate::tensor::Tensor::<Element>::new(
+            input.dims(),
+            input.get_data().iter().map(|e| self.apply(e)).collect_vec(),
+        )
     }
 
     #[inline(always)]

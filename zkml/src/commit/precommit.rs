@@ -65,7 +65,7 @@ where
         Self::generate(
             m.layers()
                 .flat_map(|(id, l)| match l {
-                    Layer::Dense(m) => Some((id, m.evals())),
+                    Layer::Dense(m) => Some((id, m.evals_2d())),
                     _ => None,
                 })
                 .collect_vec(),
@@ -109,7 +109,12 @@ where
             .collect_vec();
         assert!(flattened.len().is_power_of_two());
         let num_vars = flattened.len().ilog2() as usize;
-        println!("COMMIT STEP E: individual lengths: {:?}, sum.ilog2() = {}, flattened.len() = {}", lenlens, sum_lenlens, flattened.len());
+        println!(
+            "COMMIT STEP E: individual lengths: {:?}, sum.ilog2() = {}, flattened.len() = {}",
+            lenlens,
+            sum_lenlens,
+            flattened.len()
+        );
         let params = Pcs::setup(flattened.len()).expect("unable to setup commitment");
         println!("COMMIT STEP F");
         let (pp, vp) = Pcs::trim(params, flattened.len()).unwrap();
@@ -391,9 +396,8 @@ mod test {
 
     use super::compute_betas_eval;
     use crate::{
-        Claim, default_transcript,
-        matrix::Matrix,
-        pad_vector,
+        Claim, Element, default_transcript, pad_vector,
+        tensor::Tensor,
         testing::{random_bool_vector, random_field_vector},
     };
 
@@ -408,21 +412,25 @@ mod test {
         // let range = thread_rng().gen_range(3..15);
         let matrices = (0..n_poly)
             .map(|_| {
-                Matrix::random((rng.gen_range(3..24), rng.gen_range(3..24))).pad_next_power_of_two()
+                Tensor::<Element>::random(vec![
+                    rng.gen_range(3..24) as usize,
+                    rng.gen_range(3..24) as usize,
+                ])
+                .pad_next_power_of_two_2d()
             })
             .enumerate()
             .collect_vec();
         let claims = (0..n_poly)
             .map(|i| {
                 let point = matrices[i].1.random_eval_point();
-                let eval = matrices[i].1.to_mle().evaluate(&point);
+                let eval = matrices[i].1.to_mle_2d().evaluate(&point);
                 (matrices[i].0, point, eval)
             })
             .collect_vec();
 
         let polys = matrices
             .iter()
-            .map(|(id, m)| (*id, m.evals()))
+            .map(|(id, m)| (*id, m.evals_2d()))
             .collect_vec();
         let ctx = Context::generate(polys.clone())?;
 

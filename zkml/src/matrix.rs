@@ -23,7 +23,7 @@ pub struct Matrix<E> {
 }
 
 impl Matrix<Element> {
-    pub fn from_coeffs(coeffs: Vec<Vec<Element>>) -> anyhow::Result<Self> {
+    pub fn from_coeffs_2d(coeffs: Vec<Vec<Element>>) -> anyhow::Result<Self> {
         let n_rows = coeffs.len();
         let n_cols = coeffs.first().expect("at least one row in a matrix").len();
         for row in &coeffs {
@@ -35,54 +35,57 @@ impl Matrix<Element> {
         })
     }
     pub fn shape(&self) -> Vec<usize> {
-        vec![self.nrows(), self.ncols()]
+        vec![self.nrows_2d(), self.ncols_2d()]
     }
 
     /// From a given row and a given column, return the vector of field elements in the right
     /// format to evaluate the MLE.
     /// little endian so we need to read cols before rows
-    pub fn position_to_boolean<F: ExtensionField>(&self, row: usize, col: usize) -> Vec<F> {
-        self.col_to_boolean(col)
-            .chain(self.row_to_boolean(row))
+    pub fn position_to_boolean_2d<F: ExtensionField>(&self, row: usize, col: usize) -> Vec<F> {
+        self.col_to_boolean_2d(col)
+            .chain(self.row_to_boolean_2d(row))
             .collect_vec()
     }
     /// Returns the boolean iterator indicating the given row in the right endianness to be
     /// evaluated by an MLE
-    pub fn row_to_boolean<F: ExtensionField>(&self, row: usize) -> impl Iterator<Item = F> {
-        let (nvars_rows, _) = self.num_vars();
+    pub fn row_to_boolean_2d<F: ExtensionField>(&self, row: usize) -> impl Iterator<Item = F> {
+        let (nvars_rows, _) = self.num_vars_2d();
         to_bit_sequence_le(row, nvars_rows).map(|b| F::from(b as u64))
     }
     /// Returns the boolean iterator indicating the given row in the right endianness to be
     /// evaluated by an MLE
-    pub fn col_to_boolean<F: ExtensionField>(&self, col: usize) -> impl Iterator<Item = F> {
-        let (_, nvars_col) = self.num_vars();
+    pub fn col_to_boolean_2d<F: ExtensionField>(&self, col: usize) -> impl Iterator<Item = F> {
+        let (_, nvars_col) = self.num_vars_2d();
         to_bit_sequence_le(col, nvars_col).map(|b| F::from(b as u64))
     }
 
     /// Returns the number of boolean variables needed to address any row, and any columns
-    pub fn num_vars(&self) -> (usize, usize) {
-        (self.nrows().ilog2() as usize, self.ncols().ilog2() as usize)
+    pub fn num_vars_2d(&self) -> (usize, usize) {
+        (
+            self.nrows_2d().ilog2() as usize,
+            self.ncols_2d().ilog2() as usize,
+        )
     }
 
     /// Returns a MLE of the matrix that can be evaluated.
-    pub fn to_mle<F: ExtensionField>(&self) -> DenseMultilinearExtension<F> {
+    pub fn to_mle_2d<F: ExtensionField>(&self) -> DenseMultilinearExtension<F> {
         assert!(
-            self.nrows().is_power_of_two(),
+            self.nrows_2d().is_power_of_two(),
             "number of rows {} is not a power of two",
-            self.nrows()
+            self.nrows_2d()
         );
         assert!(
-            self.ncols().is_power_of_two(),
+            self.ncols_2d().is_power_of_two(),
             "number of columns {} is not a power of two",
-            self.ncols()
+            self.ncols_2d()
         );
         // N variable to address 2^N rows and M variables to address 2^M columns
-        let num_vars = self.nrows().ilog2() + self.ncols().ilog2();
-        DenseMultilinearExtension::from_evaluations_ext_vec(num_vars as usize, self.evals())
+        let num_vars = self.nrows_2d().ilog2() + self.ncols_2d().ilog2();
+        DenseMultilinearExtension::from_evaluations_ext_vec(num_vars as usize, self.evals_2d())
     }
 
     /// Returns the evaluation point, in order for (row,col) addressing
-    pub fn evals<F: ExtensionField>(&self) -> Vec<F> {
+    pub fn evals_2d<F: ExtensionField>(&self) -> Vec<F> {
         self.coeffs
             .par_iter()
             .flatten()
@@ -90,18 +93,18 @@ impl Matrix<Element> {
             .collect()
     }
 
-    pub fn pad_next_power_of_two(mut self) -> Self {
+    pub fn pad_next_power_of_two_2d(mut self) -> Self {
         // assume the matrix is already well formed and there is always n_rows and n_cols
         // this is because we control the creation of the matrix in the first place
-        let new_rows = if self.nrows().is_power_of_two() {
-            self.nrows()
+        let new_rows = if self.nrows_2d().is_power_of_two() {
+            self.nrows_2d()
         } else {
-            self.nrows().next_power_of_two()
+            self.nrows_2d().next_power_of_two()
         };
-        let new_cols = if self.ncols().is_power_of_two() {
-            self.ncols()
+        let new_cols = if self.ncols_2d().is_power_of_two() {
+            self.ncols_2d()
         } else {
-            self.ncols().next_power_of_two()
+            self.ncols_2d().next_power_of_two()
         };
         self.dim = (new_rows, new_cols);
         // resize each row
@@ -130,16 +133,16 @@ impl Matrix<Element> {
             coeffs,
         }
     }
-    pub fn nrows(&self) -> usize {
+    pub fn nrows_2d(&self) -> usize {
         self.dim.0
     }
-    pub fn ncols(&self) -> usize {
+    pub fn ncols_2d(&self) -> usize {
         self.dim.1
     }
 
     pub fn fmt_integer(&self) -> String {
         let mut out = String::new();
-        writeln!(out, "Matrix({},{})", self.nrows(), self.ncols()).expect("...");
+        writeln!(out, "Matrix({},{})", self.nrows_2d(), self.ncols_2d()).expect("...");
         for (i, row) in self.coeffs.iter().enumerate() {
             writeln!(out, "{}: {:?}", i, row).expect("..");
         }
@@ -183,26 +186,28 @@ impl Matrix<Element> {
     }
 
     /// Reshapes the matrix to have at least the specified dimensions while preserving all data.
-    pub fn reshape_to_fit_inplace(&mut self, new_rows: usize, new_cols: usize) {
-        // Ensure we never lose information by requiring the new dimensions to be at least 
+    pub fn reshape_to_fit_inplace_2d(&mut self, new_rows: usize, new_cols: usize) {
+        // Ensure we never lose information by requiring the new dimensions to be at least
         // as large as the original ones
         assert!(
-            new_rows >= self.nrows(),
+            new_rows >= self.nrows_2d(),
             "Cannot shrink matrix rows from {} to {} - would lose information",
-            self.nrows(), new_rows
+            self.nrows_2d(),
+            new_rows
         );
         assert!(
-            new_cols >= self.ncols(),
+            new_cols >= self.ncols_2d(),
             "Cannot shrink matrix columns from {} to {} - would lose information",
-            self.ncols(), new_cols
+            self.ncols_2d(),
+            new_cols
         );
-        
+
         // Create a new matrix with expanded dimensions
         let new_coeffs: Vec<Vec<Element>> = (0..new_rows)
             .map(|i| {
                 (0..new_cols)
                     .map(|j| {
-                        if i < self.nrows() && j < self.ncols() {
+                        if i < self.nrows_2d() && j < self.ncols_2d() {
                             self.coeffs[i][j]
                         } else {
                             0
@@ -211,7 +216,7 @@ impl Matrix<Element> {
                     .collect()
             })
             .collect();
-        
+
         self.dim = (new_rows, new_cols);
         self.coeffs = new_coeffs;
     }
@@ -250,9 +255,9 @@ mod test {
         }
         pub fn random_eval_point(&self) -> Vec<E> {
             let mut rng = thread_rng();
-            let r = rng.gen_range(0..self.nrows());
-            let c = rng.gen_range(0..self.ncols());
-            self.position_to_boolean(r, c)
+            let r = rng.gen_range(0..self.nrows_2d());
+            let c = rng.gen_range(0..self.ncols_2d());
+            self.position_to_boolean_2d(r, c)
         }
     }
 
@@ -263,31 +268,31 @@ mod test {
         let mat = vec![vec![1, 2], vec![3, 4]];
         let x = vec![5, 6];
         let out = vec![17, 39];
-        let mat = Matrix::<Element>::from_coeffs(mat).unwrap();
+        let mat = Matrix::<Element>::from_coeffs_2d(mat).unwrap();
         let res = mat.matmul(&x);
         assert_eq!(out, res);
     }
 
     #[test]
     fn test_matrix_mle() {
-        let mat = Matrix::<Element>::random((3, 5)).pad_next_power_of_two();
+        let mat = Matrix::<Element>::random((3, 5)).pad_next_power_of_two_2d();
         println!("matrix: {}", mat.fmt_integer());
-        let mut mle = mat.clone().to_mle::<E>();
+        let mut mle = mat.clone().to_mle_2d::<E>();
         let (chosen_row, chosen_col) = (
             thread_rng().gen_range(0..mat.dim.0),
             thread_rng().gen_range(0..mat.dim.1),
         );
         let elem = mat.get(chosen_row, chosen_col);
         println!("(x,y) = ({},{}) ==> {:?}", chosen_row, chosen_col, elem);
-        let inputs = mat.position_to_boolean(chosen_row, chosen_col);
+        let inputs = mat.position_to_boolean_2d(chosen_row, chosen_col);
         let output = mle.evaluate(&inputs);
         assert_eq!(E::from(elem as u64), output);
 
         // now try to address one at a time, and starting by the row, which is the opposite order
         // of the boolean variables expected by the MLE API, given it's expecting in LE format.
-        let row_input = mat.row_to_boolean(chosen_row);
+        let row_input = mat.row_to_boolean_2d(chosen_row);
         mle.fix_high_variables_in_place(&row_input.collect_vec());
-        let col_input = mat.col_to_boolean(chosen_col);
+        let col_input = mat.col_to_boolean_2d(chosen_col);
         let output = mle.evaluate(&col_input.collect_vec());
         assert_eq!(E::from(elem as u64), output);
     }
@@ -304,7 +309,7 @@ mod test {
         let (n_rows, n_cols): (usize, usize) = (10, 10);
         let mat = Matrix::<Element>::random((n_rows, n_cols));
         let (new_rows, new_cols) = (n_rows.next_power_of_two(), n_cols.next_power_of_two());
-        let new_mat = mat.pad_next_power_of_two();
+        let new_mat = mat.pad_next_power_of_two_2d();
         new_mat.assert_structure((new_rows, new_cols));
     }
 
@@ -320,10 +325,10 @@ mod test {
     #[test]
     fn test_matrix_transpose() {
         let mat = vec![vec![1, 2], vec![3, 4], vec![5, 6]];
-        let mat = Matrix::<Element>::from_coeffs(mat).unwrap();
+        let mat = Matrix::<Element>::from_coeffs_2d(mat).unwrap();
 
         let trans_mat = vec![vec![1, 3, 5], vec![2, 4, 6]];
-        let trans_mat = Matrix::<Element>::from_coeffs(trans_mat).unwrap();
+        let trans_mat = Matrix::<Element>::from_coeffs_2d(trans_mat).unwrap();
         let res = mat.transpose();
         let result = trans_mat.is_equal(&res);
         assert!(result == true);
@@ -335,8 +340,8 @@ mod test {
     #[test]
     fn test_matrix_proving_sequential() {
         let nrows = 8;
-        let m = Matrix::random((nrows, nrows)).pad_next_power_of_two();
-        let mmle = m.to_mle();
+        let m = Matrix::random((nrows, nrows)).pad_next_power_of_two_2d();
+        let mmle = m.to_mle_2d();
         let input = random_vector::<QuantInteger>(nrows)
             .into_iter()
             .map(|i| i as Element)
