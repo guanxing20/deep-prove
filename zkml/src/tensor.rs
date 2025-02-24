@@ -1,8 +1,11 @@
 use anyhow::{bail, ensure};
+use ark_std::rand::{self, SeedableRng, rngs::StdRng, thread_rng};
+use ff::Field;
 use ff_ext::ExtensionField;
+use goldilocks::GoldilocksExt2;
 use itertools::Itertools;
 use multilinear_extensions::mle::DenseMultilinearExtension;
-use num_traits::Zero;
+// use num_traits::Zero;
 use rayon::{
     iter::{
         IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator,
@@ -18,6 +21,22 @@ use crate::{
     to_bit_sequence_le,
 };
 
+pub trait Zero {
+    fn zero() -> Self;
+}
+
+impl Zero for Element {
+    fn zero() -> Self {
+        0
+    }
+}
+
+impl<T: ExtensionField> Zero for T {
+    fn zero() -> Self {
+        ExtensionField::from(0 as u64)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Tensor<T> {
     data: Vec<T>,
@@ -29,9 +48,7 @@ where
     T: Copy + Clone + Send + Sync + Zero,
     T: std::iter::Sum,
     T: std::ops::Add<Output = T> + std::ops::Sub<Output = T> + std::ops::Mul<Output = T>,
-    for<'a> &'a T: std::ops::Add<Output = T>,
-    for<'a> &'a T: std::ops::Sub<Output = T>,
-    for<'a> &'a T: std::ops::Mul<Output = T>,
+    // T: std::ops::Add<Output = T> + std::ops::Sub<Output = T> + std::ops::Mul<Output = T>,
 {
     /// Create a new tensor with given shape and data
     pub fn new(shape: Vec<usize>, data: Vec<T>) -> Self {
@@ -66,7 +83,7 @@ where
                 .data
                 .iter()
                 .zip(other.data.iter())
-                .map(|(a, b)| a + b)
+                .map(|(a, b)| *a + *b)
                 .collect(),
         }
     }
@@ -80,7 +97,7 @@ where
                 .data
                 .iter()
                 .zip(other.data.iter())
-                .map(|(a, b)| a - b)
+                .map(|(a, b)| *a - *b)
                 .collect(),
         }
     }
@@ -97,7 +114,7 @@ where
                 .data
                 .iter()
                 .zip(other.data.iter())
-                .map(|(a, b)| a * b)
+                .map(|(a, b)| *a * *b)
                 .collect(),
         }
     }
@@ -106,7 +123,7 @@ where
     pub fn scalar_mul(&self, scalar: &T) -> Tensor<T> {
         Tensor {
             shape: self.shape.clone(),
-            data: self.data.iter().map(|x| x * scalar).collect(),
+            data: self.data.iter().map(|x| *x * *scalar).collect(),
         }
     }
 
@@ -400,6 +417,45 @@ impl PartialEq for Tensor<Element> {
     }
 }
 
+impl Tensor<GoldilocksExt2> {
+    /// Creates a random matrix with a given number of rows and cols.
+    /// NOTE: doesn't take a rng as argument because to generate it in parallel it needs be sync +
+    /// sync which is not true for basic rng core.
+    pub fn random(shape: Vec<usize>) -> Self {
+        let mut rng = thread_rng();
+        let size = shape.iter().product();
+        let data = (0..size)
+            .map(|_| GoldilocksExt2::random(&mut rng))
+            .collect_vec();
+
+        Self { data, shape }
+    }
+
+    /// Creates a random matrix with a given number of rows and cols.
+    /// NOTE: doesn't take a rng as argument because to generate it in parallel it needs be sync +
+    /// sync which is not true for basic rng core.
+    pub fn random_seed(shape: Vec<usize>, seed: Option<u64>) -> Self {
+        let seed = seed.unwrap_or(rand::random::<u64>()); // Use provided seed or default
+
+        let size = shape.iter().product();
+        let data = (0..size)
+            .into_par_iter()
+            .map(|i| {
+                let mut rng = StdRng::seed_from_u64(seed + i as u64);
+                GoldilocksExt2::random(&mut rng)
+            })
+            .collect::<Vec<GoldilocksExt2>>();
+
+        Self { data, shape }
+    }
+}
+
+impl PartialEq for Tensor<GoldilocksExt2> {
+    fn eq(&self, other: &Self) -> bool {
+        self.shape == other.shape && self.data == other.data
+    }
+}
+
 mod test {
     use ark_std::rand::{Rng, thread_rng};
     use goldilocks::GoldilocksExt2;
@@ -440,8 +496,6 @@ mod test {
             "Element-wise scalar multiplication failed."
         );
     }
-
-    type E = GoldilocksExt2;
 
     #[test]
     fn test_tensor_matvec() {
@@ -539,5 +593,41 @@ mod test {
             Tensor::new(vec![3, 4], vec![1, 2, 3, 10, 4, 5, 6, 20, 7, 8, 9, 30]),
             "Concatenate matrix vector as columns failed."
         );
+    }
+
+    type E = GoldilocksExt2;
+
+    #[test]
+    fn test_tensor_ext_ops() {
+        let matrix_a_data = vec![1 as Element, 2, 3, 4, 5, 6, 7, 8, 9];
+        let matrix_b_data = vec![10 as Element, 20, 30, 40, 50, 60, 70, 80, 90];
+        let matrix_c_data = vec![300 as Element, 360, 420, 660, 810, 960, 1020, 1260, 1500];
+        let vector_a_data = vec![10 as Element, 20, 30];
+        let vector_b_data = vec![140 as Element, 320, 500];
+
+        let matrix_a_data = matrix_a_data.iter().map(|x| E::from(*x)).collect_vec();
+        let matrix_b_data = matrix_b_data.iter().map(|x| E::from(*x)).collect_vec();
+        let matrix_c_data = matrix_c_data.iter().map(|x| E::from(*x)).collect_vec();
+        let vector_a_data = vector_a_data.iter().map(|x| E::from(*x)).collect_vec();
+        let vector_b_data = vector_b_data.iter().map(|x| E::from(*x)).collect_vec();
+
+        let matrix = Tensor::new(vec![3usize, 3], matrix_a_data.clone());
+        let vector = Tensor::new(vec![3usize], vector_a_data);
+        let vector_expected = Tensor::new(vec![3usize], vector_b_data);
+
+        let result = matrix.matvec(&vector);
+
+        assert_eq!(
+            result, vector_expected,
+            "Matrix-vector multiplication failed."
+        );
+
+        let matrix_a = Tensor::new(vec![3, 3], matrix_a_data);
+        let matrix_b = Tensor::new(vec![3, 3], matrix_b_data);
+        let matrix_c = Tensor::new(vec![3, 3], matrix_c_data);
+
+        let result = matrix_a.matmul(&matrix_b);
+
+        assert_eq!(result, matrix_c, "Matrix-matrix multiplication failed.");
     }
 }

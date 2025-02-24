@@ -88,6 +88,23 @@ pub fn default_transcript<E: ExtensionField>() -> BasicTranscript<E> {
     BasicTranscript::new(b"m2vec")
 }
 
+// pub fn tensor_to_field_par<E: ExtensionField>(v: &Tensor<Element>) -> Tensor<E> {
+//     let shape = v.dims();
+//     let data = v
+//         .get_data()
+//         .par_iter()
+//         .map(|x| E::from(*x as u64))
+//         .collect::<Vec<_>>();
+//     let result = Tensor::new(shape, data);
+//     result
+// }
+
+// pub fn tensor_to_field_par_into<E: ExtensionField>(v: Tensor<Element>) -> Tensor<E> {
+//     v.into_par_iter()
+//         .map(|v| E::from(v as u64))
+//         .collect::<Vec<_>>()
+// }
+
 pub fn pad_vector<E: ExtensionField>(mut v: Vec<E>) -> Vec<E> {
     if !v.len().is_power_of_two() {
         v.resize(v.len().next_power_of_two(), E::ZERO);
