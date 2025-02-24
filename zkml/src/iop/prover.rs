@@ -1,5 +1,5 @@
 use super::{
-    Context, Proof, StepProof,
+    Context, Proof, RequantProof, StepProof,
     context::{ActivationInfo, DenseInfo, StepInfo},
 };
 use crate::{
@@ -101,18 +101,60 @@ where
             ),
         };
 
-        self.lookup_ctx.witness_ctx.current_step += 1;
         claim
     }
 
     fn prove_requant(
-        &self,
+        &mut self,
         last_claim: Claim<E>,
         input: &[E],
         output: &[E],
         info: &Requant,
     ) -> anyhow::Result<Claim<E>> {
-        unimplemented!()
+        // Because we pad with zero columns (GKR prover needs a power of two number of instances)
+        // we work out how many of the claims we actually claim about.
+        let output_range_log = info.range.ilog2() as usize;
+        let after_op_range_log = info.after_range.ilog2() as usize;
+        let num_actual_claims = ((output_range_log - 1) / after_op_range_log) + 1;
+        let lookup_proof = L::prove(&self.lookup_ctx, self.transcript)?;
+
+        // We need to prove that the output of this step is the input to following activation function
+        let mut same_poly_prover = same_poly::Prover::<E>::new(output.to_vec().into_mle());
+        same_poly_prover.add_claim(last_claim)?;
+
+        let total_claims = lookup_proof.claims().len();
+        // The actual claims that we care about
+        let actual_claims = &lookup_proof.claims()[total_claims - 1 - num_actual_claims..];
+
+        let point = actual_claims[0].point.clone();
+
+        // Need to work out the constant values to add/subtract for this step
+        let max_bit = info.range << 1;
+        let max_bit = max_bit as u64;
+        let subtract = max_bit >> info.right_shift;
+
+        let first_claim = actual_claims.first().ok_or(anyhow!("No claims found"))?;
+        // Add the claim used in the activation function
+        let same_poly_ctx = same_poly::Context::<E>::new(point.len().ilog2() as usize);
+        same_poly_prover.add_claim(first_claim.clone())?;
+        let claim_acc_proof = same_poly_prover.prove(&same_poly_ctx, self.transcript)?;
+
+        let eval = E::from(info.right_shift as u64) * (first_claim.eval + E::from(subtract))
+            - E::from(max_bit)
+            + actual_claims
+                .iter()
+                .skip(1)
+                .rev()
+                .enumerate()
+                .fold(E::ZERO, |acc, (i, claim)| {
+                    acc + E::from(1u64 << i) * (claim.eval + E::from(128u64))
+                });
+
+        self.proofs.push(StepProof::Requant(RequantProof {
+            io_accumulation: claim_acc_proof,
+            lookup: lookup_proof,
+        }));
+        Ok(Claim { point, eval })
     }
 
     fn prove_relu(
@@ -148,43 +190,6 @@ where
         });
 
         // First call the lookup with the right arguments:
-        // * table mle: one mle per column
-        // * lookup mle: one mle per column, where the evals are just the list of inputs and output ordered by access
-        let lookup_num_vars = input.len().ilog2() as usize;
-        let table_mles = self
-            .ctx
-            .activation
-            .relu_polys()
-            .iter()
-            .map(|evals| {
-                DenseMultilinearExtension::from_evaluations_vec(
-                    Relu::num_vars(),
-                    evals
-                        .iter()
-                        .map(|val| val.as_bases()[0])
-                        .collect::<Vec<E::BaseField>>(),
-                )
-            })
-            .collect::<Vec<DenseMultilinearExtension<E>>>();
-        let lookup_mles = vec![
-            DenseMultilinearExtension::<E>::from_evaluations_vec(
-                lookup_num_vars,
-                input
-                    .iter()
-                    .map(|val| val.as_bases()[0])
-                    .collect::<Vec<E::BaseField>>(),
-            ),
-            DenseMultilinearExtension::<E>::from_evaluations_vec(
-                lookup_num_vars,
-                output
-                    .iter()
-                    .map(|val| val.as_bases()[0])
-                    .collect::<Vec<E::BaseField>>(),
-            ),
-        ];
-
-        // TODO: replace via proper lookup protocol
-
         let lookup_proof = L::prove(&self.lookup_ctx, self.transcript)?;
         // in our case, the output of the RELU is ALSO the same poly that previous proving
         // step (likely dense) has "outputted" to evaluate at a random point. So here we accumulate the two claims,
@@ -202,22 +207,12 @@ where
         self.witness_prover
             .add_claim(info.poly_id, claim_acc_proof.extract_claim())?;
 
-        // the next step is gonna take care of proving the next claim
-        // TODO: clarify that bit - here cheating because of fake lookup protocol, but inconsistency
-        // between padded input and real inputsize. Next proving step REQUIRES the real input size.
-        let next_claim = {
-            let input_mle = input.to_vec().into_mle();
-            let point = input_claim.pad(input_mle.num_vars()).point;
-            let eval = input_mle.evaluate(&point);
-            Claim::new(point, eval)
-        };
-
         // Add the proof in
         self.proofs.push(StepProof::Activation(ActivationProof {
             io_accumulation: claim_acc_proof,
             lookup: lookup_proof,
         }));
-        Ok(next_claim)
+        Ok(input_claim)
     }
 
     fn prove_dense_step(
@@ -347,6 +342,7 @@ where
             .zip(self.ctx.steps_info.iter())
             .enumerate()
         {
+            self.lookup_ctx.witness_ctx.current_step = i;
             last_claim = self.prove_step(last_claim, input, step, &info)?;
         }
         // now provide opening proofs for all claims accumulated during the proving steps

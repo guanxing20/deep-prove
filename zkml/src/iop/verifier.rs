@@ -15,8 +15,8 @@ use sumcheck::structs::IOPVerifierState;
 use transcript::Transcript;
 
 use super::{
-    ActivationProof, Context, DenseProof, Proof,
-    context::{ActivationInfo, DenseInfo},
+    ActivationProof, Context, DenseProof, Proof, RequantProof,
+    context::{ActivationInfo, DenseInfo, RequantInfo},
 };
 
 /// What the verifier must have besides the proof
@@ -103,6 +103,20 @@ where
             (StepProof::Dense(proof), StepInfo::Dense(info)) => {
                 verify_dense(output_claim, proof, info, &mut commit_verifier, transcript)?
             }
+            (StepProof::Requant(proof), StepInfo::Requant(requant_info)) => {
+                verify_requant::<_, _, L>(
+                    output_claim,
+                    proof,
+                    requant_info,
+                    &mut witness_verifier,
+                    &lookup_ctx,
+                    transcript,
+                    &mut lookup_commits,
+                    &mut lookup_numerators,
+                    &mut lookup_denominators,
+                    i,
+                )?
+            }
             _ => bail!(
                 "proof type {} at step {} don't match expected kind {} from setup ",
                 proof.variant_name(),
@@ -153,6 +167,49 @@ where
     verifier_claims.claims()[1..]
         .iter()
         .try_for_each(|claim| sp_verifier.add_claim(claim.clone()))?;
+
+    let new_output_claim = sp_verifier.verify(&proof.io_accumulation, t)?;
+    // 2. Accumulate the new claim into the witness commitment protocol
+    witness_verifier.add_claim(info.poly_id, new_output_claim)?;
+
+    // 3. return the input claim for to be proven at subsequent step
+    Ok(verifier_claims.claims()[1].clone())
+}
+
+fn verify_requant<E: ExtensionField, T: Transcript<E>, L: LookupProtocol<E>>(
+    last_claim: Claim<E>,
+    proof: &RequantProof<E>,
+    info: &RequantInfo,
+    witness_verifier: &mut commit::precommit::CommitVerifier<E>,
+    lookup_ctx: &lookup::Context<E>,
+    t: &mut T,
+    lookup_commits: &mut Vec<E::BaseField>,
+    lookup_numerators: &mut Vec<E>,
+    lookup_denominators: &mut Vec<E>,
+    step: usize,
+) -> anyhow::Result<Claim<E>>
+where
+    E::BaseField: Serialize + DeserializeOwned,
+    E: Serialize + DeserializeOwned,
+{
+    // 1. Verify the lookup proof
+    let verifier_claims = L::verify(lookup_ctx, step, proof.lookup.clone(), t)?;
+    // 2. Add all the persisted information to the correct vectors.
+    lookup_commits.extend_from_slice(verifier_claims.commitment().root().0.as_slice());
+    lookup_numerators.extend_from_slice(verifier_claims.numerators());
+    lookup_denominators.extend_from_slice(verifier_claims.denominators());
+    // 3. Verify the accumulation proof from last_claim + lookup claim into the new claim
+    let sp_ctx = same_poly::Context::<E>::new(info.num_vars);
+    let mut sp_verifier = same_poly::Verifier::<E>::new(&sp_ctx);
+    sp_verifier.add_claim(last_claim)?;
+    let output_range_log = info.requant.range.ilog2() as usize;
+    let after_op_range_log = info.requant.after_range.ilog2() as usize;
+    let num_actual_claims = ((output_range_log - 1) / after_op_range_log) + 1;
+
+    let total_claims = verifier_claims.claims().len();
+
+    sp_verifier
+        .add_claim(verifier_claims.claims()[total_claims - 1 - num_actual_claims].clone())?;
 
     let new_output_claim = sp_verifier.verify(&proof.io_accumulation, t)?;
     // 2. Accumulate the new claim into the witness commitment protocol

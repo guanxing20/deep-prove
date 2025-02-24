@@ -87,6 +87,9 @@ pub struct RequantProof<E: ExtensionField>
 where
     E::BaseField: Serialize + DeserializeOwned,
 {
+    /// proof for the accumulation of the claim from activation + claim from lookup for the same poly
+    /// e.g. the "link" between an activation and requant layer
+    io_accumulation: same_poly::Proof<E>,
     /// the lookup proof for the requantization
     lookup: lookup::Proof<E>,
 }
