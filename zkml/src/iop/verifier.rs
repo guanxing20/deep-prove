@@ -104,7 +104,7 @@ where
         }
     }
     // 3. input verification: evaluating the input at the random evaluation point from the sumcheck
-    let input_mle = vector_to_mle(io.input);
+    let input_mle = io.input.into_mle();
     let computed_randomized_input = input_mle.evaluate(&output_claim.point);
     let given_randomized_input = output_claim.eval;
     ensure!(

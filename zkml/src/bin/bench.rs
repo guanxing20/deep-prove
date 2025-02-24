@@ -1,13 +1,12 @@
-use std::{collections::HashMap, fs::{File, OpenOptions}, io::BufReader, time};
+use std::{collections::HashMap, fs::{File, OpenOptions}, io::BufReader, path::{self, Path, PathBuf}, str::FromStr, time};
 
 use anyhow::{ensure, Context as CC};
 use clap::Parser;
-use csv::{ReaderBuilder, WriterBuilder};
+use csv::WriterBuilder;
 use goldilocks::GoldilocksExt2;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
-use serde_json::Number;
-use zkml::{argmax, default_transcript, load_mlp, lookup::LogUp, vector_to_field_par, verify, Context, Element, Prover, IO};
+use zkml::{argmax, default_transcript, load_mlp, lookup::LogUp, quantization::VecFielder, vector_to_field_par, verify, Context, Element, Prover, IO};
 use zkml::quantization::Quantizer;
 
 type F = GoldilocksExt2;
@@ -55,38 +54,50 @@ impl InputJSON {
         Ok(())
     }
     fn to_elements(mut self) -> (Vec<Element>,Vec<Element>) {
-        let inputs = self.input_data.remove(0).into_iter().map(|e| Element::from_f32_unsafe(&(e as f32))).collect_vec();
+         
+        let inputs = self.input_data.remove(0).into_iter().map(|e| Element::from_f32_unsafe(&(e as f32))).chain(std::iter::once(1)).collect_vec();
         let outputs = self.output_data.remove(0).into_iter().map(|e| Element::from_f32_unsafe(&(e as f32))).collect_vec();
         (inputs,outputs)
     }
 }
 
+const CSV_LOAD: &str = "load (ms)";
+const CSV_SETUP: &str = "setup (ms)";
+const CSV_INFERENCE: &str = "inference (ms)";
+const CSV_PROVING: &str = "proving (ms)";
+const CSV_VERIFYING: &str = "verifying (ms)";
+const CSV_ACCURACY: &str = "accuracy (bool)";
+
 fn run(args: Args) -> anyhow::Result<()> {
-    let mut bencher = CSVBencher::from_headers(vec!["load_model","setup","inference","proving","verifying","accuracy"]);
+    let mut bencher = CSVBencher::from_headers(vec![CSV_LOAD,CSV_SETUP,CSV_INFERENCE,CSV_PROVING,CSV_VERIFYING,CSV_ACCURACY]);
     println!("[+] Reading onnx model");
-    let model = bencher.r("load_model", || load_mlp::<Element>(&args.onnx)).context("loading model:")?;
+    let model = bencher.r(CSV_LOAD, || load_mlp::<Element>(&args.onnx)).context("loading model:")?;
+    let input_shape = model.input_shape();
     println!("[+] Reading input/output from pytorch");
-    let (input,given_output) = InputJSON::from(&args.io).context("loading input:")?;
+    let (mut input,given_output) = InputJSON::from(&args.io).context("loading input:")?;
+    input.resize(input_shape[0], 0);
+    //model.describe();
+    //println!("input: {:?}",input);
 
     println!("[+] Generating context for proving");
-    let ctx = bencher.r("setup",|| Context::<F>::generate(&model).expect("unable to generate context"));
+    let ctx = bencher.r(CSV_SETUP,|| Context::<F>::generate(&model).expect("unable to generate context"));
     let shape = model.input_shape();
     assert_eq!(shape.len(), 1,"only support vector as input for now");
 
     println!("[+] Running inference");
-    let trace = bencher.r("inference",|| model.run(input.clone()));
+    let trace = bencher.r(CSV_INFERENCE,|| model.run(input.clone()));
     let output = trace.final_output().to_vec();
-    bencher.set("accuracy", compare(&given_output,&output));
+    bencher.set(CSV_ACCURACY, compare(&given_output,&output));
     
     println!("[+] Running prover");
     let mut prover_transcript = default_transcript();
     let prover = Prover::<_, _, LogUp<F>>::new(&ctx, &mut prover_transcript);
-    let proof = bencher.r("proving",move || prover.prove(trace).expect("unable to generate proof"));
+    let proof = bencher.r(CSV_PROVING,move || prover.prove(trace).expect("unable to generate proof"));
 
     println!("[+] Running verifier");
     let mut verifier_transcript = default_transcript();
-    let io = IO::new(vector_to_field_par(&input), output.to_vec());
-    bencher.r("verifying", || verify::<_, _, LogUp<F>>(ctx, proof, io, &mut verifier_transcript).expect("invalid proof"));
+    let io = IO::new(input.to_fields(), output.to_vec());
+    bencher.r(CSV_VERIFYING, || verify::<_, _, LogUp<F>>(ctx, proof, io, &mut verifier_transcript).expect("invalid proof"));
     println!("[+] Verify proof: valid");
 
     bencher.flush(&args.bench)?;
@@ -141,17 +152,18 @@ impl CSVBencher {
         self.data.insert(column.to_string(), data.to_string());
     }
 
-    fn flush(self,fname: &str) -> anyhow::Result<()> {
-        let file = OpenOptions::new().create(true).append(true).open(&fname)?;
-        let mut writer = WriterBuilder::new().has_headers(false).from_writer(file);
-
-        let keys: Vec<_> = self.data.keys().cloned().collect();
-        let values: Vec<_> = keys.iter().map(|k| self.data[k].to_string()).collect();
-
-        if ReaderBuilder::new().has_headers(true).from_path(&fname).is_err() {
-            writer.write_record(&keys)?;
+    fn flush(&self, fname: &str) -> anyhow::Result<()> {
+        let file_exists = Path::new(fname).exists();
+        let file = OpenOptions::new().create(true).append(file_exists).write(true).open(fname)?;
+        let mut writer = WriterBuilder::new().has_headers(!file_exists).from_writer(file);
+    
+        let values: Vec<_> = self.headers.iter().map(|k| self.data[k].to_string()).collect();
+    
+        if !file_exists {
+            writer.write_record(&self.headers)?;
+            println!("WROTE KEYS: {:?}", self.headers);
         }
-
+    
         writer.write_record(&values)?;
         writer.flush()?;
         Ok(())
