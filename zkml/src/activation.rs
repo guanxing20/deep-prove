@@ -70,7 +70,7 @@ impl Relu {
                 (val, val)
             })
             .unzip();
-
+        
         let (input_two, output_two): (Vec<E>, Vec<E>) = (quantization::MIN..0)
             .map(|i| {
                 let val: E = i.to_field();

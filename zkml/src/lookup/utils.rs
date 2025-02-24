@@ -40,6 +40,19 @@ pub fn compute_multiplicity_poly<E: ExtensionField>(
         })
         .collect::<Vec<E::BaseField>>();
 
+    debug_assert!({
+        let mut checker = true;
+        h_lookup.keys().for_each(|val| {
+            let bool_value = h_table.contains_key(val);
+            if !bool_value {
+                println!("val is missing: {:?}", val);
+            }
+            checker = checker & bool_value
+        });
+
+        checker
+    });
+
     DenseMultilinearExtension::from_evaluations_vec(num_vars, multiplicity_evals)
 }
 

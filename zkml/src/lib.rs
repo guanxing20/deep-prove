@@ -4,7 +4,7 @@ use ff_ext::ExtensionField;
 use gkr::structs::PointAndEval;
 use itertools::Itertools;
 use multilinear_extensions::mle::DenseMultilinearExtension;
-use quantization::QuantInteger;
+use quantization::{Fieldizer, QuantInteger};
 use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use serde::{Deserialize, Serialize};
 use transcript::{BasicTranscript, Transcript};

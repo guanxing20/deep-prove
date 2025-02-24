@@ -130,7 +130,6 @@ impl Model {
     pub fn run<'a, E: ExtensionField>(&'a self, input: Vec<Element>) -> InferenceTrace<'a, E> {
         let mut trace = InferenceTrace::<Element>::new(input);
         for (id, layer) in self.layers() {
-            println!("Running layer: {} of type: {:?}", id, layer);
             let input = trace.last_input();
             let output = layer.op(input);
             debug!("step: {}: output: {:?}", id, output);

@@ -114,13 +114,13 @@ where
                         StepInfo::Activation(ActivationInfo {
                             op: Activation::Relu(*relu),
                             poly_id: id,
-                            num_vars: last_output_size,
+                            num_vars: last_output_size.ilog2() as usize,
                         })
                     }
                     Layer::Requant(info) => StepInfo::Requant(RequantInfo {
                         requant: *info,
                         poly_id: id,
-                        num_vars: last_output_size,
+                        num_vars: last_output_size.ilog2() as usize,
                     }),
                 }
             })

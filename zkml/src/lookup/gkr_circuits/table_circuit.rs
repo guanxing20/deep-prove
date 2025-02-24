@@ -9,14 +9,13 @@ use simple_frontend::structs::{CellId, CircuitBuilder, ExtCellId};
 use super::add_fractions;
 
 pub fn table_fractional_sumcheck<E: ExtensionField>(
-    table_partitioning: &[usize],
+    no_columns: usize,
     num_vars: usize,
 ) -> Circuit<E> {
     let cb = &mut CircuitBuilder::default();
-    let no_table_columns = table_partitioning.iter().sum::<usize>();
 
     // For each column of the table we have an input witness
-    let table_columns = (0..no_table_columns)
+    let table_columns = (0..no_columns)
         .map(|_| cb.create_witness_in(1 << num_vars).1)
         .collect::<Vec<Vec<CellId>>>();
 
@@ -24,24 +23,12 @@ pub fn table_fractional_sumcheck<E: ExtensionField>(
 
     let table = cb.create_ext_cells(1 << num_vars);
 
-    let challenge_ids = (0..table_partitioning.len())
-        .map(|j| j as u8)
-        .collect::<Vec<u8>>();
-
-    let const_challenge_id = table_partitioning.len() as u8;
-
     table.iter().enumerate().for_each(|(i, table_cell)| {
         let table_row = table_columns
             .iter()
             .map(|col| col[i])
             .collect::<Vec<CellId>>();
-        cb.calculate_table_column(
-            table_cell,
-            &table_row,
-            table_partitioning,
-            &challenge_ids,
-            const_challenge_id,
-        );
+        cb.combine_columns(table_cell, &table_row, 0, 1);
     });
 
     let (mut table_nums, mut table_denoms): (Vec<ExtCellId<E>>, Vec<ExtCellId<E>>) =

@@ -97,6 +97,7 @@ where
                     &mut lookup_commits,
                     &mut lookup_numerators,
                     &mut lookup_denominators,
+                    i,
                 )?
             }
             (StepProof::Dense(proof), StepInfo::Dense(info)) => {
@@ -133,14 +134,14 @@ fn verify_activation<E: ExtensionField, T: Transcript<E>, L: LookupProtocol<E>>(
     lookup_commits: &mut Vec<E::BaseField>,
     lookup_numerators: &mut Vec<E>,
     lookup_denominators: &mut Vec<E>,
+    step: usize,
 ) -> anyhow::Result<Claim<E>>
 where
     E::BaseField: Serialize + DeserializeOwned,
     E: Serialize + DeserializeOwned,
 {
     // 1. Verify the lookup proof
-    let lookup_type = LookupType::Relu(0);
-    let verifier_claims = L::verify(lookup_ctx, &lookup_type, proof.lookup.clone(), t)?;
+    let verifier_claims = L::verify(lookup_ctx, step, proof.lookup.clone(), t)?;
     // 2. Add all the persisted information to the correct vectors.
     lookup_commits.extend_from_slice(verifier_claims.commitment().root().0.as_slice());
     lookup_numerators.extend_from_slice(verifier_claims.numerators());

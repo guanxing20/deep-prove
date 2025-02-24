@@ -43,14 +43,9 @@ impl Quantizer<Element> for Element {
 
 impl<F: ExtensionField> Fieldizer<F> for Element {
     fn to_field(&self) -> F {
-        // make sure we're in range still
-        // NOTE(nikkolasg) removed that assertions for tests until requantization is there.
-        // jassert!(*self >= QuantInteger::MIN as Element && *self <= QuantInteger::MAX as Element);
-        //(*self as QuantInteger).to_field()
         if self.is_negative() {
             // Doing wrapped arithmetic : p-128 ... p-1 means negative number
-
-            -F::from(self.unsigned_abs() as u64)
+            F::from(<F::BaseField as SmallField>::MODULUS_U64 - self.unsigned_abs() as u64)
         } else {
             // for positive and zero, it's just the number
             F::from(*self as u64)
@@ -58,15 +53,12 @@ impl<F: ExtensionField> Fieldizer<F> for Element {
     }
 }
 
-impl<F: ExtensionField> Fieldizer<F> for i8 {
+impl<F: ExtensionField> Fieldizer<F> for QuantInteger {
     fn to_field(&self) -> F {
-        // debug_assert!(*self >= MIN && *self <= MAX);
         if self.is_negative() {
-            // if false {
             // Doing wrapped arithmetic : p-128 ... p-1 means negative number
-            // NOTE: we can't use abs() directly because i8::MIN.abs() doesn't fit inside i8
-            // F::from(<F::BaseField as SmallField>::MODULUS_U64 - (*self as i64).unsigned_abs())
-            F::ZERO - F::from(self.unsigned_abs() as u64)
+
+            -F::from(self.unsigned_abs() as u64)
         } else {
             // for positive and zero, it's just the number
             F::from(*self as u64)
