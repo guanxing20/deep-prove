@@ -2,6 +2,7 @@ use anyhow::{bail, ensure};
 use ff_ext::ExtensionField;
 use itertools::Itertools;
 use multilinear_extensions::mle::DenseMultilinearExtension;
+use num_traits::Zero;
 use rayon::{
     iter::{
         IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator,
@@ -18,14 +19,22 @@ use crate::{
 };
 
 #[derive(Debug, Clone)]
-pub struct Tensor<E> {
-    data: Vec<E>,
+pub struct Tensor<T> {
+    data: Vec<T>,
     shape: Vec<usize>,
 }
 
-impl Tensor<Element> {
+impl<T> Tensor<T>
+where
+    T: Copy + Clone + Send + Sync + Zero,
+    T: std::iter::Sum,
+    T: std::ops::Add<Output = T> + std::ops::Sub<Output = T> + std::ops::Mul<Output = T>,
+    for<'a> &'a T: std::ops::Add<Output = T>,
+    for<'a> &'a T: std::ops::Sub<Output = T>,
+    for<'a> &'a T: std::ops::Mul<Output = T>,
+{
     /// Create a new tensor with given shape and data
-    pub fn new(shape: Vec<usize>, data: Vec<Element>) -> Self {
+    pub fn new(shape: Vec<usize>, data: Vec<T>) -> Self {
         assert!(
             shape.iter().product::<usize>() == data.len(),
             "Shape does not match data length."
@@ -43,41 +52,13 @@ impl Tensor<Element> {
     pub fn zeros(shape: Vec<usize>) -> Self {
         let size = shape.iter().product();
         Self {
-            data: vec![0 as Element; size],
+            data: vec![T::zero(); size],
             shape,
         }
     }
 
-    /// Creates a random matrix with a given number of rows and cols.
-    /// NOTE: doesn't take a rng as argument because to generate it in parallel it needs be sync +
-    /// sync which is not true for basic rng core.
-    pub fn random(shape: Vec<usize>) -> Self {
-        let size = shape.iter().product();
-        let data = random_vector(size);
-        Self { data, shape }
-    }
-
-    /// Creates a random matrix with a given number of rows and cols.
-    /// NOTE: doesn't take a rng as argument because to generate it in parallel it needs be sync +
-    /// sync which is not true for basic rng core.
-    pub fn random_seed(shape: Vec<usize>, seed: Option<u64>) -> Self {
-        let size = shape.iter().product();
-        let data = random_vector_seed(size, seed);
-        Self { data, shape }
-    }
-
-    /// Is vector
-    pub fn is_vector(&self) -> bool {
-        self.dims().len() == 1
-    }
-
-    /// Is matrix
-    pub fn is_matrix(&self) -> bool {
-        self.dims().len() == 2
-    }
-
     /// Element-wise addition
-    pub fn add(&self, other: &Tensor<Element>) -> Tensor<Element> {
+    pub fn add(&self, other: &Tensor<T>) -> Tensor<T> {
         assert!(self.shape == other.shape, "Shape mismatch for addition.");
         Tensor {
             shape: self.shape.clone(),
@@ -91,7 +72,7 @@ impl Tensor<Element> {
     }
 
     /// Element-wise subtraction
-    pub fn sub(&self, other: &Tensor<Element>) -> Tensor<Element> {
+    pub fn sub(&self, other: &Tensor<T>) -> Tensor<T> {
         assert!(self.shape == other.shape, "Shape mismatch for subtraction.");
         Tensor {
             shape: self.shape.clone(),
@@ -105,7 +86,7 @@ impl Tensor<Element> {
     }
 
     /// Element-wise multiplication
-    pub fn mul(&self, other: &Tensor<Element>) -> Tensor<Element> {
+    pub fn mul(&self, other: &Tensor<T>) -> Tensor<T> {
         assert!(
             self.shape == other.shape,
             "Shape mismatch for multiplication."
@@ -122,14 +103,24 @@ impl Tensor<Element> {
     }
 
     /// Scalar multiplication
-    pub fn scalar_mul(&self, scalar: Element) -> Tensor<Element> {
+    pub fn scalar_mul(&self, scalar: &T) -> Tensor<T> {
         Tensor {
             shape: self.shape.clone(),
             data: self.data.iter().map(|x| x * scalar).collect(),
         }
     }
 
-    pub fn from_coeffs_2d(data: Vec<Vec<Element>>) -> anyhow::Result<Self> {
+    /// Is vector
+    pub fn is_vector(&self) -> bool {
+        self.dims().len() == 1
+    }
+
+    /// Is matrix
+    pub fn is_matrix(&self) -> bool {
+        self.dims().len() == 2
+    }
+
+    pub fn from_coeffs_2d(data: Vec<Vec<T>>) -> anyhow::Result<Self> {
         let n_rows = data.len();
         let n_cols = data.first().expect("at least one row in a matrix").len();
         let data = data.into_iter().flatten().collect::<Vec<_>>();
@@ -191,30 +182,6 @@ impl Tensor<Element> {
             .collect_vec()
     }
 
-    /// Returns the evaluation point, in order for (row,col) addressing
-    pub fn evals_2d<F: ExtensionField>(&self) -> Vec<F> {
-        assert!(self.is_matrix(), "Tensor is not a matrix");
-        self.data.par_iter().map(|e| F::from(*e as u64)).collect()
-    }
-
-    /// Returns a MLE of the matrix that can be evaluated.
-    pub fn to_mle_2d<F: ExtensionField>(&self) -> DenseMultilinearExtension<F> {
-        assert!(self.is_matrix(), "Tensor is not a matrix");
-        assert!(
-            self.nrows_2d().is_power_of_two(),
-            "number of rows {} is not a power of two",
-            self.nrows_2d()
-        );
-        assert!(
-            self.ncols_2d().is_power_of_two(),
-            "number of columns {} is not a power of two",
-            self.ncols_2d()
-        );
-        // N variable to address 2^N rows and M variables to address 2^M columns
-        let num_vars = self.nrows_2d().ilog2() + self.ncols_2d().ilog2();
-        DenseMultilinearExtension::from_evaluations_ext_vec(num_vars as usize, self.evals_2d())
-    }
-
     pub fn pad_next_power_of_two_2d(mut self) -> Self {
         assert!(self.is_matrix(), "Tensor is not a matrix");
         // assume the matrix is already well formed and there is always n_rows and n_cols
@@ -261,7 +228,7 @@ impl Tensor<Element> {
     }
 
     /// Perform matrix-matrix multiplication
-    pub fn matmul(&self, other: &Tensor<Element>) -> Tensor<Element> {
+    pub fn matmul(&self, other: &Tensor<T>) -> Tensor<T> {
         assert!(
             self.is_matrix() && other.is_matrix(),
             "Both tensors must be 2D for matrix multiplication."
@@ -288,7 +255,7 @@ impl Tensor<Element> {
                 *res = (0..n)
                     .into_par_iter()
                     .map(|k| self.data[i * n + k] * other.data[k * p + j])
-                    .sum::<Element>();
+                    .sum::<T>();
             });
 
         result
@@ -296,7 +263,7 @@ impl Tensor<Element> {
 
     /// Perform matrix-vector multiplication
     /// TODO: actually getting the result should be done via proper tensor-like libraries
-    pub fn matvec(&self, vector: &Tensor<Element>) -> Tensor<Element> {
+    pub fn matvec(&self, vector: &Tensor<T>) -> Tensor<T> {
         assert!(self.is_matrix(), "First argument must be a matrix.");
         assert!(vector.is_vector(), "Second argument must be a vector.");
 
@@ -311,14 +278,14 @@ impl Tensor<Element> {
             *res = (0..n)
                 .into_par_iter()
                 .map(|j| self.data[i * n + j] * vector.data[j])
-                .sum::<Element>();
+                .sum::<T>();
         });
 
         result
     }
 
     /// Transpose the matrix (2D tensor)
-    pub fn transpose(&self) -> Tensor<Element> {
+    pub fn transpose(&self) -> Tensor<T> {
         assert!(self.is_matrix(), "Tensor is not a matrix.");
         let (m, n) = (self.shape[0], self.shape[1]);
 
@@ -332,7 +299,7 @@ impl Tensor<Element> {
     }
 
     /// Concatenate a matrix (2D tensor) with a vector (1D tensor) as columns
-    pub fn concat_matvec_col(&self, vector: &Tensor<Element>) -> Tensor<Element> {
+    pub fn concat_matvec_col(&self, vector: &Tensor<T>) -> Tensor<T> {
         assert!(self.is_matrix(), "First tensor is not a matrix.");
         assert!(vector.is_vector(), "Second tensor is not a vector.");
 
@@ -357,6 +324,54 @@ impl Tensor<Element> {
             });
 
         result
+    }
+
+    pub fn get_data(&self) -> &[T] {
+        &self.data
+    }
+}
+
+impl Tensor<Element> {
+    /// Creates a random matrix with a given number of rows and cols.
+    /// NOTE: doesn't take a rng as argument because to generate it in parallel it needs be sync +
+    /// sync which is not true for basic rng core.
+    pub fn random(shape: Vec<usize>) -> Self {
+        let size = shape.iter().product();
+        let data = random_vector(size);
+        Self { data, shape }
+    }
+
+    /// Creates a random matrix with a given number of rows and cols.
+    /// NOTE: doesn't take a rng as argument because to generate it in parallel it needs be sync +
+    /// sync which is not true for basic rng core.
+    pub fn random_seed(shape: Vec<usize>, seed: Option<u64>) -> Self {
+        let size = shape.iter().product();
+        let data = random_vector_seed(size, seed);
+        Self { data, shape }
+    }
+
+    /// Returns the evaluation point, in order for (row,col) addressing
+    pub fn evals_2d<F: ExtensionField>(&self) -> Vec<F> {
+        assert!(self.is_matrix(), "Tensor is not a matrix");
+        self.data.par_iter().map(|e| F::from(*e as u64)).collect()
+    }
+
+    /// Returns a MLE of the matrix that can be evaluated.
+    pub fn to_mle_2d<F: ExtensionField>(&self) -> DenseMultilinearExtension<F> {
+        assert!(self.is_matrix(), "Tensor is not a matrix");
+        assert!(
+            self.nrows_2d().is_power_of_two(),
+            "number of rows {} is not a power of two",
+            self.nrows_2d()
+        );
+        assert!(
+            self.ncols_2d().is_power_of_two(),
+            "number of columns {} is not a power of two",
+            self.ncols_2d()
+        );
+        // N variable to address 2^N rows and M variables to address 2^M columns
+        let num_vars = self.nrows_2d().ilog2() + self.ncols_2d().ilog2();
+        DenseMultilinearExtension::from_evaluations_ext_vec(num_vars as usize, self.evals_2d())
     }
 }
 
@@ -418,7 +433,7 @@ mod test {
             "Element-wise multiplication failed."
         );
 
-        let result_scalar = tensor1.scalar_mul(2);
+        let result_scalar = tensor1.scalar_mul(&2);
         assert_eq!(
             result_scalar,
             Tensor::new(vec![2, 2], vec![2, 4, 6, 8]),
