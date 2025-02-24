@@ -1,8 +1,11 @@
-use ark_std::rand::{distributions::Standard, prelude::Distribution, thread_rng, Rng};
+use ark_std::rand::{Rng, distributions::Standard, prelude::Distribution, thread_rng};
 use ff_ext::ExtensionField;
 use itertools::Itertools;
 
-pub fn random_vector<T>(n: usize) -> Vec<T> where Standard: Distribution<T> {
+pub fn random_vector<T>(n: usize) -> Vec<T>
+where
+    Standard: Distribution<T>,
+{
     let mut rng = thread_rng();
     (0..n).map(|_| rng.gen::<T>()).collect_vec()
 }

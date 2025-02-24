@@ -3,7 +3,15 @@ use super::{
     context::{ActivationInfo, DenseInfo, StepInfo},
 };
 use crate::{
-    activation::{Activation, Relu}, commit::{precommit, same_poly}, iop::{ActivationProof, DenseProof}, logup::{compute_multiplicity_poly, merge_columns}, lookup::{self, LookupProtocol}, matrix::Matrix, model::{InferenceStep, InferenceTrace, Layer}, quantization::Requant, vector_to_mle, Claim, Element, VectorTranscript
+    Claim, Element, VectorTranscript,
+    activation::{Activation, Relu},
+    commit::{precommit, same_poly},
+    iop::{ActivationProof, DenseProof},
+    logup::{compute_multiplicity_poly, merge_columns},
+    lookup::{self, LookupProtocol},
+    matrix::Matrix,
+    model::{InferenceStep, InferenceTrace, Layer},
+    quantization::Requant,
 };
 use anyhow::{Context as CC, anyhow, bail};
 use ff_ext::ExtensionField;
@@ -15,7 +23,7 @@ use multilinear_extensions::{
     virtual_poly::VirtualPolynomial,
 };
 use serde::{Serialize, de::DeserializeOwned};
-use std::{marker::PhantomData};
+use std::marker::PhantomData;
 use sumcheck::structs::{IOPProverState, IOPVerifierState};
 use transcript::Transcript;
 
@@ -89,7 +97,13 @@ where
         }
     }
 
-    fn prove_requant(&self, last_claim: Claim<E>,input: &[E],output: &[E],info: &Requant) -> anyhow::Result<Claim<E>> {
+    fn prove_requant(
+        &self,
+        last_claim: Claim<E>,
+        input: &[E],
+        output: &[E],
+        info: &Requant,
+    ) -> anyhow::Result<Claim<E>> {
         unimplemented!()
     }
 
@@ -213,7 +227,7 @@ where
         info: &DenseInfo<E>,
         matrix: &Matrix<Element>,
     ) -> anyhow::Result<Claim<E>> {
-        println!("PROVER: claim {:?}",last_claim);
+        println!("PROVER: claim {:?}", last_claim);
         let (nrows, ncols) = (matrix.nrows(), matrix.ncols());
         assert_eq!(
             nrows,
@@ -255,9 +269,9 @@ where
             let mut vp = VirtualPolynomial::<E>::new(num_vars);
             vp.add_mle_list(vec![mat_mle.into(), input_mle.into()], E::ONE);
             // asserted_sum in this case is the output MLE evaluated at the random point
-            let mle_output = vector_to_mle(output.to_vec());
+            let mle_output = output.to_vec().into_mle();
             let claimed_sum = mle_output.evaluate(&last_claim.point);
-            debug_assert_eq!(claimed_sum, last_claim.eval,"sumcheck eval weird");
+            debug_assert_eq!(claimed_sum, last_claim.eval, "sumcheck eval weird");
             debug_assert_eq!(claimed_sum, proof.extract_sum(), "sumcheck output weird");
 
             debug!("prover: claimed sum: {:?}", claimed_sum);

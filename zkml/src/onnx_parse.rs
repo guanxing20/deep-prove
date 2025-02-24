@@ -4,7 +4,10 @@ use std::{collections::HashMap, i8, path::Path};
 use tract_onnx::{pb::NodeProto, prelude::*};
 
 use crate::{
-    matrix::Matrix, model::{Layer, Model}, quantization::{QuantInteger, Quantizer}, Element
+    Element,
+    matrix::Matrix,
+    model::{Layer, Model},
+    quantization::{QuantInteger, Quantizer},
 };
 
 #[derive(Debug, Clone)]
@@ -99,7 +102,10 @@ fn reshape<T: Clone>(flat_vec: Vec<T>, rows: usize, cols: usize) -> Option<Vec<V
     Some(flat_vec.chunks(cols).map(|chunk| chunk.to_vec()).collect())
 }
 
-fn concat_column(matrix: Vec<Vec<Element>>, column: Vec<Vec<Element>>) -> Result<Vec<Vec<Element>>> {
+fn concat_column(
+    matrix: Vec<Vec<Element>>,
+    column: Vec<Vec<Element>>,
+) -> Result<Vec<Vec<Element>>> {
     if matrix.len() != column.len() {
         bail!("Column length must match matrix row count");
     }
@@ -168,7 +174,7 @@ pub fn load_mlp<Q: Quantizer<Element>>(filepath: &str) -> Result<Model> {
         return Err(Error::msg(format!("File '{}' does not exist", filepath)));
     }
     // TODO: Re-enable. Was disabled to test the bench binary but only dense layer were working
-    //assert!(is_mlp(filepath)?, "is_mlp: Failed");
+    // assert!(is_mlp(filepath)?, "is_mlp: Failed");
 
     let model = tract_onnx::onnx()
         .proto_model_for_path(filepath)
@@ -212,13 +218,11 @@ pub fn load_mlp<Q: Quantizer<Element>>(filepath: &str) -> Result<Model> {
     Ok(sumcheck_model)
 }
 
-
-
 #[cfg(test)]
 mod tests {
 
-    use crate::testing::random_vector;
     use super::*;
+    use crate::testing::random_vector;
 
     use goldilocks::GoldilocksExt2;
 

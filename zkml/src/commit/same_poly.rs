@@ -7,13 +7,13 @@
 //! Note the output of the verifier is a claim that needs to be verified outside of this protocol.
 //! It could be via an opening directly OR via an accumulation scheme.
 
-use crate::{Claim, VectorTranscript, commit::identity_eval, vector_to_mle};
+use crate::{Claim, VectorTranscript, commit::identity_eval};
 use anyhow::{Context as CC, Ok, ensure};
 use ff_ext::ExtensionField;
 use itertools::Itertools;
 use mpcs::PolynomialCommitmentScheme;
 use multilinear_extensions::{
-    mle::{DenseMultilinearExtension, MultilinearExtension},
+    mle::{DenseMultilinearExtension, IntoMLE, MultilinearExtension},
     virtual_poly::{VPAuxInfo, VirtualPolynomial},
 };
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
@@ -108,10 +108,7 @@ where
 
         // then run the sumcheck on it
         let mut vp = VirtualPolynomial::new(self.poly.num_vars());
-        vp.add_mle_list(
-            vec![vector_to_mle(final_beta).into(), self.poly.into()],
-            E::ONE,
-        );
+        vp.add_mle_list(vec![final_beta.into_mle().into(), self.poly.into()], E::ONE);
         #[allow(deprecated)]
         let (sumcheck_proof, state) = IOPProverState::<E>::prove_parallel(vp, t);
 
@@ -185,11 +182,9 @@ where
 mod test {
     use goldilocks::GoldilocksExt2;
     use mpcs::PolynomialCommitmentScheme;
-    use multilinear_extensions::mle::MultilinearExtension;
+    use multilinear_extensions::mle::{IntoMLE, MultilinearExtension};
 
-    use crate::{
-        Claim, commit::Pcs, default_transcript, testing::random_field_vector, vector_to_mle,
-    };
+    use crate::{Claim, commit::Pcs, default_transcript, testing::random_field_vector};
     use itertools::Itertools;
 
     use super::{Context, Prover, Verifier};
@@ -209,12 +204,12 @@ mod test {
         let num_vars = 10 as usize;
         let poly_len = 1 << num_vars;
         let poly = random_field_vector::<F>(poly_len);
-        let poly_mle = vector_to_mle(poly.clone());
+        let poly_mle = poly.clone().into_mle();
         // number of clains
         let m = 14;
         let claims = (0..m)
             .map(|_| {
-                let r_i = random_field_vector(num_vars);
+                let r_i = random_field_vector::<F>(num_vars);
                 let y_i = poly_mle.evaluate(&r_i);
                 (r_i, y_i)
             })

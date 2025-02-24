@@ -376,7 +376,7 @@ mod test {
     use ff::Field;
     use goldilocks::GoldilocksExt2;
     use itertools::Itertools;
-    use multilinear_extensions::mle::MultilinearExtension;
+    use multilinear_extensions::mle::{IntoMLE, MultilinearExtension};
 
     use super::compute_betas_eval;
     use crate::{
@@ -384,7 +384,6 @@ mod test {
         matrix::Matrix,
         pad_vector,
         testing::{random_bool_vector, random_field_vector},
-        vector_to_mle,
     };
 
     use super::{CommitProver, CommitVerifier, Context};
@@ -448,8 +447,8 @@ mod test {
         let mut claims = Vec::new();
         let mut prover = CommitProver::new();
         for (id, poly) in polys {
-            let p = random_bool_vector(poly.len().ilog2() as usize);
-            let eval = vector_to_mle(poly.clone()).evaluate(&p);
+            let p = random_bool_vector::<F>(poly.len().ilog2() as usize);
+            let eval = poly.clone().into_mle().evaluate(&p);
             claims.push((id, p.clone(), eval.clone()));
             prover.add_claim(id, Claim::new(p, eval))?;
         }
@@ -473,7 +472,7 @@ mod test {
         let n = 2 * 8;
         let r = random_bool_vector::<F>(n / 2);
         let betas = compute_betas_eval(&r);
-        let beta_mle = vector_to_mle(betas);
+        let beta_mle = betas.into_mle();
         assert_eq!(beta_mle.evaluate(&r), F::ONE);
         let r2 = random_bool_vector::<F>(n / 2);
         assert_ne!(beta_mle.evaluate(&r2), F::ONE);

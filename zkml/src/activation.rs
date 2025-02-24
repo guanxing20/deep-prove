@@ -3,7 +3,10 @@ use goldilocks::SmallField;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use serde::{Deserialize, Serialize};
 
-use crate::{quantization::{self, Fieldizer, BIT_LEN, ZERO}, Element};
+use crate::{
+    Element,
+    quantization::{self, BIT_LEN, Fieldizer, ZERO},
+};
 
 /// Context holding information related to the lookup tables used in the proving
 /// steps for the verifier and the prover.
@@ -62,10 +65,10 @@ impl Relu {
     pub fn to_mle<E: ExtensionField>() -> (Vec<E>, Vec<E>) {
         (quantization::MIN..=quantization::MAX)
             .map(|i| {
-                let input : E = i.to_field();
+                let input: E = i.to_field();
                 // conversion from QuantInteger -> u64 OK because result is either 0 or strictly positive.
                 let output = E::from(Self::apply(i as Element) as u64);
-                (input,output)
+                (input, output)
             })
             .unzip()
     }
@@ -79,11 +82,7 @@ impl Relu {
 
     #[inline(always)]
     pub fn apply(e: Element) -> Element {
-        if e <= ZERO as Element {
-            0
-        } else {
-            e 
-        }
+        if e <= ZERO as Element { 0 } else { e }
     }
 }
 
@@ -149,10 +148,10 @@ mod test {
                 .map(|b| F::from(b as u64))
                 .collect_vec();
             let input_field = input_mle.evaluate(&idx_vars);
-            let expected_ified : F = input.to_field();
+            let expected_ified: F = input.to_field();
             assert_eq!(input_field, expected_ified);
             let output_field = output_mle.evaluate(&idx_vars);
-            let expected_ofield :F = output.to_field();
+            let expected_ofield: F = output.to_field();
             assert_eq!(output_field, expected_ofield);
         }
         // assert_eq!(expected,given);

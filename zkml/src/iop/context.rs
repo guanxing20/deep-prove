@@ -3,7 +3,8 @@ use core::num;
 use crate::{
     activation::{Activation, ActivationCtx, Relu},
     iop::precommit::{self, PolyID},
-    model::{Layer, Model}, quantization::{Requant},
+    model::{Layer, Model},
+    quantization::Requant,
 };
 use anyhow::Context as CC;
 use ff_ext::ExtensionField;
@@ -38,14 +39,13 @@ pub struct ActivationInfo {
     pub multiplicity_num_vars: usize,
 }
 
-
-/// Info related to the lookup protocol necessary to requantize 
-#[derive(Clone,Debug,Serialize,Deserialize)]
+/// Info related to the lookup protocol necessary to requantize
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RequantInfo {
     pub poly_id: PolyID,
     pub num_vars: usize,
     pub multiplicity_poly_id: PolyID,
-    pub multiplicity_num_vars: usize, 
+    pub multiplicity_num_vars: usize,
 }
 
 impl<E> StepInfo<E> {
@@ -159,7 +159,6 @@ where
                     t.append_field_element(&E::BaseField::from(info.num_vars as u64));
                     t.append_field_element(&E::BaseField::from(info.multiplicity_poly_id as u64));
                     t.append_field_element(&E::BaseField::from(info.multiplicity_num_vars as u64));
-
                 }
                 StepInfo::Activation(info) => {
                     t.append_field_element(&E::BaseField::from(info.poly_id as u64));

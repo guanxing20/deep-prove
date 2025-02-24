@@ -11,13 +11,17 @@ use transcript::{BasicTranscript, Transcript};
 pub mod activation;
 mod commit;
 pub mod iop;
-pub use iop::{Context,Proof,prover::Prover,verifier::{IO,verify}};
+pub use iop::{
+    Context, Proof,
+    prover::Prover,
+    verifier::{IO, verify},
+};
 mod logup;
-pub mod quantization;
 pub mod lookup;
 mod matrix;
 pub mod model;
 mod onnx_parse;
+pub mod quantization;
 pub use onnx_parse::load_mlp;
 
 mod testing;
@@ -78,19 +82,9 @@ impl<E: ExtensionField> Claim<E> {
     }
 }
 
-
 /// Returns the default transcript the prover and verifier must instantiate to validate a proof.
 pub fn default_transcript<E: ExtensionField>() -> BasicTranscript<E> {
     BasicTranscript::new(b"m2vec")
-}
-
-pub fn vector_to_field_par<E: ExtensionField>(v: &[Element]) -> Vec<E> {
-    v.par_iter().map(|v| E::from(*v as u64)).collect::<Vec<_>>()
-}
-pub fn vector_to_field_par_into<E: ExtensionField>(v: Vec<Element>) -> Vec<E> {
-    v.into_par_iter()
-        .map(|v| E::from(v as u64))
-        .collect::<Vec<_>>()
 }
 
 pub fn pad_vector<E: ExtensionField>(mut v: Vec<E>) -> Vec<E> {
@@ -99,13 +93,6 @@ pub fn pad_vector<E: ExtensionField>(mut v: Vec<E>) -> Vec<E> {
     }
     v
 }
-/// Returns a MLE out of the given vector, of the right length
-// TODO : make that part of tensor somehow?
-pub(crate) fn vector_to_mle<E: ExtensionField>(v: Vec<E>) -> DenseMultilinearExtension<E> {
-    let v = pad_vector(v);
-    DenseMultilinearExtension::from_evaluation_vec_smart(v.len().ilog2() as usize, v)
-}
-
 /// Returns the bit sequence of num of bit_length length.
 pub(crate) fn to_bit_sequence_le(
     num: usize,
@@ -148,19 +135,12 @@ mod test {
     use ark_std::rand::{Rng, thread_rng};
     use goldilocks::GoldilocksExt2;
     use itertools::Itertools;
-    use multilinear_extensions::mle::MultilinearExtension;
+    use multilinear_extensions::mle::{IntoMLE, MultilinearExtension};
 
     use crate::{
-        Element, default_transcript,
-        iop::{
-            Context,
-            prover::Prover,
-            verifier::{IO, verify},
-        },
-        lookup::{LogUp, LookupProtocol},
-        onnx_parse::load_mlp,
-        testing::random_vector,
-        to_bit_sequence_le, vector_to_field_par, vector_to_mle,
+        default_transcript, iop::{
+            prover::Prover, verifier::{verify, IO}, Context
+        }, lookup::{LogUp, LookupProtocol}, onnx_parse::load_mlp, quantization::{QuantInteger, VecFielder}, testing::random_vector, to_bit_sequence_le, Element
     };
     use ff_ext::ff::Field;
 
@@ -181,7 +161,7 @@ mod test {
 
         let shape = model.input_shape();
         assert_eq!(shape.len(), 1);
-        let input = random_vector::<Element>(shape[0]);
+        let input = random_vector::<QuantInteger>(shape[0]).into_iter().map(|i| i as Element).collect_vec();
 
         let trace = model.run(input.clone());
         let output = trace.final_output().to_vec();
@@ -193,7 +173,7 @@ mod test {
         let proof = prover.prove(trace).expect("unable to generate proof");
 
         let mut verifier_transcript = default_transcript();
-        let io = IO::new(vector_to_field_par(&input), output.to_vec());
+        let io = IO::new(input.to_fields(), output.to_vec());
         verify::<_, _, L>(ctx, proof, io, &mut verifier_transcript).expect("invalid proof");
         println!("[+] Verify proof: valid");
         Ok(())
@@ -203,9 +183,9 @@ mod test {
 
     #[test]
     fn test_vector_mle() {
-        let n = 10;
+        let n = (10 as usize).next_power_of_two();
         let v = (0..n).map(|_| E::random(&mut thread_rng())).collect_vec();
-        let mle = vector_to_mle(v.clone());
+        let mle = v.clone().into_mle();
         let random_index = thread_rng().gen_range(0..v.len());
         let eval = to_bit_sequence_le(random_index, v.len().next_power_of_two().ilog2() as usize)
             .map(|b| E::from(b as u64))

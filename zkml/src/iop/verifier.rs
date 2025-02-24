@@ -3,14 +3,11 @@ use crate::{
     commit::{self, precommit, same_poly},
     iop::{StepProof, context::StepInfo, precommit::PolyID},
     lookup::{self, LookupProtocol},
-    vector_to_mle,
 };
 use anyhow::{Context as CC, bail, ensure};
 use ff_ext::ExtensionField;
 use itertools::Itertools;
-use multilinear_extensions::{
-    mle::{IntoMLE, MultilinearExtension},
-};
+use multilinear_extensions::mle::{IntoMLE, MultilinearExtension};
 use serde::{Serialize, de::DeserializeOwned};
 use sumcheck::structs::IOPVerifierState;
 use transcript::Transcript;
@@ -166,8 +163,7 @@ where
     E::BaseField: Serialize + DeserializeOwned,
     E: Serialize + DeserializeOwned,
 {
-
-    println!("VERIFIER: claim {:?}",last_claim);
+    println!("VERIFIER: claim {:?}", last_claim);
     // TODO: currently that API can panic - should remove panic for error
     let subclaim =
         IOPVerifierState::<E>::verify(last_claim.eval, &proof.sumcheck, &info.poly_aux, t);

@@ -83,7 +83,7 @@ pub struct RequantProof<E: ExtensionField> {
 mod test {
     use goldilocks::GoldilocksExt2;
 
-    use crate::{default_transcript, lookup::LogUp, model::Model, quantization::VecFielder, vector_to_field_par};
+    use crate::{default_transcript, lookup::LogUp, model::Model, quantization::VecFielder};
 
     use super::{
         Context,

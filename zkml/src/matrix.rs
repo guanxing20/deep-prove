@@ -8,7 +8,12 @@ use rayon::iter::{
     IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator, ParallelIterator,
 };
 
-use crate::{quantization::{Fieldizer, QuantInteger}, testing::random_vector, to_bit_sequence_le, Element};
+use crate::{
+    Element,
+    quantization::{Fieldizer, QuantInteger},
+    testing::random_vector,
+    to_bit_sequence_le,
+};
 
 #[derive(Clone, Debug)]
 pub struct Matrix<E> {
@@ -113,7 +118,7 @@ impl Matrix<Element> {
     pub fn random((rows, cols): (usize, usize)) -> Self {
         let coeffs = random_vector::<QuantInteger>(rows * cols)
             .into_par_iter()
-            .map(|r| r as Element )
+            .map(|r| r as Element)
             .chunks(cols)
             .collect();
         Self {
@@ -179,10 +184,17 @@ mod test {
     use ark_std::rand::{Rng, thread_rng};
     use goldilocks::GoldilocksExt2;
     use itertools::Itertools;
-    use multilinear_extensions::{mle::{IntoMLE, MultilinearExtension}, virtual_poly::VirtualPolynomial};
+    use multilinear_extensions::{
+        mle::{IntoMLE, MultilinearExtension},
+        virtual_poly::VirtualPolynomial,
+    };
     use sumcheck::structs::IOPProverState;
 
-    use crate::{quantization::{QuantInteger, VecFielder}, testing::{random_bool_vector, random_vector}, Element};
+    use crate::{
+        Element,
+        quantization::{QuantInteger, VecFielder},
+        testing::{random_bool_vector, random_vector},
+    };
 
     use super::Matrix;
 
@@ -251,7 +263,7 @@ mod test {
 
     #[test]
     fn test_matrix_next_power_of_two() {
-        let (n_rows, n_cols) : (usize,usize) = (10, 10);
+        let (n_rows, n_cols): (usize, usize) = (10, 10);
         let mat = Matrix::<Element>::random((n_rows, n_cols));
         let (new_rows, new_cols) = (n_rows.next_power_of_two(), n_cols.next_power_of_two());
         let new_mat = mat.pad_next_power_of_two();
@@ -279,36 +291,38 @@ mod test {
         assert!(result == true);
     }
 
-
     type F = GoldilocksExt2;
-    use ff::Field;
     use crate::default_transcript;
+    use ff::Field;
     #[test]
     fn test_matrix_proving_sequential() {
         let nrows = 8;
         let m = Matrix::random((nrows, nrows)).pad_next_power_of_two();
         let mmle = m.to_mle();
-        let input = random_vector::<QuantInteger>(nrows).into_iter().map(|i| i as Element).collect_vec();
-        println!("{}",m.fmt_integer());
+        let input = random_vector::<QuantInteger>(nrows)
+            .into_iter()
+            .map(|i| i as Element)
+            .collect_vec();
+        println!("{}", m.fmt_integer());
         let output = m.matmul(&input);
         let point1 = random_bool_vector(nrows.ilog2() as usize);
-        println!("point1: {:?}",point1);
-        let inputf : Vec<F> = input.as_slice().to_fields();
-        println!("input: {:?}",input);
-        println!("inputF: {:?}",inputf);
-        let outputf :Vec<F> = output.as_slice().to_fields();
+        println!("point1: {:?}", point1);
+        let inputf: Vec<F> = input.as_slice().to_fields();
+        println!("input: {:?}", input);
+        println!("inputF: {:?}", inputf);
+        let outputf: Vec<F> = output.as_slice().to_fields();
         let computed_eval1 = outputf.into_mle().evaluate(&point1);
         let flatten_mat1 = mmle.fix_high_variables(&point1);
         // y(r) = SUM_i m(r,i) x(i)
-        let full_poly = vec![flatten_mat1.clone().into(),inputf.into_mle().into()];
+        let full_poly = vec![flatten_mat1.clone().into(), inputf.into_mle().into()];
         let mut vp = VirtualPolynomial::new(flatten_mat1.num_vars());
         vp.add_mle_list(full_poly, F::ONE);
         #[allow(deprecated)]
-        let (proof, state) = IOPProverState::<F>::prove_parallel(vp.clone(), &mut default_transcript());
-        let (p2,s2) = IOPProverState::prove_batch_polys(1, vec![vp], &mut default_transcript());
+        let (proof, state) =
+            IOPProverState::<F>::prove_parallel(vp.clone(), &mut default_transcript());
+        let (p2, s2) = IOPProverState::prove_batch_polys(1, vec![vp], &mut default_transcript());
         let given_eval1 = proof.extract_sum();
-        assert_eq!(p2.extract_sum(),proof.extract_sum());
-        assert_eq!(computed_eval1,given_eval1);
+        assert_eq!(p2.extract_sum(), proof.extract_sum());
+        assert_eq!(computed_eval1, given_eval1);
     }
-    
 }
