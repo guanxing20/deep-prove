@@ -49,7 +49,7 @@ impl<F: ExtensionField> Fieldizer<F> for Element {
         //(*self as QuantInteger).to_field()
         if self.is_negative() {
             // Doing wrapped arithmetic : p-128 ... p-1 means negative number
-            //F::from((<F::BaseField as SmallField>::MODULUS_U64 as Element + self) as u64)
+            // F::from((<F::BaseField as SmallField>::MODULUS_U64 as Element + self) as u64)
             F::ZERO - F::from(self.unsigned_abs() as u64)
         } else {
             // for positive and zero, it's just the number

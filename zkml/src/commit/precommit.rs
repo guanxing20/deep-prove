@@ -109,7 +109,12 @@ where
             .collect_vec();
         assert!(flattened.len().is_power_of_two());
         let num_vars = flattened.len().ilog2() as usize;
-        println!("COMMIT STEP E: individual lengths: {:?}, sum.ilog2() = {}, flattened.len() = {}", lenlens, sum_lenlens, flattened.len());
+        println!(
+            "COMMIT STEP E: individual lengths: {:?}, sum.ilog2() = {}, flattened.len() = {}",
+            lenlens,
+            sum_lenlens,
+            flattened.len()
+        );
         let params = Pcs::setup(flattened.len()).expect("unable to setup commitment");
         println!("COMMIT STEP F");
         let (pp, vp) = Pcs::trim(params, flattened.len()).unwrap();

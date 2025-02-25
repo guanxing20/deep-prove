@@ -174,7 +174,7 @@ impl CSVBencher {
         let now = time::Instant::now();
         let output = f();
         let elapsed = now.elapsed().as_millis();
-        info!("STEP: {} took {}ms",column, elapsed);
+        info!("STEP: {} took {}ms", column, elapsed);
         self.data.insert(column.to_string(), elapsed.to_string());
         output
     }

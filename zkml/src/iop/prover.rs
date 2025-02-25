@@ -227,7 +227,7 @@ where
         info: &DenseInfo<E>,
         matrix: &Matrix<Element>,
     ) -> anyhow::Result<Claim<E>> {
-        //println!("PROVER: claim {:?}", last_claim);
+        // println!("PROVER: claim {:?}", last_claim);
         let (nrows, ncols) = (matrix.nrows(), matrix.ncols());
         assert_eq!(
             nrows,

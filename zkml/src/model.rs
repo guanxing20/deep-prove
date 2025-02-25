@@ -49,10 +49,10 @@ impl Layer {
         match self {
             Layer::Dense(ref matrix) => {
                 format!(
-                    "Dense: ({},{})", 
+                    "Dense: ({},{})",
                     matrix.nrows(),
                     matrix.ncols(),
-                    //matrix.fmt_integer()
+                    // matrix.fmt_integer()
                 )
             }
             Layer::Activation(Activation::Relu(_)) => {
@@ -65,18 +65,23 @@ impl Layer {
     }
     /// Prepare the input to return it in the right format expected for the first layer.
     /// for the bias
-    pub fn prepare_input(&self,input: Vec<Element>) -> Vec<Element> {
+    pub fn prepare_input(&self, input: Vec<Element>) -> Vec<Element> {
         match self {
             Layer::Dense(ref matrix) => {
                 if input.len() == matrix.ncols() {
                     // no need to do anything if it's already at the right format
-                    input 
+                    input
                 } else {
                     // append 1 for the bias factor and pad to right size
-                    input.into_iter().chain(std::iter::once(1)).chain(std::iter::repeat(0)).take(matrix.ncols()).collect_vec()
+                    input
+                        .into_iter()
+                        .chain(std::iter::once(1))
+                        .chain(std::iter::repeat(0))
+                        .take(matrix.ncols())
+                        .collect_vec()
                 }
             }
-            _ => panic!("Layer {:?} should not be a first layer",self.describe()),
+            _ => panic!("Layer {:?} should not be a first layer", self.describe()),
         }
     }
 }
@@ -123,7 +128,7 @@ impl Model {
         for (id, layer) in self.layers() {
             let input = trace.last_input();
             let output = layer.op(input);
-            debug!("step: {}: output: {:?}",id,output);
+            debug!("step: {}: output: {:?}", id, output);
             let step = InferenceStep { layer, output, id };
             trace.push_step(step);
         }

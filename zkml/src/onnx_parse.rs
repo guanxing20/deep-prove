@@ -195,7 +195,7 @@ pub fn load_mlp<Q: Quantizer<Element>>(filepath: &str) -> Result<Model> {
     }
 
     let mut layers: Vec<Layer> = Vec::new();
-    for (i,node) in graph.node.iter().enumerate() {
+    for (i, node) in graph.node.iter().enumerate() {
         match node.op_type.as_str() {
             "Gemm" => {
                 let matrix_weight = fetch_weight_bias_as_mat::<Q>("weight", node, &initializers)?;
@@ -203,24 +203,23 @@ pub fn load_mlp<Q: Quantizer<Element>>(filepath: &str) -> Result<Model> {
 
                 // Concatenate bias as an extra column
                 let matrix = concat_column(matrix_weight, matrix_bias)?;
-                
+
                 // Create matrix and transpose (PyTorch stores as output_size x input_size)
-                let matrix = Matrix::<Element>::from_coeffs(matrix)
-                    .unwrap();
+                let matrix = Matrix::<Element>::from_coeffs(matrix).unwrap();
                 debug!("layer idx {} -> unprocessed matrix {:?}", i, matrix.shape());
-                    //.transpose();
-                    //.pad_next_power_of_two();
+                //.transpose();
+                //.pad_next_power_of_two();
                 layers.push(Layer::Dense(matrix));
             }
             _ => (),
         };
     }
-    
+
     // Process the layers to ensure consistent dimensions
     let mut processed_layers: Vec<Layer> = Vec::new();
     let mut prev_layer_shape: Option<Vec<usize>> = None;
-    let last = layers.len()- 1; 
-    for (i,layer) in layers.into_iter().enumerate() {
+    let last = layers.len() - 1;
+    for (i, layer) in layers.into_iter().enumerate() {
         if let Layer::Dense(mut matrix) = layer {
             let mut new_cols = matrix.ncols();
             if let Some(prev_shape) = prev_layer_shape {
@@ -234,13 +233,18 @@ pub fn load_mlp<Q: Quantizer<Element>>(filepath: &str) -> Result<Model> {
                         panic!(
                             "Matrix has more columns ({}) than previous layer output size ({}). 
                             Cannot shrink without losing information.",
-                            matrix.ncols(), prev_shape[0]
+                            matrix.ncols(),
+                            prev_shape[0]
                         );
                     }
                 }
             }
-            
-            let nrows = matrix.nrows() + 1;
+
+            let nrows = if i == last {
+                matrix.nrows()
+            } else {
+                matrix.nrows() + 1
+            };
             // println!("layer idx {} -> from ({:?} to ({},{})",i,matrix.shape(),
             //                 nrows.next_power_of_two(),
             //                 new_cols.next_power_of_two());
@@ -248,14 +252,14 @@ pub fn load_mlp<Q: Quantizer<Element>>(filepath: &str) -> Result<Model> {
             matrix.reshape_to_fit_inplace(nrows.next_power_of_two(), new_cols.next_power_of_two());
             // Update prev_output_size to reflect the padded size
             prev_layer_shape = Some(matrix.shape());
-            debug!("layer idx {} -> final shape {:?}",i,matrix.shape());
+            debug!("layer idx {} -> final shape {:?}", i, matrix.shape());
             processed_layers.push(Layer::Dense(matrix));
         } else {
             prev_layer_shape = Some(layer.shape());
             processed_layers.push(layer);
         }
     }
-    
+
     let mut model = Model::new();
     for layer in processed_layers {
         model.add_layer(layer);
@@ -289,7 +293,10 @@ mod tests {
         let filepath = "assets/model.onnx";
 
         let model = load_mlp::<Element>(&filepath).unwrap();
-        let input = random_vector::<QuantInteger>(model.input_shape()[0]).into_iter().map(|x| x as Element).collect_vec();
+        let input = random_vector::<QuantInteger>(model.input_shape()[0])
+            .into_iter()
+            .map(|x| x as Element)
+            .collect_vec();
 
         let trace = model.run::<F>(input.clone());
         println!("Result: {:?}", trace.final_output());
@@ -326,6 +333,3 @@ mod tests {
         );
     }
 }
-
-
-
