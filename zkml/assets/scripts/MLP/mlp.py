@@ -13,6 +13,23 @@ import torch.nn.functional as F
 from torch.autograd import Variable
 import tqdm
 from sklearn.preprocessing import MinMaxScaler
+import argparse
+from pathlib import Path
+
+parser = argparse.ArgumentParser(description="mlp generator --num-dense and --layer-width")
+parser.add_argument("--num-dense", type=int, required=True, help="Number of dense layers")
+parser.add_argument("--layer-width", type=int, required=True, help="Width of each layer")
+parser.add_argument("--export", type=Path, required=False, default=Path("."), help="folder where to export model and input")
+parser.add_argument("--no-bias", action="store_true", help="Disable bias in linear layers")
+
+
+args = parser.parse_args()
+print(f"num_dense: {args.num_dense}, layer_width: {args.layer_width}")
+# Ensure the folder exists
+if not args.export.exists() or not args.export.is_dir():
+    print(f"❌ Error: export folder '{args.export}' does not exist or is not a directory.")
+    exit(1)
+
 
 # Load the iris data
 iris = load_iris()
@@ -23,7 +40,7 @@ print("Loaded iris data")
 
 
 class Model(nn.Module):
-    def __init__(self, num_hidden, layer_width):
+    def __init__(self, num_hidden, layer_width, use_bias=True):
         super(Model, self).__init__()
 
         layers = []
@@ -34,7 +51,7 @@ class Model(nn.Module):
         layers.append(nn.Linear(input_size, layer_width))
         #layers.append(nn.ReLU())
 
-        # Additional hidden layers
+        # Hidden layers
         for _ in range(num_hidden - 1):
             layers.append(nn.Linear(layer_width, layer_width))
             #layers.append(nn.ReLU())
@@ -43,14 +60,13 @@ class Model(nn.Module):
         layers.append(nn.Linear(layer_width, output_size))
         #layers.append(nn.ReLU())
 
-        # Combine layers into a Sequential module
         self.network = nn.Sequential(*layers)
 
     def forward(self, x):
         return self.network(x)
 
 
-model = Model(num_hidden=1, layer_width=20)
+model = Model(num_hidden=args.num_dense, layer_width=args.layer_width, use_bias=not args.no_bias)
 # Extract input features
 X = dataset[dataset.columns[0:4]].values
 y = dataset.target
@@ -120,8 +136,10 @@ model.eval()
 y_pred = model(test_X[0])
 print("Expected:", test_y[0], "Predicted", torch.argmax(y_pred, dim=0))
 
-model_path = os.path.join('mlp-model.onnx')
-data_path = os.path.join('mlp-input.json')
+from pathlib import Path
+
+model_path = args.export / "mlp-model.onnx"
+data_path = args.export / "mlp-input.json"
 
 x = test_X[0].reshape(1, 4)
 model.eval()
@@ -136,8 +154,11 @@ torch.onnx.export(model,
                   dynamic_axes={'input': {0: 'batch_size'},
                                 'output': {0: 'batch_size'}})
 
+print(f"Model onnx exported to {model_path}")
+
 data_array = ((x).detach().numpy()).reshape([-1]).tolist()
 output_array = ((y_pred).detach().numpy()).reshape([-1]).tolist()
 
 data = dict(input_data=[data_array],output_data=[output_array])
 json.dump(data, open(data_path, 'w'),indent=2)
+print(f"Input/Output to model exported to {data_path}")

@@ -26,10 +26,12 @@ rayon.workspace = true
 serde.workspace = true
 simple-frontend = { path = "../simple-frontend" }
 sumcheck = { version = "0.1.0", path = "../sumcheck" }
-tracing-subscriber.workspace = true
 tract-onnx = "0.21.9"
 transcript = { version = "0.1.0", path = "../transcript" }
 num-traits = "0.2.19"
 clap = { version = "4", features = ["derive"] }
 serde_json.workspace = true
 csv = "1.3.1"
+tracing-subscriber = { workspace = true, features = ["env-filter", "fmt"] }
+tracing = { workspace = true }
+env_logger = "0.11.6"

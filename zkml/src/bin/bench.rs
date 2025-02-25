@@ -12,6 +12,8 @@ use clap::Parser;
 use csv::WriterBuilder;
 use goldilocks::GoldilocksExt2;
 use itertools::Itertools;
+use log::{debug, info};
+
 use serde::{Deserialize, Serialize};
 use zkml::{
     Context, Element, IO, Prover, argmax, default_transcript, load_mlp,
@@ -35,6 +37,7 @@ struct Args {
     bench: String,
 }
 pub fn main() -> anyhow::Result<()> {
+    env_logger::init();
     let args = Args::parse();
     run(args).context("error running bench:")?;
     Ok(())
@@ -100,45 +103,48 @@ fn run(args: Args) -> anyhow::Result<()> {
         CSV_VERIFYING,
         CSV_ACCURACY,
     ]);
-    println!("[+] Reading onnx model");
+    info!("[+] Reading onnx model");
     let model = bencher
         .r(CSV_LOAD, || load_mlp::<Element>(&args.onnx))
         .context("loading model:")?;
-    println!("[+] Reading input/output from pytorch");
+    model.describe();
+    info!("[+] Reading input/output from pytorch");
     let (input, given_output) = InputJSON::from(&args.io).context("loading input:")?;
+    println!("BEFORE PREPARE input: {:?}",input);
     let input = model.prepare_input(input);
+    println!("AFTER PREPARE input: {:?}",input);
     // model.describe();
     // println!("input: {:?}",input);
 
-    println!("[+] Generating context for proving");
+    info!("[+] Generating context for proving");
     let ctx = bencher.r(CSV_SETUP, || {
         Context::<F>::generate(&model).expect("unable to generate context")
     });
     let shape = model.input_shape();
     assert_eq!(shape.len(), 1, "only support vector as input for now");
 
-    println!("[+] Running inference");
+    info!("[+] Running inference");
     let trace = bencher.r(CSV_INFERENCE, || model.run(input.clone()));
     let output = trace.final_output().to_vec();
     bencher.set(CSV_ACCURACY, compare(&given_output, &output));
 
-    println!("[+] Running prover");
+    info!("[+] Running prover");
     let mut prover_transcript = default_transcript();
     let prover = Prover::<_, _, LogUp<F>>::new(&ctx, &mut prover_transcript);
     let proof = bencher.r(CSV_PROVING, move || {
         prover.prove(trace).expect("unable to generate proof")
     });
 
-    println!("[+] Running verifier");
+    info!("[+] Running verifier");
     let mut verifier_transcript = default_transcript();
     let io = IO::new(input.to_fields(), output.to_vec());
     bencher.r(CSV_VERIFYING, || {
         verify::<_, _, LogUp<F>>(ctx, proof, io, &mut verifier_transcript).expect("invalid proof")
     });
-    println!("[+] Verify proof: valid");
+    info!("[+] Verify proof: valid");
 
     bencher.flush(&args.bench)?;
-    println!("[+] Benchmark results appended to {}", args.bench);
+    info!("[+] Benchmark results appended to {}", args.bench);
     Ok(())
 }
 
@@ -169,7 +175,7 @@ impl CSVBencher {
         let now = time::Instant::now();
         let output = f();
         let elapsed = now.elapsed().as_millis();
-
+        info!("STEP: {} took {}ms",column, elapsed);
         self.data.insert(column.to_string(), elapsed.to_string());
         output
     }
@@ -207,7 +213,6 @@ impl CSVBencher {
 
         if !file_exists {
             writer.write_record(&self.headers)?;
-            println!("WROTE KEYS: {:?}", self.headers);
         }
 
         writer.write_record(&values)?;

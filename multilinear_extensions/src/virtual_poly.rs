@@ -335,7 +335,7 @@ pub fn build_eq_x_r_sequential<E: ExtensionField>(r: &[E]) -> ArcDenseMultilinea
 /// over r, which is
 ///      eq(x,y) = \prod_i=1^num_var (x_i * r_i + (1-x_i)*(1-r_i))
 
-#[tracing::instrument(skip_all, name = "multilinear_extensions::build_eq_x_r_vec_sequential")]
+#[tracing::instrument(level = "trace", skip_all, name = "multilinear_extensions::build_eq_x_r_vec_sequential")]
 pub fn build_eq_x_r_vec_sequential<E: ExtensionField>(r: &[E]) -> Vec<E> {
     // avoid unnecessary allocation
     if r.is_empty() {
@@ -399,7 +399,7 @@ pub fn build_eq_x_r<E: ExtensionField>(r: &[E]) -> ArcDenseMultilinearExtension<
 /// over r, which is
 ///      eq(x,y) = \prod_i=1^num_var (x_i * r_i + (1-x_i)*(1-r_i))
 
-#[tracing::instrument(skip_all, name = "multilinear_extensions::build_eq_x_r_vec")]
+#[tracing::instrument(level = "trace", skip_all, name = "multilinear_extensions::build_eq_x_r_vec")]
 pub fn build_eq_x_r_vec<E: ExtensionField>(r: &[E]) -> Vec<E> {
     // avoid unnecessary allocation
     if r.is_empty() {

@@ -177,6 +177,40 @@ impl Matrix<Element> {
             coeffs: transposed_coeffs,
         }
     }
+
+    /// Reshapes the matrix to have at least the specified dimensions while preserving all data.
+    pub fn reshape_to_fit_inplace(&mut self, new_rows: usize, new_cols: usize) {
+        // Ensure we never lose information by requiring the new dimensions to be at least 
+        // as large as the original ones
+        assert!(
+            new_rows >= self.nrows(),
+            "Cannot shrink matrix rows from {} to {} - would lose information",
+            self.nrows(), new_rows
+        );
+        assert!(
+            new_cols >= self.ncols(),
+            "Cannot shrink matrix columns from {} to {} - would lose information",
+            self.ncols(), new_cols
+        );
+        
+        // Create a new matrix with expanded dimensions
+        let new_coeffs: Vec<Vec<Element>> = (0..new_rows)
+            .map(|i| {
+                (0..new_cols)
+                    .map(|j| {
+                        if i < self.nrows() && j < self.ncols() {
+                            self.coeffs[i][j]
+                        } else {
+                            0
+                        }
+                    })
+                    .collect()
+            })
+            .collect();
+        
+        self.dim = (new_rows, new_cols);
+        self.coeffs = new_coeffs;
+    }
 }
 
 #[cfg(test)]

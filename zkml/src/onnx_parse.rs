@@ -200,22 +200,54 @@ pub fn load_mlp<Q: Quantizer<Element>>(filepath: &str) -> Result<Model> {
                 let matrix_weight = fetch_weight_bias_as_mat::<Q>("weight", node, &initializers)?;
                 let matrix_bias = fetch_weight_bias_as_mat::<Q>("bias", node, &initializers)?;
 
+                // Concatenate bias as an extra column
                 let matrix = concat_column(matrix_weight, matrix_bias)?;
+                
+                // Create matrix and transpose (PyTorch stores as output_size x input_size)
                 let matrix = Matrix::<Element>::from_coeffs(matrix)
                     .unwrap()
+                    //.transpose()
                     .pad_next_power_of_two();
-                // let matrix = matrix.transpose();
+                println!("Matrix: {}", matrix.fmt_integer());
                 layers.push(Layer::Dense(matrix));
             }
             _ => (),
         };
     }
-    let mut sumcheck_model = Model::new();
+    
+    // Process the layers to ensure consistent dimensions
+    let mut processed_layers: Vec<Layer> = Vec::new();
+    let mut prev_layer_shape: Option<Vec<usize>> = None;
+    
     for layer in layers {
-        sumcheck_model.add_layer(layer); // Insert each layer
+        if let Layer::Dense(mut matrix) = layer {
+            if let Some(prev_shape) = prev_layer_shape {
+                assert!(prev_shape.iter().all(|d| d.is_power_of_two()));
+                // check if previous output's vector length is equal to the number of columns of this matrix
+                if matrix.ncols() != prev_shape[0]{
+                    log::info!(
+                        "Reshaping matrix from {}x{} to match previous layer shape {:?}",
+                        matrix.nrows(), matrix.ncols(), prev_shape);
+                    
+                    matrix.reshape_to_fit_inplace(matrix.nrows().next_power_of_two(), prev_shape[0]);
+                }
+            }
+            
+            // Update prev_output_size to reflect the padded size
+            prev_layer_shape = Some(vec![matrix.nrows(),matrix.ncols()]);
+            processed_layers.push(Layer::Dense(matrix));
+        } else {
+            prev_layer_shape = Some(layer.shape());
+            processed_layers.push(layer);
+        }
+    }
+    
+    let mut model = Model::new();
+    for layer in processed_layers {
+        model.add_layer(layer);
     }
 
-    Ok(sumcheck_model)
+    Ok(model)
 }
 
 #[cfg(test)]

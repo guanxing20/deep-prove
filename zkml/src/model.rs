@@ -1,5 +1,6 @@
 use ff_ext::ExtensionField;
 use itertools::Itertools;
+use log::debug;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
 use crate::{
@@ -48,10 +49,10 @@ impl Layer {
         match self {
             Layer::Dense(ref matrix) => {
                 format!(
-                    "Dense: ({},{}) : {}",
+                    "Dense: ({},{})", 
                     matrix.nrows(),
                     matrix.ncols(),
-                    matrix.fmt_integer()
+                    //matrix.fmt_integer()
                 )
             }
             Layer::Activation(Activation::Relu(_)) => {
@@ -122,6 +123,7 @@ impl Model {
         for (id, layer) in self.layers() {
             let input = trace.last_input();
             let output = layer.op(input);
+            debug!("step: {}: output: {:?}",id,output);
             let step = InferenceStep { layer, output, id };
             trace.push_step(step);
         }

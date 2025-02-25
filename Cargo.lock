@@ -2329,6 +2329,7 @@ version = "0.1.41"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "784e0ac535deb450455cbfa28a6f0df145ea1bb7ae51b821cf5e7927fdcfbdd0"
 dependencies = [
+ "log",
  "pin-project-lite",
  "tracing-attributes",
  "tracing-core",
@@ -2905,6 +2906,7 @@ dependencies = [
  "clap",
  "csv",
  "derive_more",
+ "env_logger",
  "ff",
  "ff_ext",
  "gkr",
@@ -2919,6 +2921,7 @@ dependencies = [
  "serde_json",
  "simple-frontend",
  "sumcheck",
+ "tracing",
  "tracing-subscriber",
  "tract-onnx",
  "transcript",

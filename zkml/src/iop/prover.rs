@@ -75,7 +75,7 @@ where
         step: &InferenceStep<'b, E>,
         info: &StepInfo<E>,
     ) -> anyhow::Result<Claim<E>> {
-        println!("PROVER: proving layer {}", step.layer.describe());
+        debug!("PROVER: proving layer {}", step.layer.describe());
         match (step.layer, info) {
             (Layer::Dense(matrix), StepInfo::Dense(info)) => {
                 // NOTE: here we treat the ID of the step AS the ID of the polynomial. THat's okay because we only care
@@ -227,7 +227,7 @@ where
         info: &DenseInfo<E>,
         matrix: &Matrix<Element>,
     ) -> anyhow::Result<Claim<E>> {
-        println!("PROVER: claim {:?}", last_claim);
+        //println!("PROVER: claim {:?}", last_claim);
         let (nrows, ncols) = (matrix.nrows(), matrix.ncols());
         assert_eq!(
             nrows,

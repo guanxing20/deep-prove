@@ -7,6 +7,7 @@ use crate::{
 use anyhow::{Context as CC, bail, ensure};
 use ff_ext::ExtensionField;
 use itertools::Itertools;
+use log::debug;
 use multilinear_extensions::mle::{IntoMLE, MultilinearExtension};
 use serde::{Serialize, de::DeserializeOwned};
 use sumcheck::structs::IOPVerifierState;
@@ -56,7 +57,7 @@ where
         point: first_randomness,
         eval: computed_sum,
     };
-    println!(
+    debug!(
         "VERIFIER: Proof Order: {:?}",
         proof.steps.iter().map(|p| p.variant_name()).collect_vec()
     );
@@ -163,7 +164,7 @@ where
     E::BaseField: Serialize + DeserializeOwned,
     E: Serialize + DeserializeOwned,
 {
-    println!("VERIFIER: claim {:?}", last_claim);
+    debug!("VERIFIER: claim {:?}", last_claim);
     // TODO: currently that API can panic - should remove panic for error
     let subclaim =
         IOPVerifierState::<E>::verify(last_claim.eval, &proof.sumcheck, &info.poly_aux, t);
