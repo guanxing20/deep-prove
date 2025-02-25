@@ -166,6 +166,7 @@ for i, layer in enumerate(model.layers):
         weight_matrix = layer.weight.data
         bias_vector = layer.bias.data
         print(f"Layer {i} weight matrix dimensions: {weight_matrix.size()}")
+        print(f"Layer {i} bias vector dimensions: {bias_vector.size()}")
         #print(f"Layer {i} weight matrix (Vec<Vec<_>> format):")
         #tensor_to_vecvec(weight_matrix)
         #print(f"Layer {i} bias vector (Vec<_> format):")
