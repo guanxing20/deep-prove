@@ -90,6 +90,7 @@ where
     pub fn generate(model: &Model) -> anyhow::Result<Self> {
         let mut last_output_size = model.first_output_shape()[0];
         let mut current_multiplicity_poly_id = model.layer_count();
+        println!("CTX STEP A");
         let auxs = model
             .layers()
             .map(|(id, layer)| {
@@ -137,9 +138,12 @@ where
                 }
             })
             .collect_vec();
+        println!("CTX STEP B");
         let commit_ctx = precommit::Context::generate_from_model(model)
             .context("can't generate context for commitment part")?;
+        println!("CTX STEP C");
         let activation = ActivationCtx::new();
+        println!("CTX STEP D");
         Ok(Self {
             steps_info: auxs.into_iter().rev().collect_vec(),
             weights: commit_ctx,

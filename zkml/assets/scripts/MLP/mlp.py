@@ -39,34 +39,24 @@ dataset = pd.DataFrame(
 print("Loaded iris data")
 
 
-class Model(nn.Module):
-    def __init__(self, num_hidden, layer_width, use_bias=True):
-        super(Model, self).__init__()
-
+class MLP(nn.Module):
+    def __init__(self, num_dense, layer_width, use_bias=True):
+        super(MLP, self).__init__()
         layers = []
-        input_size = 4  # Input features (Iris dataset has 4 features)
-        output_size = 3  # Number of classes in Iris dataset
-
-        # First hidden layer
-        layers.append(nn.Linear(input_size, layer_width))
-        #layers.append(nn.ReLU())
-
-        # Hidden layers
-        for _ in range(num_hidden - 1):
-            layers.append(nn.Linear(layer_width, layer_width))
-            #layers.append(nn.ReLU())
-
-        # Output layer
-        layers.append(nn.Linear(layer_width, output_size))
-        #layers.append(nn.ReLU())
-
-        self.network = nn.Sequential(*layers)
+        input_size = 4  # Assuming input size is 4 for the Iris dataset
+        for _ in range(num_dense):
+            layers.append(nn.Linear(input_size, layer_width, bias=use_bias))
+            input_size = layer_width
+        layers.append(nn.Linear(layer_width, 3, bias=use_bias))  # Assuming 3 output classes
+        self.layers = nn.ModuleList(layers)
 
     def forward(self, x):
-        return self.network(x)
+        for layer in self.layers:
+            x = layer(x)
+        return x
 
 
-model = Model(num_hidden=args.num_dense, layer_width=args.layer_width, use_bias=not args.no_bias)
+model = MLP(num_dense=args.num_dense, layer_width=args.layer_width, use_bias=not args.no_bias)
 # Extract input features
 X = dataset[dataset.columns[0:4]].values
 y = dataset.target
@@ -159,6 +149,32 @@ print(f"Model onnx exported to {model_path}")
 data_array = ((x).detach().numpy()).reshape([-1]).tolist()
 output_array = ((y_pred).detach().numpy()).reshape([-1]).tolist()
 
-data = dict(input_data=[data_array],output_data=[output_array])
-json.dump(data, open(data_path, 'w'),indent=2)
+data = dict(input_data=[data_array], output_data=[output_array])
+json.dump(data, open(data_path, 'w'), indent=2)
 print(f"Input/Output to model exported to {data_path}")
+
+def tensor_to_vecvec(tensor):
+    """Convert a PyTorch tensor to a Vec<Vec<_>> format and print it."""
+    vecvec = tensor.tolist()
+    for i, row in enumerate(vecvec):
+        formatted_row = ", ".join(f"{float(val):.2f}" for val in row)
+        print(f"{i}: [{formatted_row}]")
+
+# Print the weight matrices in Vec<Vec<_>> format and their dimensions
+for i, layer in enumerate(model.layers):
+    if isinstance(layer, nn.Linear):
+        weight_matrix = layer.weight.data
+        bias_vector = layer.bias.data
+        print(f"Layer {i} weight matrix dimensions: {weight_matrix.size()}")
+        #print(f"Layer {i} weight matrix (Vec<Vec<_>> format):")
+        #tensor_to_vecvec(weight_matrix)
+        #print(f"Layer {i} bias vector (Vec<_> format):")
+        #tensor_to_vecvec(bias_vector.unsqueeze(0))
+
+# Print initial weights
+#for i, layer in enumerate(model.layers):
+#    if isinstance(layer, nn.Linear):
+#        print(f"Layer {i} initial weight matrix (Vec<Vec<_>> format):")
+#        tensor_to_vecvec(layer.weight.data)
+#        print(f"Layer {i} initial bias vector (Vec<_> format):")
+#        tensor_to_vecvec(layer.bias.data.unsqueeze(0))

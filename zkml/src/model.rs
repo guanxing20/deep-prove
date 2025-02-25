@@ -149,7 +149,7 @@ impl Model {
     }
     /// Prints to stdout
     pub fn describe(&self) {
-        println!("MATRIX description:");
+        println!("Model description:");
         for (idx, layer) in self.layers() {
             println!("\t- {}: {}", idx, layer.describe());
         }

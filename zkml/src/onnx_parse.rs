@@ -1,5 +1,6 @@
 use anyhow::{Error, Result, bail, ensure};
 use itertools::Itertools;
+use log::debug;
 use std::{collections::HashMap, i8, path::Path};
 use tract_onnx::{pb::NodeProto, prelude::*};
 
@@ -205,10 +206,9 @@ pub fn load_mlp<Q: Quantizer<Element>>(filepath: &str) -> Result<Model> {
                 
                 // Create matrix and transpose (PyTorch stores as output_size x input_size)
                 let matrix = Matrix::<Element>::from_coeffs(matrix)
-                    .unwrap()
-                    //.transpose()
-                    .pad_next_power_of_two();
-                println!("Matrix: {}", matrix.fmt_integer());
+                    .unwrap();
+                    //.transpose();
+                    //.pad_next_power_of_two();
                 layers.push(Layer::Dense(matrix));
             }
             _ => (),
@@ -219,22 +219,36 @@ pub fn load_mlp<Q: Quantizer<Element>>(filepath: &str) -> Result<Model> {
     let mut processed_layers: Vec<Layer> = Vec::new();
     let mut prev_layer_shape: Option<Vec<usize>> = None;
     
-    for layer in layers {
+    for (i,layer) in layers.into_iter().enumerate() {
         if let Layer::Dense(mut matrix) = layer {
+            let mut new_cols = matrix.ncols();
             if let Some(prev_shape) = prev_layer_shape {
                 assert!(prev_shape.iter().all(|d| d.is_power_of_two()));
-                // check if previous output's vector length is equal to the number of columns of this matrix
-                if matrix.ncols() != prev_shape[0]{
-                    log::info!(
-                        "Reshaping matrix from {}x{} to match previous layer shape {:?}",
-                        matrix.nrows(), matrix.ncols(), prev_shape);
-                    
-                    matrix.reshape_to_fit_inplace(matrix.nrows().next_power_of_two(), prev_shape[0]);
+                // Check if previous output's vector length is equal to the number of columns of this matrix
+                if matrix.ncols() != prev_shape[0] {
+                    if matrix.ncols() < prev_shape[0] {
+                        new_cols = prev_shape[0];
+                    } else {
+                        // If we have too many columns, we can't shrink without losing information
+                        panic!(
+                            "Matrix has more columns ({}) than previous layer output size ({}). 
+                            Cannot shrink without losing information.",
+                            matrix.ncols(), prev_shape[0]
+                        );
+                    }
                 }
-            }
             
+                debug!("layer idx {} -> from ({:?} to ({},{})",i,matrix.shape(),
+                            matrix.nrows().next_power_of_two(),
+                            new_cols.next_power_of_two());
+                // Pad to power of two dimensions
+                matrix.reshape_to_fit_inplace(matrix.nrows().next_power_of_two(), new_cols.next_power_of_two());
+                //matrix = matrix.pad_next_power_of_two();
+            } else {
+                matrix = matrix.pad_next_power_of_two();
+            }
             // Update prev_output_size to reflect the padded size
-            prev_layer_shape = Some(vec![matrix.nrows(),matrix.ncols()]);
+            prev_layer_shape = Some(matrix.shape());
             processed_layers.push(Layer::Dense(matrix));
         } else {
             prev_layer_shape = Some(layer.shape());
@@ -275,7 +289,7 @@ mod tests {
         let filepath = "assets/model.onnx";
 
         let model = load_mlp::<Element>(&filepath).unwrap();
-        let input = random_vector::<Element>(model.input_shape()[0]);
+        let input = random_vector::<QuantInteger>(model.input_shape()[0]).into_iter().map(|x| x as Element).collect_vec();
 
         let trace = model.run::<F>(input.clone());
         println!("Result: {:?}", trace.final_output());
@@ -312,3 +326,6 @@ mod tests {
         );
     }
 }
+
+
+

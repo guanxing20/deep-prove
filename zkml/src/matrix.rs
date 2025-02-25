@@ -34,6 +34,10 @@ impl Matrix<Element> {
             coeffs,
         })
     }
+    pub fn shape(&self) -> Vec<usize> {
+        vec![self.nrows(), self.ncols()]
+    }
+
     /// From a given row and a given column, return the vector of field elements in the right
     /// format to evaluate the MLE.
     /// little endian so we need to read cols before rows

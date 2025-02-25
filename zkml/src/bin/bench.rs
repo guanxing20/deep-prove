@@ -110,9 +110,7 @@ fn run(args: Args) -> anyhow::Result<()> {
     model.describe();
     info!("[+] Reading input/output from pytorch");
     let (input, given_output) = InputJSON::from(&args.io).context("loading input:")?;
-    println!("BEFORE PREPARE input: {:?}",input);
     let input = model.prepare_input(input);
-    println!("AFTER PREPARE input: {:?}",input);
     // model.describe();
     // println!("input: {:?}",input);
 
@@ -151,6 +149,7 @@ fn run(args: Args) -> anyhow::Result<()> {
 fn compare<A: PartialOrd, B: PartialOrd>(given_output: &[A], computed_output: &[B]) -> usize {
     let a_max = argmax(given_output);
     let b_max = argmax(computed_output);
+    info!("Accuracy: {}", if a_max == b_max { 1 } else { 0 });
     if a_max == b_max { 1 } else { 0 }
 }
 
