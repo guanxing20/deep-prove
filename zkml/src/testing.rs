@@ -1,6 +1,6 @@
 use ark_std::rand::{
     self, Rng, SeedableRng,
-    distributions::Standard,
+    distributions::{Standard, uniform::SampleUniform},
     prelude::Distribution,
     rngs::{StdRng, ThreadRng},
     thread_rng,
@@ -57,4 +57,13 @@ where
             rng.gen::<T>()
         })
         .collect_vec()
+}
+
+pub fn random_ranged_vector<T>(n: usize, range: std::ops::Range<T>) -> Vec<T>
+where
+    Standard: Distribution<T>,
+    T: SampleUniform + PartialOrd + Clone,
+{
+    let mut rng = thread_rng();
+    (0..n).map(|_| rng.gen_range(range.clone())).collect_vec()
 }

@@ -23,6 +23,8 @@ use zkml::{
     verify,
 };
 
+use rmp_serde::encode::to_vec_named;
+
 type F = GoldilocksExt2;
 
 #[derive(Parser, Debug)]
@@ -61,7 +63,7 @@ impl InputJSON {
     }
     // poor's man validation
     fn validate(&self) -> anyhow::Result<()> {
-        let rrange = (-1.0..=1.0);
+        let rrange = -1.0..=1.0;
         ensure!(self.input_data.len() == 1);
         let input_isreal = self.input_data[0].iter().all(|v| rrange.contains(v));
         // let output_isreal = self.output_data[0].iter().all(|v| rrange.contains(v));
@@ -94,6 +96,7 @@ const CSV_INFERENCE: &str = "inference (ms)";
 const CSV_PROVING: &str = "proving (ms)";
 const CSV_VERIFYING: &str = "verifying (ms)";
 const CSV_ACCURACY: &str = "accuracy (bool)";
+const CSV_PROOF_SIZE: &str = "proof size (KB)";
 
 fn run(args: Args) -> anyhow::Result<()> {
     let mut bencher = CSVBencher::from_headers(vec![
@@ -103,6 +106,7 @@ fn run(args: Args) -> anyhow::Result<()> {
         CSV_PROVING,
         CSV_VERIFYING,
         CSV_ACCURACY,
+        CSV_PROOF_SIZE,
     ]);
     info!("[+] Reading onnx model");
     let model = bencher
@@ -133,16 +137,21 @@ fn run(args: Args) -> anyhow::Result<()> {
 
     info!("[+] Running prover");
     let mut prover_transcript = default_transcript();
-    let prover = Prover::<_, _, LogUp<F>>::new(&ctx, &mut prover_transcript);
+    let prover = Prover::<_, _, LogUp>::new(&ctx, &mut prover_transcript);
     let proof = bencher.r(CSV_PROVING, move || {
         prover.prove(trace).expect("unable to generate proof")
     });
+
+    // Serialize proof using MessagePack and calculate size in KB
+    let proof_bytes = to_vec_named(&proof)?;
+    let proof_size_kb = proof_bytes.len() as f64 / 1024.0;
+    bencher.set(CSV_PROOF_SIZE, format!("{:.3}", proof_size_kb));
 
     info!("[+] Running verifier");
     let mut verifier_transcript = default_transcript();
     let io = IO::new(input.to_fields(), output);
     bencher.r(CSV_VERIFYING, || {
-        verify::<_, _, LogUp<F>>(ctx, proof, io, &mut verifier_transcript).expect("invalid proof")
+        verify::<_, _, LogUp>(ctx, proof, io, &mut verifier_transcript).expect("invalid proof")
     });
     info!("[+] Verify proof: valid");
 

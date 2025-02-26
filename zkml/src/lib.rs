@@ -4,7 +4,7 @@ use ff_ext::ExtensionField;
 use gkr::structs::PointAndEval;
 use itertools::Itertools;
 use multilinear_extensions::mle::DenseMultilinearExtension;
-use quantization::QuantInteger;
+use quantization::{Fieldizer, QuantInteger};
 use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use serde::{Deserialize, Serialize};
 use transcript::{BasicTranscript, Transcript};
@@ -16,7 +16,7 @@ pub use iop::{
     prover::Prover,
     verifier::{IO, verify},
 };
-mod logup;
+
 pub mod lookup;
 // mod matrix;
 pub mod model;
@@ -158,7 +158,7 @@ mod test {
 
     #[test]
     fn test_model_run() -> anyhow::Result<()> {
-        test_model_run_helper::<LogUp<E>>()?;
+        test_model_run_helper::<LogUp>()?;
         Ok(())
     }
 

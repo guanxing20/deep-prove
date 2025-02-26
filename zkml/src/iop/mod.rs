@@ -29,24 +29,48 @@ where
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-pub enum StepProof<E: ExtensionField> {
+pub enum StepProof<E: ExtensionField>
+where
+    E::BaseField: Serialize + DeserializeOwned,
+{
     Dense(DenseProof<E>),
     Activation(ActivationProof<E>),
     Requant(RequantProof<E>),
+    Table(TableProof<E>),
 }
 
-impl<E: ExtensionField> StepProof<E> {
+impl<E: ExtensionField> StepProof<E>
+where
+    E::BaseField: Serialize + DeserializeOwned,
+{
     pub fn variant_name(&self) -> String {
         match self {
             Self::Dense(_) => "Dense".to_string(),
             Self::Activation(_) => "Activation".to_string(),
             Self::Requant(_) => "Requant".to_string(),
+            Self::Table(..) => "Table".to_string(),
+        }
+    }
+
+    pub fn get_lookup_data(&self) -> Option<(Vec<E::BaseField>, Vec<E>, Vec<E>)> {
+        match self {
+            StepProof::Dense(..) => None,
+            StepProof::Activation(ActivationProof { lookup, .. })
+            | StepProof::Requant(RequantProof { lookup, .. })
+            | StepProof::Table(TableProof { lookup }) => Some((
+                lookup.get_digest().0.to_vec(),
+                lookup.numerators(),
+                lookup.denominators(),
+            )),
         }
     }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-pub struct ActivationProof<E: ExtensionField> {
+pub struct ActivationProof<E: ExtensionField>
+where
+    E::BaseField: Serialize + DeserializeOwned,
+{
     /// proof for the accumulation of the claim from m2v + claim from lookup for the same poly
     /// e.g. the "link" between a m2v and relu layer
     io_accumulation: same_poly::Proof<E>,
@@ -74,8 +98,23 @@ impl<E: ExtensionField> DenseProof<E> {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-pub struct RequantProof<E: ExtensionField> {
+pub struct RequantProof<E: ExtensionField>
+where
+    E::BaseField: Serialize + DeserializeOwned,
+{
+    /// proof for the accumulation of the claim from activation + claim from lookup for the same poly
+    /// e.g. the "link" between an activation and requant layer
+    io_accumulation: same_poly::Proof<E>,
     /// the lookup proof for the requantization
+    lookup: lookup::Proof<E>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct TableProof<E: ExtensionField>
+where
+    E::BaseField: Serialize + DeserializeOwned,
+{
+    /// the lookup protocol proof for the table fractional sumcheck
     lookup: lookup::Proof<E>,
 }
 
@@ -97,18 +136,17 @@ mod test {
     #[test]
     fn test_prover_steps() {
         tracing_subscriber::fmt::init();
-        let (model, input) = Model::random(2);
+        let (model, input) = Model::random(4);
         model.describe();
         let trace = model.run::<F>(input.clone());
         let output = trace.final_output().clone();
         let ctx = Context::generate(&model).expect("unable to generate context");
         let io = IO::new(input.to_fields(), output);
         let mut prover_transcript = default_transcript();
-        let prover = Prover::<_, _, LogUp<GoldilocksExt2>>::new(&ctx, &mut prover_transcript);
+        let prover = Prover::<_, _, LogUp>::new(&ctx, &mut prover_transcript);
         let proof = prover.prove(trace).expect("unable to generate proof");
         let mut verifier_transcript = default_transcript();
-        verify::<_, _, LogUp<GoldilocksExt2>>(ctx, proof, io, &mut verifier_transcript)
-            .expect("invalid proof");
+        verify::<_, _, LogUp>(ctx, proof, io, &mut verifier_transcript).expect("invalid proof");
     }
 
     //#[test]

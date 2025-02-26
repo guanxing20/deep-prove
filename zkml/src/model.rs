@@ -23,6 +23,12 @@ pub enum Layer {
     Requant(Requant),
 }
 
+impl std::fmt::Display for Layer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.describe())
+    }
+}
+
 impl Layer {
     /// Run the operation associated with that layer with the given input
     // TODO: move to tensor library : right now it works because we assume there is only Dense
@@ -108,9 +114,7 @@ impl Model {
                 // append a requantization layer after
                 // NOTE: since we requantize at each dense step currently, we assume
                 // default quantization inputs for matrix and vector
-                // Some(Layer::Requant(Requant::from_matrix_default(matrix)))
-                // TODO: re-enable
-                None
+                Some(Layer::Requant(Requant::from_matrix_default(matrix)))
             }
             _ => None,
         };
@@ -332,8 +336,7 @@ pub(crate) mod test {
             let mut rng = thread_rng();
             let mut last_row = rng.gen_range(3..15);
             for selector in 0..num_dense_layers {
-                // if selector % MOD_SELECTOR == SELECTOR_DENSE {
-                if true {
+                if selector % MOD_SELECTOR == SELECTOR_DENSE {
                     // last row becomes new column
                     let (nrows, ncols) = (rng.gen_range(3..15), last_row);
                     last_row = nrows;

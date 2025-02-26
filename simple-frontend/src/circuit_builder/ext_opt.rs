@@ -286,6 +286,68 @@ impl<Ext: ExtensionField> CircuitBuilder<Ext> {
         rlc_const_term!(self, <Ext as ExtensionField>::DEGREE, out.cells; c);
     }
 
+    /// Computes a combination of a number of columns, multiplying each column by successive powers of the provided challenge
+    /// useful in LogUp proving.
+    pub fn combine_columns(
+        &mut self,
+        out: &ExtCellId<Ext>,
+        in_array: &[CellId],
+        challenge: ChallengeId,
+        const_challenge: ChallengeId,
+    ) {
+        assert_eq!(out.degree(), <Ext as ExtensionField>::DEGREE);
+        for (i, item) in in_array.iter().enumerate() {
+            let c = ChallengeConst {
+                challenge,
+                exp: i as u64 + 1,
+            };
+            rlc_base_term!(self, <Ext as ExtensionField>::DEGREE, out.cells, *item; c);
+        }
+        let c = ChallengeConst {
+            challenge: const_challenge,
+            exp: 1u64,
+        };
+        rlc_const_term!(self, <Ext as ExtensionField>::DEGREE, out.cells; c);
+    }
+
+    /// Computes a combination of a number of columns, multiplying each column by successive powers of the provided challenge
+    /// useful in LogUp proving.
+    pub fn calculate_table_column(
+        &mut self,
+        out: &ExtCellId<Ext>,
+        in_array: &[CellId],
+        partition: &[usize],
+        challenges: &[ChallengeId],
+        const_challenge: ChallengeId,
+    ) {
+        assert_eq!(out.degree(), <Ext as ExtensionField>::DEGREE);
+        let partition_sum = partition.iter().sum::<usize>();
+        assert_eq!(in_array.len(), partition_sum);
+
+        let mut array_offset = 0usize;
+        for (i, &num) in partition.iter().enumerate() {
+            in_array
+                .iter()
+                .skip(array_offset)
+                .take(num)
+                .enumerate()
+                .for_each(|(j, &item)| {
+                    let c = ChallengeConst {
+                        challenge: challenges[i],
+                        exp: j as u64 + 1,
+                    };
+                    rlc_base_term!(self, <Ext as ExtensionField>::DEGREE, out.cells, item; c);
+                });
+            array_offset += num;
+        }
+
+        let c = ChallengeConst {
+            challenge: const_challenge,
+            exp: 1u64,
+        };
+        rlc_const_term!(self, <Ext as ExtensionField>::DEGREE, out.cells; c);
+    }
+
     /// Compute the random linear combination of `in_array` by challenge.
     /// out = \sum_{i = 0}^{in_array.len()} challenge^i * in_array[i] + challenge^{in_array.len()}.
     pub fn rlc_ext(

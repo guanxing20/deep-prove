@@ -15,7 +15,7 @@ use crate::{
     to_bit_sequence_le,
 };
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct Matrix<E> {
     dim: (usize, usize),
     // dimension is [n_rows,n_cols]
@@ -159,11 +159,7 @@ impl Matrix<Element> {
                 // check the number of columns correspond to the length of the vector
                 assert_eq!(row.len(), vec.len());
                 // dot product
-                row.clone()
-                    .into_iter()
-                    .zip(vec.iter())
-                    .map(|(a, b)| a * b)
-                    .sum()
+                row.iter().zip(vec.iter()).map(|(a, b)| a * b).sum()
             })
             .collect()
     }
