@@ -144,7 +144,7 @@ mod test {
         },
         lookup::{LogUp, LookupProtocol},
         onnx_parse::load_mlp,
-        quantization::TensorFielder,
+        quantization::{QuantInteger, TensorFielder},
         tensor::Tensor,
         to_bit_sequence_le,
     };
@@ -167,7 +167,7 @@ mod test {
 
         let shape = model.input_shape();
         assert_eq!(shape.len(), 1);
-        let input = Tensor::<Element>::random(vec![shape[0]]);
+        let input = Tensor::random::<QuantInteger>(vec![shape[0]]);
         let input = model.prepare_input(input);
 
         let trace = model.run(input.clone());

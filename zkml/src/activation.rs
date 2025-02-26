@@ -103,7 +103,7 @@ impl Relu {
 
 #[cfg(test)]
 mod test {
-    use crate::to_bit_sequence_le;
+    use crate::{quantization::QuantInteger, to_bit_sequence_le};
     use goldilocks::GoldilocksExt2;
     use itertools::Itertools;
     use multilinear_extensions::mle::{DenseMultilinearExtension, MultilinearExtension};
@@ -152,7 +152,7 @@ mod test {
         );
         assert_eq!(input_mle.num_vars(), output_mle.num_vars());
         assert_eq!(input_mle.num_vars(), Relu::num_vars());
-        let inputs = Tensor::<Element>::random(vec![10]);
+        let inputs = Tensor::random::<QuantInteger>(vec![10]);
         let outputs = relu.op(&inputs);
         assert_eq!(inputs.dims(), outputs.dims());
         for (idx, (input, output)) in inputs

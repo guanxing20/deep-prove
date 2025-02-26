@@ -1,5 +1,7 @@
 use anyhow::bail;
-use ark_std::rand::{self, SeedableRng, rngs::StdRng, thread_rng};
+use ark_std::rand::{
+    self, SeedableRng, distributions::Standard, prelude::Distribution, rngs::StdRng, thread_rng,
+};
 use ff::Field;
 use ff_ext::ExtensionField;
 use goldilocks::GoldilocksExt2;
@@ -19,7 +21,7 @@ use std::{
 
 use crate::{
     Element,
-    testing::{random_vector, random_vector_seed},
+    testing::{VecInto, random_vector, random_vector_seed},
     to_bit_sequence_le,
 };
 
@@ -375,9 +377,15 @@ impl Tensor<Element> {
     /// Creates a random matrix with a given number of rows and cols.
     /// NOTE: doesn't take a rng as argument because to generate it in parallel it needs be sync +
     /// sync which is not true for basic rng core.
-    pub fn random(shape: Vec<usize>) -> Self {
+    pub fn random<Q>(shape: Vec<usize>) -> Self
+    where
+        Standard: Distribution<Q>,
+        Q: Send + Sync,
+        Element: From<Q>,
+    {
         let size = shape.iter().product();
-        let data = random_vector(size);
+        let data = random_vector::<Q>(size);
+        let data: Vec<Element> = data.vec_into();
         Self { data, shape }
     }
 
@@ -441,18 +449,18 @@ impl PartialEq for Tensor<Element> {
 }
 
 impl Tensor<GoldilocksExt2> {
-    /// Creates a random matrix with a given number of rows and cols.
-    /// NOTE: doesn't take a rng as argument because to generate it in parallel it needs be sync +
-    /// sync which is not true for basic rng core.
-    pub fn random(shape: Vec<usize>) -> Self {
-        let mut rng = thread_rng();
-        let size = shape.iter().product();
-        let data = (0..size)
-            .map(|_| GoldilocksExt2::random(&mut rng))
-            .collect_vec();
+    // /// Creates a random matrix with a given number of rows and cols.
+    // /// NOTE: doesn't take a rng as argument because to generate it in parallel it needs be sync +
+    // /// sync which is not true for basic rng core.
+    // pub fn random(shape: Vec<usize>) -> Self {
+    //     let mut rng = thread_rng();
+    //     let size = shape.iter().product();
+    //     let data = (0..size)
+    //         .map(|_| GoldilocksExt2::random(&mut rng))
+    //         .collect_vec();
 
-        Self { data, shape }
-    }
+    //     Self { data, shape }
+    // }
 
     /// Creates a random matrix with a given number of rows and cols.
     /// NOTE: doesn't take a rng as argument because to generate it in parallel it needs be sync +
@@ -483,6 +491,8 @@ mod test {
     use ark_std::rand::{Rng, thread_rng};
     use goldilocks::GoldilocksExt2;
     use multilinear_extensions::mle::MultilinearExtension;
+
+    use crate::quantization::QuantInteger;
 
     use super::*;
 
@@ -578,6 +588,7 @@ mod test {
         pub fn get(&self, i: usize, j: usize) -> Element {
             self.data[i * self.dims()[1] + j]
         }
+
         pub fn random_eval_point(&self) -> Vec<E> {
             let mut rng = thread_rng();
             let r = rng.gen_range(0..self.nrows_2d());
@@ -588,7 +599,7 @@ mod test {
 
     #[test]
     fn test_tensor_mle() {
-        let mat = Tensor::<Element>::random(vec![3, 5]).pad_next_power_of_two_2d();
+        let mat = Tensor::random::<QuantInteger>(vec![3, 5]).pad_next_power_of_two_2d();
         println!("matrix {}", mat);
         let mut mle = mat.clone().to_mle_2d::<E>();
         let (chosen_row, chosen_col) = (

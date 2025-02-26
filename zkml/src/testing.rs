@@ -7,7 +7,21 @@ use ark_std::rand::{
 };
 use ff_ext::ExtensionField;
 use itertools::Itertools;
-use rayon::iter::ParallelIterator;
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
+
+pub trait VecInto<U> {
+    fn vec_into(self) -> Vec<U>;
+}
+
+impl<T, U> VecInto<U> for Vec<T>
+where
+    T: Send + Sync + Into<U>,
+    U: Send + Sync,
+{
+    fn vec_into(self) -> Vec<U> {
+        self.into_par_iter().map(Into::into).collect()
+    }
+}
 
 pub fn random_vector<T>(n: usize) -> Vec<T>
 where

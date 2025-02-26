@@ -22,10 +22,6 @@ pub trait Quantizer<Output> {
     fn from_f32_unsafe(e: &f32) -> Output;
 }
 
-pub(crate) trait Fieldizer<F> {
-    fn to_field(&self) -> F;
-}
-
 impl Quantizer<Element> for Element {
     fn from_f32_unsafe(e: &f32) -> Self {
         // even tho we are requantizing starting from Element, we only want to requantize for QuantInteger
@@ -39,6 +35,10 @@ impl Quantizer<Element> for Element {
         let scaled = (*e as f64 / scale).round() as Element + zero_point;
         scaled as Element
     }
+}
+
+pub(crate) trait Fieldizer<F> {
+    fn to_field(&self) -> F;
 }
 
 impl<F: ExtensionField> Fieldizer<F> for Element {
@@ -71,28 +71,6 @@ impl<F: ExtensionField> Fieldizer<F> for u8 {
         F::from(*self as u64)
     }
 }
-
-// pub trait VecFielder<F> {
-//     fn to_fields(self) -> Vec<F>;
-// }
-
-// impl<F: ExtensionField, T> VecFielder<F> for Vec<T>
-// where
-//     T: Fieldizer<F>,
-// {
-//     fn to_fields(self) -> Vec<F> {
-//         self.into_iter().map(|i| i.to_field()).collect_vec()
-//     }
-// }
-
-// impl<F: ExtensionField, T> VecFielder<F> for &[T]
-// where
-//     T: Fieldizer<F>,
-// {
-//     fn to_fields(self) -> Vec<F> {
-//         self.iter().map(|i| i.to_field()).collect_vec()
-//     }
-// }
 
 pub trait TensorFielder<F> {
     fn to_fields(self) -> Tensor<F>;
