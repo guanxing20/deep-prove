@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::{
     Claim, VectorTranscript,
@@ -7,7 +7,7 @@ use crate::{
     lookup::{self, LookupProtocol, LookupType},
     tensor::Tensor,
 };
-use anyhow::{anyhow, bail, ensure};
+use anyhow::{Context as CC, anyhow, bail, ensure};
 use ff_ext::ExtensionField;
 use itertools::{Itertools, multiunzip};
 use log::debug;
