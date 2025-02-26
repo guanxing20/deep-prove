@@ -6,7 +6,7 @@ use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use crate::{
     Element,
     activation::{Activation, Relu},
-    quantization::{Fieldizer, Requant, TensorFielder},
+    quantization::{Requant, TensorFielder},
     tensor::Tensor,
 };
 
@@ -313,13 +313,13 @@ pub(crate) mod test {
     use sumcheck::structs::IOPProverState;
 
     use crate::{
-        Claim, Element,
+        Element,
         activation::{Activation, Relu},
         default_transcript,
         model::Layer,
-        quantization::{QuantInteger, TensorFielder},
+        quantization::TensorFielder,
         tensor::Tensor,
-        testing::{random_bool_vector, random_vector},
+        testing::random_bool_vector,
     };
 
     use super::Model;

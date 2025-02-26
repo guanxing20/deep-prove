@@ -94,7 +94,7 @@ pub(crate) fn identity_eval<E: ExtensionField>(r1: &[E], r2: &[E]) -> E {
 ///        bits[i] = if pos & 1 == 1 { E::ONE } else { E::ZERO };
 ///        pos >>= 1;
 ///    }
-///    
+///
 ///    let num_vars_needed = r.len() - size.ilog2() as usize;
 ///    // Compute product for the required number of variables
 ///    (0..num_vars_needed).fold(E::ONE, |prod, i| {

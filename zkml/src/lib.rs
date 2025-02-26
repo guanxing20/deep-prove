@@ -3,9 +3,6 @@
 use ff_ext::ExtensionField;
 use gkr::structs::PointAndEval;
 use itertools::Itertools;
-use multilinear_extensions::mle::DenseMultilinearExtension;
-use quantization::{Fieldizer, QuantInteger};
-use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use serde::{Deserialize, Serialize};
 use transcript::{BasicTranscript, Transcript};
 pub mod activation;
@@ -147,9 +144,8 @@ mod test {
         },
         lookup::{LogUp, LookupProtocol},
         onnx_parse::load_mlp,
-        quantization::{QuantInteger, TensorFielder},
+        quantization::TensorFielder,
         tensor::Tensor,
-        testing::random_vector,
         to_bit_sequence_le,
     };
     use ff_ext::ff::Field;

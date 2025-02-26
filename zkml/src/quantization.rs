@@ -227,9 +227,9 @@ impl Requant {
 
 #[cfg(test)]
 mod test {
-    use crate::quantization::{Fieldizer, QuantInteger};
+    use crate::quantization::Fieldizer;
     use ff_ext::ExtensionField;
-    use goldilocks::{MODULUS, SmallField};
+    use goldilocks::SmallField;
 
     use crate::Element;
     type F = goldilocks::GoldilocksExt2;

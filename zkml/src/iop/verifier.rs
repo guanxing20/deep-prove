@@ -1,17 +1,16 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use crate::{
     Claim, VectorTranscript,
     commit::{self, precommit, same_poly},
-    iop::{StepProof, context::StepInfo, precommit::PolyID},
+    iop::{StepProof, context::StepInfo},
     lookup::{self, LookupProtocol, LookupType},
     tensor::Tensor,
 };
-use anyhow::{Context as CC, anyhow, bail, ensure};
+use anyhow::{anyhow, bail, ensure};
 use ff_ext::ExtensionField;
 use itertools::{Itertools, multiunzip};
 use log::debug;
-use mpcs::BasefoldCommitment;
 use multilinear_extensions::mle::{IntoMLE, MultilinearExtension};
 use poseidon::poseidon_hash::hash_n_to_hash_no_pad;
 use serde::{Serialize, de::DeserializeOwned};

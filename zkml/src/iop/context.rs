@@ -1,7 +1,5 @@
-use core::num;
-
 use crate::{
-    activation::{Activation, ActivationCtx, Relu},
+    activation::{Activation, ActivationCtx},
     iop::precommit::{self, PolyID},
     lookup::Context as LookupContext,
     model::{Layer, Model},

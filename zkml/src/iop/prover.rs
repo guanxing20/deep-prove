@@ -1,27 +1,22 @@
 use super::{
     Context, Proof, RequantProof, StepProof,
-    context::{ActivationInfo, DenseInfo, StepInfo},
+    context::{DenseInfo, StepInfo},
 };
 use crate::{
     Claim, Element, VectorTranscript,
-    activation::{Activation, Relu},
+    activation::Activation,
     commit::{precommit, same_poly},
     iop::{ActivationProof, DenseProof},
-    lookup::{
-        self, LookupProtocol,
-        utils::{compute_multiplicity_poly, merge_columns},
-    },
-    model::{InferenceStep, InferenceTrace, Layer, StepIdx},
-    quantization::Requant,
+    lookup::{self, LookupProtocol},
+    model::{InferenceStep, InferenceTrace, Layer},
     tensor::Tensor,
 };
 use anyhow::{Context as CC, anyhow, bail};
 use ff_ext::ExtensionField;
 use itertools::Itertools;
 use log::{debug, warn};
-use mpcs::util::field_type_to_ext_vec;
 use multilinear_extensions::{
-    mle::{DenseMultilinearExtension, IntoMLE, MultilinearExtension},
+    mle::{IntoMLE, MultilinearExtension},
     virtual_poly::VirtualPolynomial,
 };
 use serde::{Serialize, de::DeserializeOwned};
@@ -407,10 +402,7 @@ mod test {
     use itertools::Itertools;
     use multilinear_extensions::mle::{IntoMLE, MultilinearExtension};
 
-    use crate::{
-        Claim,
-        testing::{random_field_vector, random_vector},
-    };
+    use crate::testing::random_field_vector;
 
     use ff::Field;
     type F = GoldilocksExt2;

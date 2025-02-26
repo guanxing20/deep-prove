@@ -1,11 +1,10 @@
 use ff_ext::ExtensionField;
-use goldilocks::SmallField;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use serde::{Deserialize, Serialize};
 
 use crate::{
     Element,
-    quantization::{self, BIT_LEN, Fieldizer, ZERO},
+    quantization::{self, BIT_LEN, Fieldizer},
     tensor::Tensor,
 };
 
@@ -71,7 +70,7 @@ impl Relu {
                 (val, val)
             })
             .unzip();
-        
+
         let (input_two, output_two): (Vec<E>, Vec<E>) = (quantization::MIN..0)
             .map(|i| {
                 let val: E = i.to_field();
@@ -104,11 +103,10 @@ impl Relu {
 
 #[cfg(test)]
 mod test {
-    use crate::{testing::random_vector, to_bit_sequence_le};
+    use crate::to_bit_sequence_le;
     use goldilocks::GoldilocksExt2;
     use itertools::Itertools;
     use multilinear_extensions::mle::{DenseMultilinearExtension, MultilinearExtension};
-    use serde::de::Expected;
 
     use super::*;
 

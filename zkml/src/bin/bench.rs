@@ -2,8 +2,7 @@ use std::{
     collections::HashMap,
     fs::{File, OpenOptions},
     io::BufReader,
-    path::{self, Path, PathBuf},
-    str::FromStr,
+    path::{Path},
     time,
 };
 
@@ -12,7 +11,7 @@ use clap::Parser;
 use csv::WriterBuilder;
 use goldilocks::GoldilocksExt2;
 use itertools::Itertools;
-use log::{debug, info};
+use log::info;
 
 use serde::{Deserialize, Serialize};
 use zkml::{

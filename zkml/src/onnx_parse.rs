@@ -7,7 +7,7 @@ use tract_onnx::{pb::NodeProto, prelude::*};
 use crate::{
     Element,
     model::{Layer, Model},
-    quantization::{QuantInteger, Quantizer},
+    quantization::Quantizer,
 };
 
 #[derive(Debug, Clone)]
@@ -274,7 +274,6 @@ pub fn load_mlp<Q: Quantizer<Element>>(filepath: &str) -> Result<Model> {
 mod tests {
 
     use super::*;
-    use crate::testing::random_vector;
 
     use goldilocks::GoldilocksExt2;
 

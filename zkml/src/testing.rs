@@ -2,14 +2,12 @@ use ark_std::rand::{
     self, Rng, SeedableRng,
     distributions::{Standard, uniform::SampleUniform},
     prelude::Distribution,
-    rngs::{StdRng, ThreadRng},
+    rngs::StdRng,
     thread_rng,
 };
 use ff_ext::ExtensionField;
 use itertools::Itertools;
-use rayon::iter::{IntoParallelIterator, ParallelIterator};
-
-use crate::{Element, tensor::Tensor};
+use rayon::iter::ParallelIterator;
 
 pub fn random_vector<T>(n: usize) -> Vec<T>
 where
@@ -29,20 +27,6 @@ pub fn random_bool_vector<E: ExtensionField>(n: usize) -> Vec<E> {
     (0..n)
         .map(|_| E::from(rng.gen_bool(0.5) as u64))
         .collect_vec()
-}
-
-trait VecInto<U> {
-    fn vec_into(self) -> Vec<U>;
-}
-
-impl<T, U> VecInto<U> for Vec<T>
-where
-    T: Send + Sync + Into<U>,
-    U: Send + Sync,
-{
-    fn vec_into(self) -> Vec<U> {
-        self.into_par_iter().map(Into::into).collect()
-    }
 }
 
 pub fn random_vector_seed<T>(n: usize, seed: Option<u64>) -> Vec<T>

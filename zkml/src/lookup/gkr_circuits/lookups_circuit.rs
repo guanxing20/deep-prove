@@ -61,7 +61,7 @@ pub fn lookup_wire_fractional_sumcheck<E: ExtensionField>(
 #[cfg(test)]
 mod tests {
     use ark_std::rand::{
-        Rng, RngCore, SeedableRng,
+        RngCore, SeedableRng,
         rngs::{OsRng, StdRng},
     };
     use gkr::{
