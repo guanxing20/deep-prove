@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     fs::{File, OpenOptions},
     io::BufReader,
-    path::{Path},
+    path::Path,
     time,
 };
 
@@ -148,7 +148,7 @@ fn run(args: Args) -> anyhow::Result<()> {
 
     info!("[+] Running verifier");
     let mut verifier_transcript = default_transcript();
-    let io = IO::new(input.to_fields(), output);
+    let io = IO::new(input.to_fields(), output.to_fields());
     bencher.r(CSV_VERIFYING, || {
         verify::<_, _, LogUp>(ctx, proof, io, &mut verifier_transcript).expect("invalid proof")
     });

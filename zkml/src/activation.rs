@@ -8,28 +8,6 @@ use crate::{
     tensor::Tensor,
 };
 
-/// Context holding information related to the lookup tables used in the proving
-/// steps for the verifier and the prover.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ActivationCtx<E: ExtensionField> {
-    relu_mle_input: Vec<E>,
-    relu_mle_output: Vec<E>,
-}
-
-impl<E: ExtensionField> ActivationCtx<E> {
-    pub fn new() -> Self {
-        let (inp, out) = Relu::to_mle();
-        Self {
-            relu_mle_input: inp,
-            relu_mle_output: out,
-        }
-    }
-    /// Returns the input and output MLE of the RELU table
-    pub fn relu_polys(&self) -> Vec<Vec<E>> {
-        vec![self.relu_mle_input.clone(), self.relu_mle_output.clone()]
-    }
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize, Copy)]
 pub enum Activation {
     Relu(Relu),
@@ -62,26 +40,14 @@ impl Relu {
     /// to_mle returns two polynomials:
     /// f_i: one containing the input column values
     /// f_o: one containing the output column values
-    pub fn to_mle<E: ExtensionField>() -> (Vec<E>, Vec<E>) {
-        // We construct this way so that (0,0) is the first row of the table
-        let (input_one, output_one): (Vec<E>, Vec<E>) = (0..=quantization::MAX)
+    pub fn to_mle<E: ExtensionField>() -> (Vec<E::BaseField>, Vec<E::BaseField>) {
+        (quantization::MIN..=quantization::MAX)
             .map(|i| {
                 let val: E = i.to_field();
-                (val, val)
+                let op_val: E = Relu::apply(i as i128).to_field();
+                (val.as_bases()[0], op_val.as_bases()[0])
             })
-            .unzip();
-
-        let (input_two, output_two): (Vec<E>, Vec<E>) = (quantization::MIN..0)
-            .map(|i| {
-                let val: E = i.to_field();
-                (val, E::ZERO)
-            })
-            .unzip();
-
-        (
-            [input_one, input_two].concat(),
-            [output_one, output_two].concat(),
-        )
+            .unzip()
     }
 
     pub fn op(&self, input: &Tensor<Element>) -> Tensor<Element> {
@@ -135,10 +101,9 @@ mod test {
 
     #[test]
     fn test_activation_relu_mle() {
-        let ctx = ActivationCtx::<F>::new();
         let relu = Relu::new();
-        let mut table_mle = ctx.relu_polys();
-        let (input_poly, output_poly) = (table_mle.remove(0), table_mle.remove(0));
+        let (input_poly, output_poly) = Relu::to_mle::<F>();
+
         assert_eq!(input_poly.len(), output_poly.len());
         let (input_mle, output_mle) = (
             DenseMultilinearExtension::from_evaluation_vec_smart(

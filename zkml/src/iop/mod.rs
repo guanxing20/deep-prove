@@ -22,6 +22,8 @@ where
 {
     /// The successive sumchecks proofs. From output layer to input.
     steps: Vec<StepProof<E>>,
+    /// The proofs for any lookup tables used
+    table_proofs: Vec<TableProof<E>>,
     /// the commitment proofs related to the weights
     commit: precommit::CommitProof<E>,
     /// the proofs related to the witnesses from RELU and link with dense layer
@@ -36,7 +38,6 @@ where
     Dense(DenseProof<E>),
     Activation(ActivationProof<E>),
     Requant(RequantProof<E>),
-    Table(TableProof<E>),
 }
 
 impl<E: ExtensionField> StepProof<E>
@@ -48,7 +49,6 @@ where
             Self::Dense(_) => "Dense".to_string(),
             Self::Activation(_) => "Activation".to_string(),
             Self::Requant(_) => "Requant".to_string(),
-            Self::Table(..) => "Table".to_string(),
         }
     }
 
@@ -56,8 +56,7 @@ where
         match self {
             StepProof::Dense(..) => None,
             StepProof::Activation(ActivationProof { lookup, .. })
-            | StepProof::Requant(RequantProof { lookup, .. })
-            | StepProof::Table(TableProof { lookup }) => Some((
+            | StepProof::Requant(RequantProof { lookup, .. }) => Some((
                 lookup.get_digest().0.to_vec(),
                 lookup.numerators(),
                 lookup.denominators(),
@@ -122,7 +121,9 @@ where
 mod test {
     use goldilocks::GoldilocksExt2;
 
-    use crate::{default_transcript, lookup::LogUp, model::Model, quantization::TensorFielder};
+    use crate::{
+        Element, default_transcript, lookup::LogUp, model::Model, quantization::TensorFielder,
+    };
 
     use super::{
         Context,
@@ -138,10 +139,10 @@ mod test {
         tracing_subscriber::fmt::init();
         let (model, input) = Model::random(4);
         model.describe();
-        let trace = model.run::<F>(input.clone());
-        let output = trace.final_output().clone();
-        let ctx = Context::generate(&model).expect("unable to generate context");
-        let io = IO::new(input.to_fields(), output);
+        let trace = model.run(input.clone());
+        let output = trace.final_output();
+        let ctx = Context::<F>::generate(&model).expect("unable to generate context");
+        let io = IO::new(input.to_fields(), output.clone().to_fields());
         let mut prover_transcript = default_transcript();
         let prover = Prover::<_, _, LogUp>::new(&ctx, &mut prover_transcript);
         let proof = prover.prove(trace).expect("unable to generate proof");

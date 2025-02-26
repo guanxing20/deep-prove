@@ -2,7 +2,6 @@ use ff::Field;
 use ff_ext::ExtensionField;
 use simple_frontend::structs::{CircuitBuilder, ExtCellId};
 
-pub mod logup;
 pub mod lookups_circuit;
 pub mod table_circuit;
 

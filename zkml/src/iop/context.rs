@@ -1,5 +1,5 @@
 use crate::{
-    activation::{Activation, ActivationCtx},
+    activation::Activation,
     iop::precommit::{self, PolyID},
     lookup::Context as LookupContext,
     model::{Layer, Model},
@@ -103,11 +103,6 @@ where
     /// Context related to the commitment and accumulation of claims related to the weights of model.
     /// This part contains the commitment of the weights.
     pub weights: precommit::Context<E>,
-
-    /// Context holding the lookup tables for activation, e.g. the MLEs of the input and output columns for
-    /// RELU for example
-    pub activation: ActivationCtx<E>,
-
     /// Context holding all lookup related inforamtion
     pub lookup: LookupContext<E>,
 }
@@ -164,15 +159,12 @@ where
         let commit_ctx = precommit::Context::generate_from_model(model)
             .context("can't generate context for commitment part")?;
         println!("CTX STEP C");
-        let activation = ActivationCtx::new();
-        println!("CTX STEP D");
 
-        let mut steps_info = auxs.into_iter().rev().collect_vec();
-        let lookup = LookupContext::<E>::generate(&mut steps_info)?;
+        let lookup = LookupContext::<E>::generate(&auxs)?;
+
         Ok(Self {
-            steps_info,
+            steps_info: auxs.into_iter().rev().collect_vec(),
             weights: commit_ctx,
-            activation,
             lookup,
         })
     }

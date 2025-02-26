@@ -1,5 +1,5 @@
 use super::{
-    Context, Proof, RequantProof, StepProof,
+    Context, Proof, RequantProof, StepProof, TableProof,
     context::{DenseInfo, StepInfo},
 };
 use crate::{
@@ -33,6 +33,7 @@ where
     ctx: &'a Context<E>,
     // proofs for each layer being filled
     proofs: Vec<StepProof<E>>,
+    table_proofs: Vec<TableProof<E>>,
     transcript: &'a mut T,
     commit_prover: precommit::CommitProver<E>,
     /// the context of the witness part (IO of lookups, linked with matrix2vec for example)
@@ -60,6 +61,7 @@ where
             ctx,
             transcript,
             proofs: Default::default(),
+            table_proofs: Vec::default(),
             commit_prover: precommit::CommitProver::new(),
             // at this step, we can't build the ctx since we don't know the individual polys
             witness_ctx: None,
@@ -110,9 +112,12 @@ where
                 step.variant_name()
             ));
         }
-
+        let prover_info = self
+            .lookup_witness
+            .next()
+            .ok_or(anyhow!("No more lookup witness!"))?;
         // Run the lookup protocol and return the lookup proof
-        let lookup_proof = L::prove(&self.ctx.lookup, &self.lookup_witness, self.transcript)?;
+        let lookup_proof = L::prove(&self.ctx.lookup, &prover_info, self.transcript)?;
 
         // We need to prove that the output of this step is the input to following activation function
         let mut same_poly_prover = same_poly::Prover::<E>::new(output.to_vec().into_mle());
@@ -140,26 +145,21 @@ where
                 Ok(input_claim)
             }
             StepInfo::Requant(requant_info) => {
-                let info = requant_info.requant;
                 // For requant layers we have to extract the correct "chunk" from the list of claims
-                let step = self.lookup_witness.current_step;
-                let (lookup_type, _) = self.ctx.lookup.get_circuit_and_type(step)?;
+                let eval_claims = lookup_proof
+                    .claims()
+                    .iter()
+                    .map(|claim| claim.eval)
+                    .collect::<Vec<E>>();
 
-                let num_actual_claims = lookup_type.number_of_columns();
+                let combined_eval = requant_info.requant.recombine_claims(&eval_claims);
 
-                let total_claims = lookup_proof.claims().len();
-
-                // The actual claims that we care about
-                let actual_claims = &lookup_proof.claims()[total_claims - num_actual_claims..];
-
-                let point = actual_claims[0].point.clone();
-
-                // Need to work out the constant values to add/subtract for this step
-                let max_bit = info.range << 1;
-                let max_bit = max_bit as u64;
-                let subtract = max_bit >> info.right_shift;
-
-                let first_claim = actual_claims.first().ok_or(anyhow!("No claims found"))?;
+                // Pass the eval associated with the poly used in the activation step to the same poly prover
+                let first_claim = lookup_proof
+                    .claims()
+                    .first()
+                    .ok_or(anyhow!("No claims found"))?;
+                let point = first_claim.point.clone();
 
                 // Add the claim used in the activation function
                 same_poly_prover.add_claim(first_claim.clone())?;
@@ -168,22 +168,15 @@ where
                 self.witness_prover
                     .add_claim(requant_info.poly_id, claim_acc_proof.extract_claim())?;
 
-                let tmp_eval = E::from(1 << info.right_shift as u64)
-                    * (first_claim.eval + E::from(subtract))
-                    + actual_claims.iter().skip(1).rev().enumerate().fold(
-                        E::ZERO,
-                        |acc, (i, claim)| {
-                            acc + E::from((info.after_range.pow(i as u32)) as u64)
-                                * (claim.eval + E::from(128u64))
-                        },
-                    );
-                let eval = tmp_eval - E::from(max_bit);
                 self.proofs.push(StepProof::Requant(RequantProof {
                     io_accumulation: claim_acc_proof,
                     lookup: lookup_proof,
                 }));
 
-                Ok(Claim { point, eval })
+                Ok(Claim {
+                    point,
+                    eval: combined_eval,
+                })
             }
             _ => Err(anyhow!(
                 "Should not be in prove_lookup function for step: {}",
@@ -192,24 +185,26 @@ where
         }
     }
 
-    fn prove_table(&mut self) -> anyhow::Result<()> {
-        let poly_id = self.lookup_witness.current_step;
-        let (lt, _) = self
-            .ctx
-            .lookup
-            .get_circuit_and_type(self.lookup_witness.current_step)?;
-        println!("PROVING table of type: {:?}", lt);
-        // Make the proof for the table
-        let table_proof = L::prove(&self.ctx.lookup, &self.lookup_witness, self.transcript)?;
+    fn prove_tables(&mut self) -> anyhow::Result<()> {
+        self.lookup_witness
+            .get_table_witnesses()
+            .iter()
+            .zip(self.ctx.lookup.get_table_circuits().iter())
+            .try_for_each(|(table_witness, table_info)| {
+                let poly_id = table_info.poly_id;
+                println!("PROVING table of type: {:?}", table_info.lookup_type);
+                // Make the proof for the table
+                let table_proof = L::prove(&self.ctx.lookup, &table_witness, self.transcript)?;
 
-        // Add the multiplicity poly claim
-        self.witness_prover
-            .add_claim(poly_id, table_proof.claims().last().unwrap().clone())?;
+                // Add the multiplicity poly claim
+                self.witness_prover
+                    .add_claim(poly_id, table_proof.claims().last().unwrap().clone())?;
 
-        self.proofs.push(StepProof::Table(super::TableProof {
-            lookup: table_proof,
-        }));
-        Ok(())
+                self.table_proofs.push(TableProof {
+                    lookup: table_proof,
+                });
+                Ok(())
+            })
     }
 
     fn prove_dense_step(
@@ -316,12 +311,12 @@ where
         Ok(claim)
     }
 
-    pub fn prove<'b>(mut self, trace: InferenceTrace<'b, E>) -> anyhow::Result<Proof<E>> {
-        // First, create the context for the witness polys -
-        self.instantiate_witness_ctx(&trace)?;
-        // write commitments and polynomials info to transcript
+    pub fn prove<'b>(mut self, trace: InferenceTrace<'b, Element>) -> anyhow::Result<Proof<E>> {
+        // First write commitments and polynomials info to transcript
         self.ctx.write_to_transcript(self.transcript)?;
-
+        // create the context for the witness polys -
+        self.instantiate_witness_ctx(&trace)?;
+        let trace = trace.to_field::<E>();
         // this is the random set of variables to fix at each step derived as the output of
         // sumcheck.
         // For the first step, so before the first sumcheck, we generate it from FS.
@@ -350,17 +345,11 @@ where
             .zip(self.ctx.steps_info.iter())
             .enumerate()
         {
-            self.lookup_witness.current_step = trace_size - i;
             last_claim = self.prove_step(last_claim, input, step, &info)?;
         }
 
         // Now we have to make the table proofs
-        self.lookup_witness.current_step = trace_size + 1;
-
-        while self.lookup_witness.continue_proving() {
-            self.prove_table()?;
-            self.lookup_witness.current_step += 1;
-        }
+        self.prove_tables()?;
 
         // now provide opening proofs for all claims accumulated during the proving steps
         let commit_proof = self
@@ -368,6 +357,7 @@ where
             .prove(&self.ctx.weights, self.transcript)?;
         let mut output_proof = Proof {
             steps: self.proofs,
+            table_proofs: self.table_proofs,
             commit: commit_proof,
             witness: None,
         };
@@ -379,9 +369,15 @@ where
     }
 
     /// Looks at all the individual polys to accumulate from the witnesses and create the context from that.
-    fn instantiate_witness_ctx<'b>(&mut self, trace: &InferenceTrace<'b, E>) -> anyhow::Result<()> {
-        let (lookup_witness, polys) =
-            lookup::WitnessContext::<E>::initialise_witness_ctx(&self.ctx.lookup, trace)?;
+    fn instantiate_witness_ctx<'b>(
+        &mut self,
+        trace: &InferenceTrace<'b, Element>,
+    ) -> anyhow::Result<()> {
+        let (lookup_witness, polys) = lookup::WitnessContext::<E>::initialise_witness_ctx(
+            &self.ctx.lookup,
+            trace,
+            self.transcript,
+        )?;
 
         if !polys.is_empty() {
             let ctx = precommit::Context::generate(polys)

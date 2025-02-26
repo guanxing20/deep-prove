@@ -5,8 +5,8 @@ use std::collections::HashMap;
 
 /// Function that when provided with the merged table and merged lookups computes the multiplicity polynomial
 pub fn compute_multiplicity_poly<E: ExtensionField>(
-    merged_table: &[E],
-    merged_lookups: &[E],
+    merged_table: &[E::BaseField],
+    merged_lookups: &[E::BaseField],
 ) -> DenseMultilinearExtension<E> {
     // Create HashMaps to keep track of the number of entries
     let mut h_lookup = HashMap::new();

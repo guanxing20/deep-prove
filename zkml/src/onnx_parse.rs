@@ -307,7 +307,7 @@ mod tests {
         //     .map(|x| x as Element)
         //     .collect_vec();
 
-        let trace = model.run::<F>(input.clone());
+        let trace = model.run(input.clone());
         println!("Result: {:?}", trace.final_output());
     }
 

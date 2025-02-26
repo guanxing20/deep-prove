@@ -130,7 +130,7 @@ impl Model {
         self.layers[0].prepare_input(input)
     }
 
-    pub fn run<'a, E: ExtensionField>(&'a self, input: Tensor<Element>) -> InferenceTrace<'a, E> {
+    pub fn run<'a>(&'a self, input: Tensor<Element>) -> InferenceTrace<'a, Element> {
         let mut trace = InferenceTrace::<Element>::new(input);
         for (id, layer) in self.layers() {
             let input = trace.last_input();
@@ -139,7 +139,7 @@ impl Model {
             let step = InferenceStep { layer, output, id };
             trace.push_step(step);
         }
-        trace.to_field()
+        trace
     }
 
     pub fn layers(&self) -> impl DoubleEndedIterator<Item = (StepIdx, &Layer)> {
@@ -361,7 +361,7 @@ pub(crate) mod test {
     #[test]
     fn test_model_long() {
         let (model, input) = Model::random(3);
-        model.run::<F>(input);
+        model.run(input);
     }
 
     #[test]
@@ -377,7 +377,7 @@ pub(crate) mod test {
         model.add_layer(Layer::Dense(mat1));
         model.add_layer(Layer::Dense(mat2.clone()));
 
-        let trace = model.run::<F>(input.clone());
+        let trace = model.run(input.clone()).to_field::<F>();
         assert_eq!(trace.steps.len(), 2);
 
         // Verify first step
@@ -402,7 +402,7 @@ pub(crate) mod test {
         model.add_layer(Layer::Dense(mat1));
         model.add_layer(Layer::Dense(mat2));
 
-        let trace = model.run::<F>(input.clone());
+        let trace = model.run(input.clone());
 
         // Verify iterator yields correct input/output pairs
         let mut iter = trace.iter();
@@ -432,7 +432,7 @@ pub(crate) mod test {
         model.add_layer(Layer::Dense(mat1));
         model.add_layer(Layer::Dense(mat2));
 
-        let trace = model.run::<F>(input.clone());
+        let trace = model.run(input.clone());
 
         // Test reverse iteration
         let mut rev_iter = trace.iter().rev();
@@ -458,7 +458,7 @@ pub(crate) mod test {
         model.describe();
         println!("INPUT: {:?}", input);
         let bb = model.clone();
-        let trace = bb.run::<F>(input.clone());
+        let trace = bb.run(input.clone()).to_field::<F>();
         let matrices = model
             .layers()
             .flat_map(|(_id, l)| match l {

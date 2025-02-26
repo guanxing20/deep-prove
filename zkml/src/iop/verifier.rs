@@ -3,12 +3,13 @@ use std::collections::{HashMap, HashSet};
 use crate::{
     Claim, VectorTranscript,
     commit::{self, precommit, same_poly},
-    iop::{StepProof, context::StepInfo},
-    lookup::{self, LookupProtocol, LookupType},
+    iop::{StepProof, context::StepInfo, precommit::PolyID},
+    lookup::{self, LookupProtocol, LookupType, TableInfo},
     tensor::Tensor,
 };
 use anyhow::{Context as CC, anyhow, bail, ensure};
 use ff_ext::ExtensionField;
+use gkr::structs::Circuit;
 use itertools::{Itertools, multiunzip};
 use log::debug;
 use multilinear_extensions::mle::{IntoMLE, MultilinearExtension};
@@ -19,7 +20,7 @@ use transcript::Transcript;
 
 use super::{
     ActivationProof, Context, DenseProof, Proof, RequantProof, TableProof,
-    context::{ActivationInfo, DenseInfo, RequantInfo, TableInfo},
+    context::{ActivationInfo, DenseInfo, RequantInfo},
 };
 
 /// What the verifier must have besides the proof
@@ -47,90 +48,54 @@ where
     E::BaseField: Serialize + DeserializeOwned,
     E: Serialize + DeserializeOwned,
 {
-    // Ordering of proofs and work out how many table proofs there are.
-    let mut num_tables = 0;
-    let names = proof
-        .steps
-        .iter()
-        .map(|p| {
-            if let StepProof::Table(..) = p {
-                num_tables += 1;
-            };
-            p.variant_name()
-        })
-        .collect_vec();
-    println!("VERIFIER: Proof Order: {:?}", names);
+    // Ordering of proofs.
+    println!(
+        "VERIFIER: Proof Order: {:?}",
+        proof.steps.iter().map(|p| p.variant_name()).collect_vec()
+    );
 
     let total_steps = proof.steps.len();
-    let non_table_proofs = total_steps - num_tables;
 
-    // 1. Generate the challenges used in the lookups and extract the claimed numerators and denominators
-    let lookup_proof_data = (0..total_steps)
-        .filter_map(|i| {
-            if i < non_table_proofs {
-                proof.steps[total_steps - 1 - num_tables - i].get_lookup_data()
-            } else {
-                proof.steps[i].get_lookup_data()
-            }
-        })
-        .collect::<Vec<(Vec<E::BaseField>, Vec<E>, Vec<E>)>>();
-
-    let (lookup_commits, numerators, denominators): (
-        Vec<Vec<E::BaseField>>,
-        Vec<Vec<E>>,
-        Vec<Vec<E>>,
-    ) = multiunzip(lookup_proof_data);
-
-    let lookup_commits = lookup_commits
-        .into_iter()
-        .flatten()
-        .collect::<Vec<E::BaseField>>();
-    let numerators = numerators.into_iter().flatten().collect::<Vec<E>>();
-    let denominators = denominators.into_iter().flatten().collect::<Vec<E>>();
-
-    let constant_challenge = E::from_bases(&hash_n_to_hash_no_pad(&lookup_commits).0[..2]);
-
-    let mut lookup_challenges = HashMap::<String, Vec<E>>::new();
-
-    (0..proof.steps.len()).for_each(|i| {
-        let res = ctx.lookup.get_circuit_and_type(i);
-        if let Ok((LookupType::RequantTable(bit_size), _)) = res {
-            let lookup_type = LookupType::RequantTable(*bit_size);
-            let bit_size = *bit_size as u8;
-            let requant_extra = lookup_type
-                .get_dom_sep()
-                .iter()
-                .chain(std::iter::once(&bit_size))
-                .map(|byte| E::BaseField::from(*byte as u64))
-                .collect::<Vec<E::BaseField>>();
-            let input = [lookup_commits.clone(), requant_extra].concat();
-            let requant_challenge = E::from_bases(&hash_n_to_hash_no_pad(&input).0[..2]);
-            println!("inserting {}", lookup_type.name());
-            lookup_challenges.insert(lookup_type.name(), vec![
-                requant_challenge,
-                constant_challenge,
-            ]);
-        } else if let Ok((LookupType::ReluTable, _)) = res {
-            let lookup_type = LookupType::ReluTable;
-            let relu_extra = lookup_type
-                .get_dom_sep()
-                .iter()
-                .map(|byte| E::BaseField::from(*byte as u64))
-                .collect::<Vec<E::BaseField>>();
-            let input = [lookup_commits.clone(), relu_extra].concat();
-            let relu_challenge = E::from_bases(&hash_n_to_hash_no_pad(&input).0[..2]);
-            println!("inserting {}", lookup_type.name());
-            lookup_challenges.insert(lookup_type.name(), vec![relu_challenge, constant_challenge]);
-        }
-    });
-
+    // 1. Instatiate everything and append relevant info to the transcript
     let mut commit_verifier = precommit::CommitVerifier::new();
     let mut witness_verifier = precommit::CommitVerifier::new();
 
+    let mut numerators = Vec::<E>::new();
+    let mut denominators = Vec::<E>::new();
+
     ctx.write_to_transcript(transcript)?;
-    // 0. Derive the first randomness
+    proof.steps.iter().rev().for_each(|proof| {
+        if let Some((commit, num, denom)) = proof.get_lookup_data() {
+            transcript.append_field_elements(&commit);
+            numerators.extend(num.into_iter());
+            denominators.extend(denom.into_iter());
+        }
+    });
+
+    let constant_challenge = transcript
+        .get_and_append_challenge(b"table_constant_challenge")
+        .elements;
+    let mut lookup_challenges = HashMap::<String, Vec<E>>::new();
+    proof
+        .table_proofs
+        .iter()
+        .zip(ctx.lookup.get_table_circuits().iter())
+        .for_each(|(table_proof, table_info)| {
+            let table_type = table_info.lookup_type;
+
+            transcript.append_field_elements(table_proof.lookup.get_digest().0.as_slice());
+
+            let actual_challenge = transcript
+                .get_and_append_challenge(b"table_challenge")
+                .elements;
+            lookup_challenges.insert(table_type.name(), vec![
+                actual_challenge,
+                constant_challenge,
+            ]);
+        });
+    // 2. Derive the first randomness
     let first_randomness = transcript.read_challenges(io.output.get_data().len().ilog2() as usize);
-    // 1. For the output, we manually evaluate the MLE and check if it's the same as what prover
+    // 3. For the output, we manually evaluate the MLE and check if it's the same as what prover
     //    gave. Note prover could ellude that but it's simpler to avoid that special check right
     //    now.
     let output_mle = io.output.get_data().to_vec().into_mle();
@@ -156,7 +121,7 @@ where
         _ => {}
     }
 
-    // 3. Verify each proof sequentially, Always make sure the proof corresponds to the expected type of proof in the context.
+    // 4. Verify each proof sequentially, Always make sure the proof corresponds to the expected type of proof in the context.
     // We have two `HashSet`s, one for the type of table used and one for the lookup challenges used
     for (i, proof) in proof.steps.iter().enumerate() {
         output_claim = match proof {
@@ -166,7 +131,7 @@ where
                 } else {
                     return Err(anyhow!("Step info does not line up at activation step"));
                 };
-                let step = total_steps - 1 - num_tables - i;
+                let step = total_steps - 1 - i;
                 let (lookup_type, _) = ctx.lookup.get_circuit_and_type(step)?;
                 let challenges = lookup_challenges.get(&lookup_type.name()).ok_or(anyhow!(
                     "Couldn't get challenges at Activation verification, LookupType was: {:?}",
@@ -197,7 +162,7 @@ where
                 } else {
                     return Err(anyhow!("Step info does not line up at requant step"));
                 };
-                let step = total_steps - 1 - num_tables - i;
+                let step = total_steps - 1 - i;
                 let (lookup_type, _) = ctx.lookup.get_circuit_and_type(step)?;
                 let challenges = lookup_challenges.get(&lookup_type.name()).ok_or(anyhow!(
                     "Couldn't get challenges at Requant verification, LookupType was: {:?}",
@@ -214,29 +179,7 @@ where
                     step,
                 )?
             }
-            StepProof::<E>::Table(table_proof) => {
-                let info = if let StepInfo::Table(info) = &ctx.steps_info[i] {
-                    info
-                } else {
-                    return Err(anyhow!("Step info does not line up at table step"));
-                };
 
-                let (lookup_type, _) = ctx.lookup.get_circuit_and_type(i)?;
-                let challenges = lookup_challenges.get(&lookup_type.name()).ok_or(anyhow!(
-                    "Couldn't get challenges at Table verification, LookupType was: {:?}",
-                    lookup_type
-                ))?;
-                verify_table::<_, _, L>(
-                    &table_proof,
-                    info,
-                    &mut witness_verifier,
-                    &ctx.lookup,
-                    transcript,
-                    challenges,
-                    i,
-                )?;
-                output_claim
-            }
             _ => bail!(
                 "proof type {} at step {} shouldn't exist ",
                 proof.variant_name(),
@@ -244,7 +187,29 @@ where
             ),
         }
     }
-    // 3. input verification: evaluating the input at the random evaluation point from the sumcheck
+
+    // 5. Verify the lookup table proofs
+    proof
+        .table_proofs
+        .iter()
+        .zip(ctx.lookup.get_table_circuits())
+        .try_for_each(|(table_proof, table_info)| {
+            let challenges = lookup_challenges
+                .get(&table_info.lookup_type.name())
+                .ok_or(anyhow!(
+                    "No challenges found for table of type: {:?} during verification",
+                    table_info.lookup_type
+                ))?;
+            verify_table::<_, _, L>(
+                table_proof,
+                table_info,
+                &mut witness_verifier,
+                transcript,
+                challenges,
+            )
+        })?;
+
+    // 6. input verification: evaluating the input at the random evaluation point from the sumcheck
     let input_mle = io.input.get_data().to_vec().into_mle();
     let computed_randomized_input = input_mle.evaluate(&output_claim.point);
     let given_randomized_input = output_claim.eval;
@@ -252,10 +217,10 @@ where
         computed_randomized_input == given_randomized_input,
         "input not valid from proof"
     );
-    // 5. verify the opening of the accumulation of claims
+    // 7. verify the opening of the accumulation of claims
     commit_verifier.verify(&ctx.weights, proof.commit, transcript)?;
 
-    // 6. verify that the accumulated numerator is zero and accumulated denominator is non-zero
+    // 8. verify that the accumulated numerator is zero and accumulated denominator is non-zero
     let (final_num, final_denom) = numerators
         .into_iter()
         .zip(denominators.into_iter())
@@ -435,31 +400,30 @@ fn verify_table<E: ExtensionField, T: Transcript<E>, L: LookupProtocol<E>>(
     proof: &TableProof<E>,
     info: &TableInfo<E>,
     witness_verifier: &mut commit::precommit::CommitVerifier<E>,
-    lookup_ctx: &lookup::Context<E>,
     t: &mut T,
     challenges: &[E],
-    step: usize,
 ) -> anyhow::Result<()>
 where
     E::BaseField: Serialize + DeserializeOwned,
     E: Serialize + DeserializeOwned,
 {
-    // Get the lookup type for this and check its a table
-    let (lookup_type, _) = lookup_ctx.get_circuit_and_type(step)?;
-
-    if !lookup_type.is_table() {
-        return Err(anyhow!(
-            "Verifying a table when the lookup type was not a table type"
-        ));
-    }
-
     // 1. Verify the lookup proof
-    let verifier_claims = L::verify(lookup_ctx, challenges, step, proof.lookup.clone(), t)?;
+    let verifier_claims = L::verify_table(
+        challenges,
+        &info.lookup_type,
+        &info.circuit,
+        proof.lookup.clone(),
+        t,
+    )?;
 
     // 2. Accumulate the multiplicity poly claim into the witness commitment protocol
     witness_verifier.add_claim(
         info.poly_id,
-        verifier_claims.claims().last().unwrap().clone(),
+        verifier_claims
+            .claims()
+            .last()
+            .ok_or(anyhow!("Claims was empty in table verification!"))?
+            .clone(),
     )?;
 
     Ok(())

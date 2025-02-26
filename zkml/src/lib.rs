@@ -180,7 +180,7 @@ mod test {
         let proof = prover.prove(trace).expect("unable to generate proof");
 
         let mut verifier_transcript = default_transcript();
-        let io = IO::new(input.to_fields(), output);
+        let io = IO::new(input.to_fields(), output.to_fields());
         verify::<_, _, L>(ctx, proof, io, &mut verifier_transcript).expect("invalid proof");
         println!("[+] Verify proof: valid");
         Ok(())
