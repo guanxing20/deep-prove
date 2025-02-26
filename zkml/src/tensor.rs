@@ -370,6 +370,7 @@ where
                 result.data[i * old_rows + j] = self.data[i * old_rows + j];
             }
         }
+        *self = result;
     }
 }
 
