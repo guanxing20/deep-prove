@@ -367,7 +367,7 @@ where
         // Create a new matrix with expanded dimensions
         for i in 0..old_rows {
             for j in 0..old_cols {
-                result.data[i * old_rows + j] = self.data[i * old_rows + j];
+                result.data[i * new_cols + j] = self.data[i * old_cols + j];
             }
         }
         *self = result;
