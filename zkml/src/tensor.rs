@@ -393,9 +393,15 @@ impl Tensor<Element> {
     /// Creates a random matrix with a given number of rows and cols.
     /// NOTE: doesn't take a rng as argument because to generate it in parallel it needs be sync +
     /// sync which is not true for basic rng core.
-    pub fn random_seed(shape: Vec<usize>, seed: Option<u64>) -> Self {
+    pub fn random_seed<Q>(shape: Vec<usize>, seed: Option<u64>) -> Self
+    where
+        Standard: Distribution<Q>,
+        Q: Send + Sync,
+        Element: From<Q>,
+    {
         let size = shape.iter().product();
-        let data = random_vector_seed(size, seed);
+        let data = random_vector_seed::<Q>(size, seed);
+        let data = data.vec_into();
         Self { data, shape }
     }
 
@@ -424,7 +430,10 @@ impl Tensor<Element> {
     }
 }
 
-impl fmt::Display for Tensor<Element> {
+impl<T> fmt::Display for Tensor<T>
+where
+    T: std::fmt::Debug + std::fmt::Display,
+{
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let shape = &self.shape;
         if shape.len() != 2 {
@@ -449,38 +458,38 @@ impl PartialEq for Tensor<Element> {
     }
 }
 
-impl Tensor<GoldilocksExt2> {
-    // /// Creates a random matrix with a given number of rows and cols.
-    // /// NOTE: doesn't take a rng as argument because to generate it in parallel it needs be sync +
-    // /// sync which is not true for basic rng core.
-    // pub fn random(shape: Vec<usize>) -> Self {
-    //     let mut rng = thread_rng();
-    //     let size = shape.iter().product();
-    //     let data = (0..size)
-    //         .map(|_| GoldilocksExt2::random(&mut rng))
-    //         .collect_vec();
+// impl Tensor<GoldilocksExt2> {
+// /// Creates a random matrix with a given number of rows and cols.
+// /// NOTE: doesn't take a rng as argument because to generate it in parallel it needs be sync +
+// /// sync which is not true for basic rng core.
+// pub fn random(shape: Vec<usize>) -> Self {
+//     let mut rng = thread_rng();
+//     let size = shape.iter().product();
+//     let data = (0..size)
+//         .map(|_| GoldilocksExt2::random(&mut rng))
+//         .collect_vec();
 
-    //     Self { data, shape }
-    // }
+//     Self { data, shape }
+// }
 
-    /// Creates a random matrix with a given number of rows and cols.
-    /// NOTE: doesn't take a rng as argument because to generate it in parallel it needs be sync +
-    /// sync which is not true for basic rng core.
-    pub fn random_seed(shape: Vec<usize>, seed: Option<u64>) -> Self {
-        let seed = seed.unwrap_or(rand::random::<u64>()); // Use provided seed or default
+/// Creates a random matrix with a given number of rows and cols.
+/// NOTE: doesn't take a rng as argument because to generate it in parallel it needs be sync +
+/// sync which is not true for basic rng core.
+// pub fn random_seed(shape: Vec<usize>, seed: Option<u64>) -> Self {
+//     let seed = seed.unwrap_or(rand::random::<u64>()); // Use provided seed or default
 
-        let size = shape.iter().product();
-        let data = (0..size)
-            .into_par_iter()
-            .map(|i| {
-                let mut rng = StdRng::seed_from_u64(seed + i as u64);
-                GoldilocksExt2::random(&mut rng)
-            })
-            .collect::<Vec<GoldilocksExt2>>();
+//     let size = shape.iter().product();
+//     let data = (0..size)
+//         .into_par_iter()
+//         .map(|i| {
+//             let mut rng = StdRng::seed_from_u64(seed + i as u64);
+//             GoldilocksExt2::random(&mut rng)
+//         })
+//         .collect::<Vec<GoldilocksExt2>>();
 
-        Self { data, shape }
-    }
-}
+//     Self { data, shape }
+// }
+// }
 
 impl PartialEq for Tensor<GoldilocksExt2> {
     fn eq(&self, other: &Self) -> bool {
@@ -574,7 +583,7 @@ mod test {
     #[test]
     fn test_tensor_next_pow_of_two() {
         let shape = vec![3usize, 3];
-        let mat = Tensor::<Element>::random_seed(shape.clone(), Some(213));
+        let mat = Tensor::<Element>::random_seed::<QuantInteger>(shape.clone(), Some(213));
         // println!("{}", mat);
         let new_shape = vec![shape[0].next_power_of_two(), shape[1].next_power_of_two()];
         let new_mat = mat.pad_next_power_of_two_2d();
