@@ -6,6 +6,7 @@ use tract_onnx::{pb::NodeProto, prelude::*};
 
 use crate::{
     Element,
+    activation::{Activation, Relu},
     model::{Layer, Model},
     quantization::Quantizer,
 };
@@ -209,6 +210,10 @@ pub fn load_mlp<Q: Quantizer<Element>>(filepath: &str) -> Result<Model> {
                 //.transpose();
                 //.pad_next_power_of_two();
                 layers.push(Layer::Dense(matrix));
+            }
+            "Relu" => {
+                let layer = Layer::Activation(Activation::Relu(Relu::new()));
+                layers.push(layer);
             }
             _ => (),
         };
