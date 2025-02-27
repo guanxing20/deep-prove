@@ -21,6 +21,7 @@ use std::{
 
 use crate::{
     Element,
+    quantization::Fieldizer,
     testing::{VecInto, random_vector, random_vector_seed},
     to_bit_sequence_le,
 };
@@ -408,7 +409,7 @@ impl Tensor<Element> {
     /// Returns the evaluation point, in order for (row,col) addressing
     pub fn evals_2d<F: ExtensionField>(&self) -> Vec<F> {
         assert!(self.is_matrix(), "Tensor is not a matrix");
-        self.data.par_iter().map(|e| F::from(*e as u64)).collect()
+        self.data.par_iter().map(|e| e.to_field()).collect()
     }
 
     /// Returns a MLE of the matrix that can be evaluated.
