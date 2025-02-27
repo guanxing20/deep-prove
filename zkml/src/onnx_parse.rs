@@ -262,7 +262,7 @@ pub fn load_mlp<Q: Quantizer<Element>>(filepath: &str) -> Result<Model> {
             debug!("layer idx {} -> final shape {:?}", i, matrix.dims());
             processed_layers.push(Layer::Dense(matrix));
         } else {
-            prev_layer_shape = Some(layer.shape());
+            // prev_layer_shape = Some(layer.shape()); // TODO: Need to double check
             processed_layers.push(layer);
         }
     }
