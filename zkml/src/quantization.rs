@@ -246,12 +246,24 @@ impl Requant {
                 .rev()
                 .for_each(|discarded_chunk| {
                     let chunk = remainder_vals & bit_mask;
-                    let value = chunk as i128 - self.after_range as i128 >> 1;
-
+                    let value = chunk as i128 - (self.after_range as i128 >> 1);
                     let field_elem: E = value.to_field();
                     discarded_chunk[index] = field_elem.as_bases()[0];
                     remainder_vals >>= self.after_range.ilog2();
                 });
+            debug_assert_eq!(remainder_vals, 0);
+        });
+
+        debug_assert!({
+            input.iter().enumerate().fold(true, |acc, (i, value)| {
+                let calc_evals = mle_evals
+                    .iter()
+                    .map(|col| E::from(col[i]))
+                    .collect::<Vec<E>>();
+
+                let field_value: E = value.to_field();
+                acc & (self.recombine_claims(&calc_evals) == field_value)
+            })
         });
         mle_evals
     }

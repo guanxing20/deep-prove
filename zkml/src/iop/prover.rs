@@ -194,7 +194,8 @@ where
                 let poly_id = table_info.poly_id;
                 println!("PROVING table of type: {:?}", table_info.lookup_type);
                 // Make the proof for the table
-                let table_proof = L::prove(&self.ctx.lookup, &table_witness, self.transcript)?;
+                let table_proof =
+                    L::prove_table(&table_info.circuit, &table_witness, self.transcript)?;
 
                 // Add the multiplicity poly claim
                 self.witness_prover

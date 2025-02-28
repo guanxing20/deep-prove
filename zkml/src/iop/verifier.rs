@@ -92,6 +92,8 @@ where
                 actual_challenge,
                 constant_challenge,
             ]);
+            numerators.extend(table_proof.lookup.numerators().into_iter());
+            denominators.extend(table_proof.lookup.denominators().into_iter());
         });
     // 2. Derive the first randomness
     let first_randomness = transcript.read_challenges(io.output.get_data().len().ilog2() as usize);
@@ -179,12 +181,6 @@ where
                     step,
                 )?
             }
-
-            _ => bail!(
-                "proof type {} at step {} shouldn't exist ",
-                proof.variant_name(),
-                i,
-            ),
         }
     }
 
@@ -298,24 +294,11 @@ where
     let mut sp_verifier = same_poly::Verifier::<E>::new(&sp_ctx);
     sp_verifier.add_claim(last_claim)?;
 
-    let (lookup_type, _) = lookup_ctx.get_circuit_and_type(step)?;
-    let num_actual_claims = lookup_type.number_of_columns();
-
-    let total_claims = verifier_claims.claims().len();
-    // The actual claims that we care about
-    let actual_claims = &verifier_claims.claims()[total_claims - num_actual_claims..];
-
-    let point = actual_claims[0].point.clone();
-
-    // Need to work out the constant values to add/subtract for this step
-    let max_bit = info.requant.range << 1;
-    let max_bit = max_bit as u64;
-    let subtract = max_bit >> info.requant.right_shift;
-
-    let first_claim = actual_claims
+    let first_claim = verifier_claims
+        .claims()
         .first()
         .ok_or(anyhow::anyhow!("No claims found"))?;
-
+    let point = first_claim.point.clone();
     sp_verifier.add_claim(first_claim.clone())?;
 
     let new_output_claim = sp_verifier.verify(&proof.io_accumulation, t)?;
@@ -323,18 +306,12 @@ where
     witness_verifier.add_claim(info.poly_id, new_output_claim)?;
 
     // Here we recombine all of the none dummy polynomials to get the actual claim that should be passed to the next layer
-    let tmp_eval = E::from(1 << info.requant.right_shift as u64)
-        * (first_claim.eval + E::from(subtract))
-        + actual_claims
-            .iter()
-            .skip(1)
-            .rev()
-            .enumerate()
-            .fold(E::ZERO, |acc, (i, claim)| {
-                acc + E::from((info.requant.after_range.pow(i as u32)) as u64)
-                    * (claim.eval + E::from(128u64))
-            });
-    let eval = tmp_eval - E::from(max_bit);
+    let eval_claims = verifier_claims
+        .claims()
+        .iter()
+        .map(|claim| claim.eval)
+        .collect::<Vec<E>>();
+    let eval = info.requant.recombine_claims(&eval_claims);
     // 4. return the input claim for to be proven at subsequent step
     Ok(Claim { point, eval })
 }
