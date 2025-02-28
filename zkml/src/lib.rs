@@ -3,22 +3,32 @@
 use ff_ext::ExtensionField;
 use gkr::structs::PointAndEval;
 use itertools::Itertools;
-use multilinear_extensions::mle::DenseMultilinearExtension;
-use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use serde::{Deserialize, Serialize};
 use transcript::{BasicTranscript, Transcript};
-mod activation;
+pub mod activation;
 mod commit;
-mod iop;
+pub mod iop;
+pub use iop::{
+    Context, Proof,
+    prover::Prover,
+    verifier::{IO, verify},
+};
 
-mod logup;
-mod lookup;
-mod matrix;
-mod model;
+pub mod lookup;
+// mod matrix;
+pub mod model;
 mod onnx_parse;
+pub mod quantization;
+pub use onnx_parse::load_mlp;
 
+pub mod tensor;
 mod testing;
 mod utils;
+
+/// We allow higher range to account for overflow. Since we do a requant after each layer, we
+/// can support with i128 with 8 bits quant:
+/// 16 + log(c) = 64 => c = 2^48 columns in a dense layer
+pub type Element = i128;
 
 /// Claim type to accumulate in this protocol, for a certain polynomial, known in the context.
 /// f(point) = eval
@@ -70,22 +80,9 @@ impl<E: ExtensionField> Claim<E> {
     }
 }
 
-/// Element is u64 right now to withstand the overflow arithmetics when running inference for any kinds of small models.
-/// With quantization this is not needed anymore and we can try changing back to u16 or u32 but perf gains should be minimal.
-type Element = u64;
-
 /// Returns the default transcript the prover and verifier must instantiate to validate a proof.
 pub fn default_transcript<E: ExtensionField>() -> BasicTranscript<E> {
     BasicTranscript::new(b"m2vec")
-}
-
-pub fn vector_to_field_par<E: ExtensionField>(v: &[Element]) -> Vec<E> {
-    v.par_iter().map(|v| E::from(*v as u64)).collect::<Vec<_>>()
-}
-pub fn vector_to_field_par_into<E: ExtensionField>(v: Vec<Element>) -> Vec<E> {
-    v.into_par_iter()
-        .map(|v| E::from(v as u64))
-        .collect::<Vec<_>>()
 }
 
 pub fn pad_vector<E: ExtensionField>(mut v: Vec<E>) -> Vec<E> {
@@ -94,13 +91,6 @@ pub fn pad_vector<E: ExtensionField>(mut v: Vec<E>) -> Vec<E> {
     }
     v
 }
-/// Returns a MLE out of the given vector, of the right length
-// TODO : make that part of tensor somehow?
-pub(crate) fn vector_to_mle<E: ExtensionField>(v: Vec<E>) -> DenseMultilinearExtension<E> {
-    let v = pad_vector(v);
-    DenseMultilinearExtension::from_evaluation_vec_smart(v.len().ilog2() as usize, v)
-}
-
 /// Returns the bit sequence of num of bit_length length.
 pub(crate) fn to_bit_sequence_le(
     num: usize,
@@ -131,12 +121,19 @@ impl<T: Transcript<E>, E: ExtensionField> VectorTranscript<E> for T {
     }
 }
 
+pub fn argmax<T: PartialOrd>(v: &[T]) -> Option<usize> {
+    v.iter()
+        .enumerate()
+        .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap()) // Unwrap is safe if T implements PartialOrd properly
+        .map(|(idx, _)| idx)
+}
+
 #[cfg(test)]
 mod test {
     use ark_std::rand::{Rng, thread_rng};
     use goldilocks::GoldilocksExt2;
     use itertools::Itertools;
-    use multilinear_extensions::mle::MultilinearExtension;
+    use multilinear_extensions::mle::{IntoMLE, MultilinearExtension};
 
     use crate::{
         Element, default_transcript,
@@ -147,8 +144,9 @@ mod test {
         },
         lookup::{LogUp, LookupProtocol},
         onnx_parse::load_mlp,
-        testing::random_vector,
-        to_bit_sequence_le, vector_to_field_par, vector_to_mle,
+        quantization::{QuantInteger, TensorFielder},
+        tensor::Tensor,
+        to_bit_sequence_le,
     };
     use ff_ext::ff::Field;
 
@@ -156,12 +154,13 @@ mod test {
 
     #[test]
     fn test_model_run() -> anyhow::Result<()> {
-        test_model_run_helper::<LogUp<E>>()?;
+        test_model_run_helper::<LogUp>()?;
         Ok(())
     }
 
     fn test_model_run_helper<L: LookupProtocol<E>>() -> anyhow::Result<()> {
-        let filepath = "assets/model.onnx";
+        let filepath = "zkml/assets/model.onnx";
+
         let model = load_mlp::<Element>(&filepath).unwrap();
         println!("[+] Loaded onnx file");
         let ctx = Context::<E>::generate(&model).expect("unable to generate context");
@@ -169,10 +168,11 @@ mod test {
 
         let shape = model.input_shape();
         assert_eq!(shape.len(), 1);
-        let input = random_vector(shape[0]);
+        let input = Tensor::random::<QuantInteger>(vec![shape[0]]);
+        let input = model.prepare_input(input);
 
         let trace = model.run(input.clone());
-        let output = trace.final_output().to_vec();
+        let output = trace.final_output().clone();
         println!("[+] Run inference. Result: {:?}", output);
 
         let mut prover_transcript = default_transcript();
@@ -181,7 +181,7 @@ mod test {
         let proof = prover.prove(trace).expect("unable to generate proof");
 
         let mut verifier_transcript = default_transcript();
-        let io = IO::new(vector_to_field_par(&input), output.to_vec());
+        let io = IO::new(input.to_fields(), output.to_fields());
         verify::<_, _, L>(ctx, proof, io, &mut verifier_transcript).expect("invalid proof");
         println!("[+] Verify proof: valid");
         Ok(())
@@ -191,9 +191,9 @@ mod test {
 
     #[test]
     fn test_vector_mle() {
-        let n = 10;
+        let n = (10 as usize).next_power_of_two();
         let v = (0..n).map(|_| E::random(&mut thread_rng())).collect_vec();
-        let mle = vector_to_mle(v.clone());
+        let mle = v.clone().into_mle();
         let random_index = thread_rng().gen_range(0..v.len());
         let eval = to_bit_sequence_le(random_index, v.len().next_power_of_two().ilog2() as usize)
             .map(|b| E::from(b as u64))
