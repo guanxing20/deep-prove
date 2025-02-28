@@ -93,7 +93,7 @@ mod test {
         for case in [
             testCase::from(-24, 0),
             testCase::from(0, 0),
-            testCase::from(124, 15),
+            testCase::from(124, 124),
         ] {
             assert_eq!(Relu::apply(case.input), case.output);
         }
@@ -120,15 +120,10 @@ mod test {
         let inputs = Tensor::random::<QuantInteger>(vec![10]);
         let outputs = relu.op(&inputs);
         assert_eq!(inputs.dims(), outputs.dims());
-        for (idx, (input, output)) in inputs
-            .get_data()
-            .iter()
-            .zip(outputs.get_data().iter())
-            .enumerate()
-        {
+        for (input, output) in inputs.get_data().iter().zip(outputs.get_data().iter()) {
             // here putting input works because every random input is a u8, so it's already within [0;256] so
             // its value "is" the index. Normally if this is not true, we should get the index of the row corresponding to that input
-            let idx_vars = to_bit_sequence_le(*input as usize, Relu::num_vars())
+            let idx_vars = to_bit_sequence_le((input + 128) as usize, Relu::num_vars())
                 .map(|b| F::from(b as u64))
                 .collect_vec();
             let input_field = input_mle.evaluate(&idx_vars);

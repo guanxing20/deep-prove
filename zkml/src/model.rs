@@ -317,7 +317,7 @@ pub(crate) mod test {
         activation::{Activation, Relu},
         default_transcript,
         model::Layer,
-        quantization::{QuantInteger, TensorFielder},
+        quantization::{QuantInteger, Requant, TensorFielder},
         tensor::Tensor,
         testing::random_bool_vector,
     };
@@ -371,20 +371,23 @@ pub(crate) mod test {
             Tensor::random::<QuantInteger>(vec![7, mat1.ncols_2d()]).pad_next_power_of_two_2d();
         let input = Tensor::random::<QuantInteger>(vec![mat1.ncols_2d()]);
         let output1 = mat1.matvec(&input);
-        let final_output = mat2.matvec(&output1);
+        let requant = Requant::from_matrix_default(&mat1);
+        let requantized_output1 = requant.op(&output1);
+        let final_output = mat2.matvec(&requantized_output1);
 
         let mut model = Model::new();
         model.add_layer(Layer::Dense(mat1));
         model.add_layer(Layer::Dense(mat2.clone()));
 
         let trace = model.run(input.clone()).to_field::<F>();
-        assert_eq!(trace.steps.len(), 2);
+        // 4 steps because we requant after each dense layer
+        assert_eq!(trace.steps.len(), 4);
 
         // Verify first step
         assert_eq!(trace.steps[0].output, output1.to_fields());
 
         // Verify second step
-        assert_eq!(trace.steps[1].output, final_output.clone().to_fields());
+        assert_eq!(trace.steps[2].output, final_output.clone().to_fields());
         let (nrow, _) = (mat2.nrows_2d(), mat2.ncols_2d());
         assert_eq!(final_output.get_data().len(), nrow);
     }
@@ -417,6 +420,16 @@ pub(crate) mod test {
         assert_eq!(*second_input, trace.steps[0].output);
         assert_eq!(second_step.output, trace.steps[1].output);
 
+        // Third step should have second step's output as input
+        let (third_input, third_step) = iter.next().unwrap();
+        assert_eq!(*third_input, trace.steps[1].output);
+        assert_eq!(third_step.output, trace.steps[2].output);
+
+        // Fourth step should have third step's output as input
+        let (fourth_input, fourth_step) = iter.next().unwrap();
+        assert_eq!(*fourth_input, trace.steps[2].output);
+        assert_eq!(fourth_step.output, trace.steps[3].output);
+
         // Iterator should be exhausted
         assert!(iter.next().is_none());
     }
@@ -424,13 +437,11 @@ pub(crate) mod test {
     #[test]
     fn test_inference_trace_reverse_iterator() {
         let mat1 = Tensor::random::<QuantInteger>(vec![10, 11]).pad_next_power_of_two_2d();
-        let mat2 =
-            Tensor::random::<QuantInteger>(vec![7, mat1.ncols_2d()]).pad_next_power_of_two_2d();
+
         let input = Tensor::random::<QuantInteger>(vec![mat1.ncols_2d()]);
 
         let mut model = Model::new();
         model.add_layer(Layer::Dense(mat1));
-        model.add_layer(Layer::Dense(mat2));
 
         let trace = model.run(input.clone());
 
@@ -454,7 +465,7 @@ pub(crate) mod test {
     use ff::Field;
     #[test]
     fn test_model_sequential() {
-        let (model, input) = Model::random(2);
+        let (model, input) = Model::random(1);
         model.describe();
         println!("INPUT: {:?}", input);
         let bb = model.clone();
@@ -467,16 +478,16 @@ pub(crate) mod test {
             })
             .collect_vec();
         let matrices_mle = matrices.iter().map(|m| m.to_mle_2d::<F>()).collect_vec();
-        let point1 = random_bool_vector(matrices[1].nrows_2d().ilog2() as usize);
+        let point1 = random_bool_vector(matrices[0].nrows_2d().ilog2() as usize);
         println!("point1: {:?}", point1);
-        let computed_eval1 = trace
-            .final_output()
+        let computed_eval1 = trace.steps[trace.steps.len() - 2]
+            .output
             .get_data()
             .to_vec()
             .into_mle()
             .evaluate(&point1);
-        let flatten_mat1 = matrices_mle[1].fix_high_variables(&point1);
-        let input_vector = trace.steps[trace.steps.len() - 2].output.clone();
+        let flatten_mat1 = matrices_mle[0].fix_high_variables(&point1);
+        let input_vector = trace.input.clone();
         // y(r) = SUM_i m(r,i) x(i)
         let full_poly = vec![
             flatten_mat1.clone().into(),

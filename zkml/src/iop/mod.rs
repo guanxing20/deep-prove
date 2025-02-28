@@ -121,9 +121,7 @@ where
 mod test {
     use goldilocks::GoldilocksExt2;
 
-    use crate::{
-        Element, default_transcript, lookup::LogUp, model::Model, quantization::TensorFielder,
-    };
+    use crate::{default_transcript, lookup::LogUp, model::Model, quantization::TensorFielder};
 
     use super::{
         Context,
