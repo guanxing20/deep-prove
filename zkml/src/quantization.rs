@@ -330,7 +330,7 @@ mod test {
             b: Element,
             res: Element,
         }
-        let modulus = <<F as ExtensionField>::BaseField as SmallField>::MODULUS_U64;
+
         let cases = vec![
             TestCase {
                 a: -53,

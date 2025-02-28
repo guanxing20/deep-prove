@@ -286,8 +286,6 @@ mod tests {
 
     // cargo test --release --package zkml -- onnx_parse::tests::test_tract --nocapture
 
-    type F = GoldilocksExt2;
-
     #[test]
     fn test_tract() {
         let filepath = "assets/model.onnx";

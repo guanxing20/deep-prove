@@ -485,9 +485,9 @@ pub(crate) mod test {
         let mut vp = VirtualPolynomial::new(flatten_mat1.num_vars());
         vp.add_mle_list(full_poly, F::ONE);
         #[allow(deprecated)]
-        let (proof, state) =
+        let (proof, _state) =
             IOPProverState::<F>::prove_parallel(vp.clone(), &mut default_transcript());
-        let (p2, s2) = IOPProverState::prove_batch_polys(1, vec![vp], &mut default_transcript());
+        let (p2, _s2) = IOPProverState::prove_batch_polys(1, vec![vp], &mut default_transcript());
         let given_eval1 = proof.extract_sum();
         assert_eq!(p2.extract_sum(), proof.extract_sum());
         assert_eq!(computed_eval1, given_eval1);

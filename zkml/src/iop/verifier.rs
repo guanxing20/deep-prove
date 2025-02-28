@@ -1,19 +1,19 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use crate::{
     Claim, VectorTranscript,
     commit::{self, precommit, same_poly},
-    iop::{StepProof, context::StepInfo, precommit::PolyID},
-    lookup::{self, LookupProtocol, LookupType, TableInfo},
+    iop::{StepProof, context::StepInfo},
+    lookup::{self, LookupProtocol, TableInfo},
     tensor::Tensor,
 };
-use anyhow::{Context as CC, anyhow, bail, ensure};
+use anyhow::{anyhow, bail, ensure};
 use ff_ext::ExtensionField;
-use gkr::structs::Circuit;
-use itertools::{Itertools, multiunzip};
+
+use itertools::Itertools;
 use log::debug;
 use multilinear_extensions::mle::{IntoMLE, MultilinearExtension};
-use poseidon::poseidon_hash::hash_n_to_hash_no_pad;
+
 use serde::{Serialize, de::DeserializeOwned};
 use sumcheck::structs::IOPVerifierState;
 use transcript::Transcript;
@@ -125,14 +125,9 @@ where
 
     // 4. Verify each proof sequentially, Always make sure the proof corresponds to the expected type of proof in the context.
     // We have two `HashSet`s, one for the type of table used and one for the lookup challenges used
-    for (i, proof) in proof.steps.iter().enumerate() {
-        output_claim = match proof {
-            StepProof::<E>::Activation(proof) => {
-                let info = if let StepInfo::Activation(info) = &ctx.steps_info[i] {
-                    info
-                } else {
-                    return Err(anyhow!("Step info does not line up at activation step"));
-                };
+    for (i, proof_and_step) in proof.steps.iter().zip(ctx.steps_info.iter()).enumerate() {
+        output_claim = match proof_and_step {
+            (StepProof::<E>::Activation(proof), StepInfo::Activation(info)) => {
                 let step = total_steps - 1 - i;
                 let (lookup_type, _) = ctx.lookup.get_circuit_and_type(step)?;
                 let challenges = lookup_challenges.get(&lookup_type.name()).ok_or(anyhow!(
@@ -150,20 +145,10 @@ where
                     step,
                 )?
             }
-            StepProof::<E>::Dense(proof) => {
-                let info = if let StepInfo::Dense(info) = &ctx.steps_info[i] {
-                    info
-                } else {
-                    return Err(anyhow!("Step info does not line up at Dense step"));
-                };
+            (StepProof::<E>::Dense(proof), StepInfo::Dense(info)) => {
                 verify_dense(output_claim, &proof, info, &mut commit_verifier, transcript)?
             }
-            StepProof::<E>::Requant(proof) => {
-                let info = if let StepInfo::Requant(info) = &ctx.steps_info[i] {
-                    info
-                } else {
-                    return Err(anyhow!("Step info does not line up at requant step"));
-                };
+            (StepProof::<E>::Requant(proof), StepInfo::Requant(info)) => {
                 let step = total_steps - 1 - i;
                 let (lookup_type, _) = ctx.lookup.get_circuit_and_type(step)?;
                 let challenges = lookup_challenges.get(&lookup_type.name()).ok_or(anyhow!(
@@ -181,6 +166,11 @@ where
                     step,
                 )?
             }
+            _ => bail!(
+                "Step proof: {} and step info: {} did not match",
+                proof_and_step.0.variant_name(),
+                proof_and_step.1.variant_name()
+            ),
         }
     }
 
@@ -224,18 +214,16 @@ where
             (acc_num * denom + num * acc_denom, acc_denom * denom)
         });
 
-    if final_num != E::ZERO {
-        return Err(anyhow!(
-            "Final numerator was non-zero, got: {:?}",
-            final_num
-        ));
-    }
+    ensure!(
+        final_num == E::ZERO,
+        "Final numerator was non-zero, got: {:?}",
+        final_num
+    );
+    ensure!(
+        final_denom != E::ZERO,
+        "Final denominator was zero, lookup arguments are invalid"
+    );
 
-    if final_denom == E::ZERO {
-        return Err(anyhow!(
-            "Final denominator was zero, lookup arguments are invalid"
-        ));
-    }
     Ok(())
 }
 

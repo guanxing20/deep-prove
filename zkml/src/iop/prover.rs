@@ -13,7 +13,7 @@ use crate::{
 };
 use anyhow::{Context as CC, anyhow, bail};
 use ff_ext::ExtensionField;
-use itertools::Itertools;
+
 use log::{debug, warn};
 use multilinear_extensions::{
     mle::{IntoMLE, MultilinearExtension},
@@ -338,14 +338,9 @@ where
             point: r_i,
             eval: y_i,
         };
-        let trace_size = trace.last_step().id;
+
         // we start by the output to prove up to the input, GKR style
-        for (i, ((input, step), info)) in trace
-            .iter()
-            .rev()
-            .zip(self.ctx.steps_info.iter())
-            .enumerate()
-        {
+        for ((input, step), info) in trace.iter().rev().zip(self.ctx.steps_info.iter()) {
             last_claim = self.prove_step(last_claim, input, step, &info)?;
         }
 
@@ -407,7 +402,7 @@ mod test {
     #[test]
     fn test_padding_prover() {
         let num_vars = 7;
-        let poly_size = 1 << num_vars;
+
         let padded_num_vars = 10;
         let padded_size = 1 << padded_num_vars;
         let poly = random_field_vector(1 << num_vars);

@@ -6,21 +6,18 @@ use gkr::{
     structs::{Circuit, CircuitWitness, IOPProof, IOPProverState, IOPVerifierState, PointAndEval},
     util::ceil_log2,
 };
-use goldilocks::SmallField;
+
 use mpcs::{BasefoldCommitment, PolynomialCommitmentScheme};
-use poseidon::{digest::Digest, poseidon_hash::hash_n_to_hash_no_pad};
-use std::{
-    collections::{BTreeMap, HashMap, HashSet},
-    iter,
-};
+use poseidon::digest::Digest;
+use std::collections::{HashMap, HashSet};
 use utils::compute_multiplicity_poly;
 
 use crate::{
     Claim, Element,
-    activation::{Activation, Relu},
+    activation::Relu,
     commit::{Pcs, precommit::PolyID},
     iop::context::StepInfo,
-    model::{InferenceTrace, Layer, StepIdx},
+    model::{InferenceTrace, StepIdx},
     quantization::{Fieldizer, Requant},
     tensor::Tensor,
 };
@@ -38,11 +35,6 @@ pub mod utils;
 pub use logup::LogUp;
 
 type MLE<E> = DenseMultilinearExtension<E>;
-
-const NO_LOOKUP_DOM_SEP: &'static [u8] = b"";
-const RANGE_CHECK_DOM_SEP: &'static [u8] = b"range_check";
-const RELU_DOM_SEP: &'static [u8] = b"relu";
-const FINAL_TABLE_DOM_SEP: &'static [u8] = b"";
 
 /// Proof from a GKR based lookup.
 /// The commitment is a batch commitment to all of the witness wires.
@@ -205,14 +197,6 @@ impl LookupType {
             LookupType::ReluTable => 3,
             LookupType::RequantTable(..) => 2,
             _ => self.number_of_columns(),
-        }
-    }
-
-    pub fn get_dom_sep(&self) -> &[u8] {
-        match &self {
-            LookupType::NoLookup => NO_LOOKUP_DOM_SEP,
-            LookupType::Requant(..) | LookupType::RequantTable(..) => RANGE_CHECK_DOM_SEP,
-            LookupType::Relu(..) | LookupType::ReluTable => RELU_DOM_SEP,
         }
     }
 
@@ -1166,7 +1150,7 @@ mod tests {
     use super::*;
 
     type F = GoldilocksExt2;
-    use goldilocks::{Goldilocks, GoldilocksExt2};
+    use goldilocks::GoldilocksExt2;
 
     use tracing_subscriber;
 
@@ -1176,7 +1160,7 @@ mod tests {
         let (model, input) = Model::random(4);
         model.describe();
         let trace = model.run(input);
-        let output = trace.final_output();
+
         let ctx = crate::iop::Context::generate(&model).expect("unable to generate context");
 
         let mut prover_transcript = default_transcript();
