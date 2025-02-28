@@ -610,18 +610,21 @@ mod test {
 
     #[test]
     fn test_tensor_mle() {
-        let mat = Tensor::random::<QuantInteger>(vec![3, 5]).pad_next_power_of_two_2d();
+        let mat = Tensor::random::<QuantInteger>(vec![3, 5]);
+        let shape = mat.dims();
+        let mat = mat.pad_next_power_of_two_2d();
         println!("matrix {}", mat);
         let mut mle = mat.clone().to_mle_2d::<E>();
         let (chosen_row, chosen_col) = (
-            thread_rng().gen_range(0..mat.dims()[0]),
-            thread_rng().gen_range(0..mat.dims()[1]),
+            thread_rng().gen_range(0..shape[0]),
+            thread_rng().gen_range(0..shape[1]),
         );
         let elem = mat.get(chosen_row, chosen_col);
+        let elem_field: E = elem.to_field();
         println!("(x,y) = ({},{}) ==> {:?}", chosen_row, chosen_col, elem);
         let inputs = mat.position_to_boolean_2d(chosen_row, chosen_col);
         let output = mle.evaluate(&inputs);
-        assert_eq!(E::from(elem as u64), output);
+        assert_eq!(elem_field, output);
 
         // now try to address one at a time, and starting by the row, which is the opposite order
         // of the boolean variables expected by the MLE API, given it's expecting in LE format.
@@ -629,7 +632,7 @@ mod test {
         mle.fix_high_variables_in_place(&row_input.collect_vec());
         let col_input = mat.col_to_boolean_2d(chosen_col);
         let output = mle.evaluate(&col_input.collect_vec());
-        assert_eq!(E::from(elem as u64), output);
+        assert_eq!(elem_field, output);
     }
 
     #[test]
@@ -656,27 +659,11 @@ mod test {
         let vector_a_data = vec![10 as Element, 20, 30];
         let vector_b_data = vec![140 as Element, 320, 500];
 
-        let matrix_a_data = matrix_a_data
-            .iter()
-            .map(|x| E::from(*x as u64))
-            .collect_vec();
-        let matrix_b_data = matrix_b_data
-            .iter()
-            .map(|x| E::from(*x as u64))
-            .collect_vec();
-        let matrix_c_data = matrix_c_data
-            .iter()
-            .map(|x| E::from(*x as u64))
-            .collect_vec();
-        let vector_a_data = vector_a_data
-            .iter()
-            .map(|x| E::from(*x as u64))
-            .collect_vec();
-        let vector_b_data = vector_b_data
-            .iter()
-            .map(|x| E::from(*x as u64))
-            .collect_vec();
-
+        let matrix_a_data: Vec<E> = matrix_a_data.iter().map(|x| x.to_field()).collect_vec();
+        let matrix_b_data: Vec<E> = matrix_b_data.iter().map(|x| x.to_field()).collect_vec();
+        let matrix_c_data: Vec<E> = matrix_c_data.iter().map(|x| x.to_field()).collect_vec();
+        let vector_a_data: Vec<E> = vector_a_data.iter().map(|x| x.to_field()).collect_vec();
+        let vector_b_data: Vec<E> = vector_b_data.iter().map(|x| x.to_field()).collect_vec();
         let matrix = Tensor::new(vec![3usize, 3], matrix_a_data.clone());
         let vector = Tensor::new(vec![3usize], vector_a_data);
         let vector_expected = Tensor::new(vec![3usize], vector_b_data);
