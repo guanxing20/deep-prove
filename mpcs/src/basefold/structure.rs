@@ -84,6 +84,10 @@ where
         )
     }
 
+    pub fn get_evals_ref(&self) -> &[FieldType<E>] {
+        &self.polynomials_bh_evals
+    }
+
     pub fn get_root_ref(&self) -> &Digest<E::BaseField> {
         self.codeword_tree.root_ref()
     }

@@ -8,7 +8,7 @@
 //! It could be via an opening directly OR via an accumulation scheme.
 
 use crate::{Claim, VectorTranscript, commit::identity_eval};
-use anyhow::{Context as CC, Ok, ensure};
+use anyhow::{Ok, ensure};
 use ff_ext::ExtensionField;
 use itertools::Itertools;
 use mpcs::PolynomialCommitmentScheme;
@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sumcheck::structs::{IOPProof, IOPProverState, IOPVerifierState};
 use transcript::Transcript;
 
-use super::{Pcs, aggregated_rlc, compute_betas_eval};
+use super::{aggregated_rlc, compute_betas_eval};
 
 pub struct Context<E: ExtensionField> {
     vp_info: VPAuxInfo<E>,

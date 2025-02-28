@@ -6,9 +6,9 @@ use tract_onnx::{pb::NodeProto, prelude::*};
 
 use crate::{
     Element,
-    matrix::Matrix,
+    activation::{Activation, Relu},
     model::{Layer, Model},
-    quantization::{QuantInteger, Quantizer},
+    quantization::Quantizer,
 };
 
 #[derive(Debug, Clone)]
@@ -205,11 +205,15 @@ pub fn load_mlp<Q: Quantizer<Element>>(filepath: &str) -> Result<Model> {
                 let matrix = concat_column(matrix_weight, matrix_bias)?;
 
                 // Create matrix and transpose (PyTorch stores as output_size x input_size)
-                let matrix = Matrix::<Element>::from_coeffs(matrix).unwrap();
-                debug!("layer idx {} -> unprocessed matrix {:?}", i, matrix.shape());
+                let matrix = crate::tensor::Tensor::<Element>::from_coeffs_2d(matrix).unwrap();
+                debug!("layer idx {} -> unprocessed matrix {:?}", i, matrix.dims());
                 //.transpose();
                 //.pad_next_power_of_two();
                 layers.push(Layer::Dense(matrix));
+            }
+            "Relu" => {
+                let layer = Layer::Activation(Activation::Relu(Relu::new()));
+                layers.push(layer);
             }
             _ => (),
         };
@@ -221,19 +225,19 @@ pub fn load_mlp<Q: Quantizer<Element>>(filepath: &str) -> Result<Model> {
     let last = layers.len() - 1;
     for (i, layer) in layers.into_iter().enumerate() {
         if let Layer::Dense(mut matrix) = layer {
-            let mut new_cols = matrix.ncols();
+            let mut new_cols = matrix.ncols_2d();
             if let Some(prev_shape) = prev_layer_shape {
                 assert!(prev_shape.iter().all(|d| d.is_power_of_two()));
                 // Check if previous output's vector length is equal to the number of columns of this matrix
-                if matrix.ncols() != prev_shape[0] {
-                    if matrix.ncols() < prev_shape[0] {
+                if matrix.ncols_2d() != prev_shape[0] {
+                    if matrix.ncols_2d() < prev_shape[0] {
                         new_cols = prev_shape[0];
                     } else {
                         // If we have too many columns, we can't shrink without losing information
                         panic!(
-                            "Matrix has more columns ({}) than previous layer output size ({}). 
+                            "Matrix has more columns ({}) than previous layer output size ({}).
                             Cannot shrink without losing information.",
-                            matrix.ncols(),
+                            matrix.ncols_2d(),
                             prev_shape[0]
                         );
                     }
@@ -241,21 +245,24 @@ pub fn load_mlp<Q: Quantizer<Element>>(filepath: &str) -> Result<Model> {
             }
 
             let nrows = if i == last {
-                matrix.nrows()
+                matrix.nrows_2d()
             } else {
-                matrix.nrows() + 1
+                matrix.nrows_2d() + 1
             };
             // println!("layer idx {} -> from ({:?} to ({},{})",i,matrix.shape(),
             //                 nrows.next_power_of_two(),
             //                 new_cols.next_power_of_two());
             // Pad to power of two dimensions
-            matrix.reshape_to_fit_inplace(nrows.next_power_of_two(), new_cols.next_power_of_two());
+            matrix.reshape_to_fit_inplace_2d(vec![
+                nrows.next_power_of_two(),
+                new_cols.next_power_of_two(),
+            ]);
             // Update prev_output_size to reflect the padded size
-            prev_layer_shape = Some(matrix.shape());
-            debug!("layer idx {} -> final shape {:?}", i, matrix.shape());
+            prev_layer_shape = Some(matrix.dims());
+            debug!("layer idx {} -> final shape {:?}", i, matrix.dims());
             processed_layers.push(Layer::Dense(matrix));
         } else {
-            prev_layer_shape = Some(layer.shape());
+            // prev_layer_shape = Some(layer.shape()); // TODO: Need to double check
             processed_layers.push(layer);
         }
     }
@@ -271,14 +278,13 @@ pub fn load_mlp<Q: Quantizer<Element>>(filepath: &str) -> Result<Model> {
 #[cfg(test)]
 mod tests {
 
+    use crate::quantization::QuantInteger;
+
     use super::*;
-    use crate::testing::random_vector;
 
     use goldilocks::GoldilocksExt2;
 
     // cargo test --release --package zkml -- onnx_parse::tests::test_tract --nocapture
-
-    type F = GoldilocksExt2;
 
     #[test]
     fn test_tract() {
@@ -293,12 +299,13 @@ mod tests {
         let filepath = "assets/model.onnx";
 
         let model = load_mlp::<Element>(&filepath).unwrap();
-        let input = random_vector::<QuantInteger>(model.input_shape()[0])
-            .into_iter()
-            .map(|x| x as Element)
-            .collect_vec();
+        let input = crate::tensor::Tensor::random::<QuantInteger>(vec![model.input_shape()[0]]);
+        // random_vector::<QuantInteger>(model.input_shape()[0])
+        //     .into_iter()
+        //     .map(|x| x as Element)
+        //     .collect_vec();
 
-        let trace = model.run::<F>(input.clone());
+        let trace = model.run(input.clone());
         println!("Result: {:?}", trace.final_output());
     }
 

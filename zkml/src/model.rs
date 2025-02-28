@@ -6,8 +6,8 @@ use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use crate::{
     Element,
     activation::{Activation, Relu},
-    matrix::Matrix,
-    quantization::{Fieldizer, Requant, VecFielder},
+    quantization::{Requant, TensorFielder},
+    tensor::Tensor,
 };
 
 // The index of the step, starting from the input layer. (proving is done in the opposite flow)
@@ -16,20 +16,26 @@ pub type StepIdx = usize;
 #[derive(Clone, Debug)]
 pub enum Layer {
     // TODO: replace this with a Tensor based implementation
-    Dense(Matrix<Element>),
+    Dense(Tensor<Element>),
     Activation(Activation),
     // this is the output quant info. Since we always do a requant layer after each dense,
     // then we assume the inputs requant info are default()
     Requant(Requant),
 }
 
+impl std::fmt::Display for Layer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.describe())
+    }
+}
+
 impl Layer {
     /// Run the operation associated with that layer with the given input
     // TODO: move to tensor library : right now it works because we assume there is only Dense
     // layer which is matmul
-    pub fn op(&self, input: &[Element]) -> Vec<Element> {
+    pub fn op(&self, input: &Tensor<Element>) -> Tensor<Element> {
         match self {
-            Layer::Dense(ref matrix) => matrix.matmul(input),
+            Layer::Dense(ref matrix) => matrix.matvec(input),
             Layer::Activation(activation) => activation.op(input),
             Layer::Requant(info) => {
                 // NOTE: we assume we have default quant structure as input
@@ -40,7 +46,7 @@ impl Layer {
 
     pub fn shape(&self) -> Vec<usize> {
         match self {
-            Layer::Dense(ref matrix) => vec![matrix.nrows(), matrix.ncols()],
+            Layer::Dense(ref matrix) => vec![matrix.nrows_2d(), matrix.ncols_2d()],
             Layer::Activation(Activation::Relu(_)) => Relu::shape(),
             Layer::Requant(info) => info.shape(),
         }
@@ -50,8 +56,8 @@ impl Layer {
             Layer::Dense(ref matrix) => {
                 format!(
                     "Dense: ({},{})",
-                    matrix.nrows(),
-                    matrix.ncols(),
+                    matrix.nrows_2d(),
+                    matrix.ncols_2d(),
                     // matrix.fmt_integer()
                 )
             }
@@ -65,20 +71,23 @@ impl Layer {
     }
     /// Prepare the input to return it in the right format expected for the first layer.
     /// for the bias
-    pub fn prepare_input(&self, input: Vec<Element>) -> Vec<Element> {
+    pub fn prepare_input(&self, input: Tensor<Element>) -> Tensor<Element> {
         match self {
             Layer::Dense(ref matrix) => {
-                if input.len() == matrix.ncols() {
+                if input.get_data().len() == matrix.ncols_2d() {
                     // no need to do anything if it's already at the right format
                     input
                 } else {
                     // append 1 for the bias factor and pad to right size
-                    input
+                    let data = input
+                        .get_data()
+                        .to_vec()
                         .into_iter()
                         .chain(std::iter::once(1))
                         .chain(std::iter::repeat(0))
-                        .take(matrix.ncols())
-                        .collect_vec()
+                        .take(matrix.ncols_2d())
+                        .collect_vec();
+                    Tensor::new(vec![matrix.ncols_2d()], data)
                 }
             }
             _ => panic!("Layer {:?} should not be a first layer", self.describe()),
@@ -105,9 +114,7 @@ impl Model {
                 // append a requantization layer after
                 // NOTE: since we requantize at each dense step currently, we assume
                 // default quantization inputs for matrix and vector
-                // Some(Layer::Requant(Requant::from_matrix_default(matrix)))
-                // TODO: re-enable
-                None
+                Some(Layer::Requant(Requant::from_matrix_default(matrix)))
             }
             _ => None,
         };
@@ -119,11 +126,11 @@ impl Model {
 
     /// Prepare the input for the first layer. For example if it's a dense layer, input will be padded correctly
     /// to handle the bias factor.
-    pub fn prepare_input(&self, input: Vec<Element>) -> Vec<Element> {
+    pub fn prepare_input(&self, input: Tensor<Element>) -> Tensor<Element> {
         self.layers[0].prepare_input(input)
     }
 
-    pub fn run<'a, E: ExtensionField>(&'a self, input: Vec<Element>) -> InferenceTrace<'a, E> {
+    pub fn run<'a>(&'a self, input: Tensor<Element>) -> InferenceTrace<'a, Element> {
         let mut trace = InferenceTrace::<Element>::new(input);
         for (id, layer) in self.layers() {
             let input = trace.last_input();
@@ -132,7 +139,7 @@ impl Model {
             let step = InferenceStep { layer, output, id };
             trace.push_step(step);
         }
-        trace.to_field()
+        trace
     }
 
     pub fn layers(&self) -> impl DoubleEndedIterator<Item = (StepIdx, &Layer)> {
@@ -143,14 +150,14 @@ impl Model {
         let Layer::Dense(mat) = &self.layers[0] else {
             panic!("layer is not starting with a dense layer?");
         };
-        vec![mat.ncols()]
+        vec![mat.ncols_2d()]
     }
 
     pub fn first_output_shape(&self) -> Vec<usize> {
         let Layer::Dense(mat) = &self.layers[0] else {
             panic!("layer is not starting with a dense layer?");
         };
-        vec![mat.nrows()]
+        vec![mat.nrows_2d()]
     }
     /// Prints to stdout
     pub fn describe(&self) {
@@ -170,7 +177,7 @@ impl Model {
 pub struct InferenceTrace<'a, E> {
     steps: Vec<InferenceStep<'a, E>>,
     /// The initial input to the model
-    input: Vec<E>,
+    input: Tensor<E>,
 }
 
 impl<'a> InferenceTrace<'a, Element> {
@@ -182,7 +189,7 @@ impl<'a> InferenceTrace<'a, Element> {
             .map(|step| InferenceStep {
                 id: step.id,
                 layer: step.layer,
-                output: step.output.as_slice().to_fields(),
+                output: step.output.clone().to_fields(),
             })
             .collect::<Vec<_>>();
         InferenceTrace {
@@ -193,12 +200,13 @@ impl<'a> InferenceTrace<'a, Element> {
 }
 
 impl<'a, E> InferenceTrace<'a, E> {
-    fn new(input: Vec<E>) -> Self {
+    fn new(input: Tensor<E>) -> Self {
         Self {
             steps: Default::default(),
             input,
         }
     }
+
     pub fn last_step(&self) -> &InferenceStep<'a, E> {
         self.steps
             .last()
@@ -207,7 +215,7 @@ impl<'a, E> InferenceTrace<'a, E> {
 
     /// Useful when building the trace. The next input is either the first input or the last
     /// output.
-    fn last_input(&self) -> &[E] {
+    fn last_input(&self) -> &Tensor<E> {
         if self.steps.is_empty() {
             &self.input
         } else {
@@ -217,7 +225,7 @@ impl<'a, E> InferenceTrace<'a, E> {
     }
 
     /// Returns the final output of the whole trace
-    pub fn final_output(&self) -> &[E] {
+    pub fn final_output(&self) -> &Tensor<E> {
         &self
             .steps
             .last()
@@ -248,7 +256,7 @@ pub struct InferenceTraceIterator<'t, 'a, E> {
 }
 
 impl<'t, 'a, E> Iterator for InferenceTraceIterator<'t, 'a, E> {
-    type Item = (&'t [E], &'t InferenceStep<'a, E>);
+    type Item = (&'t Tensor<E>, &'t InferenceStep<'a, E>);
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.current_idx >= self.end_idx {
@@ -290,7 +298,7 @@ pub struct InferenceStep<'a, E> {
     /// Reference to the layer that produced this step
     pub layer: &'a Layer,
     /// Output produced by this layer
-    pub output: Vec<E>,
+    pub output: Tensor<E>,
 }
 
 #[cfg(test)]
@@ -305,13 +313,13 @@ pub(crate) mod test {
     use sumcheck::structs::IOPProverState;
 
     use crate::{
-        Claim, Element,
+        Element,
         activation::{Activation, Relu},
         default_transcript,
-        matrix::Matrix,
         model::Layer,
-        quantization::{QuantInteger, VecFielder},
-        testing::{random_bool_vector, random_vector},
+        quantization::{QuantInteger, Requant, TensorFielder},
+        tensor::Tensor,
+        testing::random_bool_vector,
     };
 
     use super::Model;
@@ -323,17 +331,17 @@ pub(crate) mod test {
 
     impl Model {
         /// Returns a random model with specified number of dense layers and a matching input.
-        pub fn random(num_dense_layers: usize) -> (Self, Vec<Element>) {
+        pub fn random(num_dense_layers: usize) -> (Self, Tensor<Element>) {
             let mut model = Model::new();
             let mut rng = thread_rng();
             let mut last_row = rng.gen_range(3..15);
             for selector in 0..num_dense_layers {
-                // if selector % MOD_SELECTOR == SELECTOR_DENSE {
-                if true {
+                if selector % MOD_SELECTOR == SELECTOR_DENSE {
                     // last row becomes new column
                     let (nrows, ncols) = (rng.gen_range(3..15), last_row);
                     last_row = nrows;
-                    let mat = Matrix::random((nrows, ncols)).pad_next_power_of_two();
+                    let mat = Tensor::random::<QuantInteger>(vec![nrows, ncols])
+                        .pad_next_power_of_two_2d();
                     model.add_layer(Layer::Dense(mat));
                 } else if selector % MOD_SELECTOR == SELECTOR_RELU {
                     model.add_layer(Layer::Activation(Activation::Relu(Relu::new())));
@@ -345,10 +353,7 @@ pub(crate) mod test {
             }
             let input_dims = model.layers.first().unwrap().shape();
             // ncols since matrix2vector is summing over the columns
-            let input = random_vector::<QuantInteger>(input_dims[1])
-                .into_iter()
-                .map(|i| i as Element)
-                .collect_vec();
+            let input = Tensor::random::<QuantInteger>(vec![input_dims[1]]);
             (model, input)
         }
     }
@@ -356,65 +361,74 @@ pub(crate) mod test {
     #[test]
     fn test_model_long() {
         let (model, input) = Model::random(3);
-        model.run::<F>(input);
+        model.run(input);
     }
 
     #[test]
     fn test_model_run() {
-        let mat1 = Matrix::random((10, 11)).pad_next_power_of_two();
-        let mat2 = Matrix::random((7, mat1.ncols())).pad_next_power_of_two();
-        let input = random_vector::<QuantInteger>(mat1.ncols())
-            .into_iter()
-            .map(|i| i as Element)
-            .collect_vec();
-        let output1 = mat1.matmul(&input);
-        let final_output = mat2.matmul(&output1);
+        let mat1 = Tensor::random::<QuantInteger>(vec![10, 11]).pad_next_power_of_two_2d();
+        let mat2 =
+            Tensor::random::<QuantInteger>(vec![7, mat1.ncols_2d()]).pad_next_power_of_two_2d();
+        let input = Tensor::random::<QuantInteger>(vec![mat1.ncols_2d()]);
+        let output1 = mat1.matvec(&input);
+        let requant = Requant::from_matrix_default(&mat1);
+        let requantized_output1 = requant.op(&output1);
+        let final_output = mat2.matvec(&requantized_output1);
 
         let mut model = Model::new();
         model.add_layer(Layer::Dense(mat1));
         model.add_layer(Layer::Dense(mat2.clone()));
 
-        let trace = model.run::<F>(input.clone());
-        assert_eq!(trace.steps.len(), 2);
+        let trace = model.run(input.clone()).to_field::<F>();
+        // 4 steps because we requant after each dense layer
+        assert_eq!(trace.steps.len(), 4);
 
         // Verify first step
         assert_eq!(trace.steps[0].output, output1.to_fields());
 
         // Verify second step
-        assert_eq!(trace.steps[1].output, final_output.clone().to_fields());
-        let (nrow, _) = (mat2.nrows(), mat2.ncols());
-        assert_eq!(final_output.len(), nrow);
+        assert_eq!(trace.steps[2].output, final_output.clone().to_fields());
+        let (nrow, _) = (mat2.nrows_2d(), mat2.ncols_2d());
+        assert_eq!(final_output.get_data().len(), nrow);
     }
 
     #[test]
     fn test_inference_trace_iterator() {
-        let mat1 = Matrix::random((10, 11)).pad_next_power_of_two();
+        let mat1 = Tensor::random::<QuantInteger>(vec![10, 11]).pad_next_power_of_two_2d();
         // let relu1 = Activation::Relu(Relu);
-        let mat2 = Matrix::random((7, mat1.ncols())).pad_next_power_of_two();
+        let mat2 =
+            Tensor::random::<QuantInteger>(vec![7, mat1.ncols_2d()]).pad_next_power_of_two_2d();
         // let relu2 = Activation::Relu(Relu);
-        let input = random_vector::<QuantInteger>(mat1.ncols())
-            .into_iter()
-            .map(|i| i as Element)
-            .collect_vec();
+        let input = Tensor::random::<QuantInteger>(vec![mat1.ncols_2d()]);
 
         let mut model = Model::new();
         model.add_layer(Layer::Dense(mat1));
         model.add_layer(Layer::Dense(mat2));
 
-        let trace = model.run::<F>(input.clone());
+        let trace = model.run(input.clone());
 
         // Verify iterator yields correct input/output pairs
         let mut iter = trace.iter();
 
         // First step should have original input
         let (first_input, first_step) = iter.next().unwrap();
-        assert_eq!(first_input, trace.input);
+        assert_eq!(*first_input, trace.input);
         assert_eq!(first_step.output, trace.steps[0].output);
 
         // Second step should have first step's output as input
         let (second_input, second_step) = iter.next().unwrap();
-        assert_eq!(second_input, trace.steps[0].output);
+        assert_eq!(*second_input, trace.steps[0].output);
         assert_eq!(second_step.output, trace.steps[1].output);
+
+        // Third step should have second step's output as input
+        let (third_input, third_step) = iter.next().unwrap();
+        assert_eq!(*third_input, trace.steps[1].output);
+        assert_eq!(third_step.output, trace.steps[2].output);
+
+        // Fourth step should have third step's output as input
+        let (fourth_input, fourth_step) = iter.next().unwrap();
+        assert_eq!(*fourth_input, trace.steps[2].output);
+        assert_eq!(fourth_step.output, trace.steps[3].output);
 
         // Iterator should be exhausted
         assert!(iter.next().is_none());
@@ -422,30 +436,26 @@ pub(crate) mod test {
 
     #[test]
     fn test_inference_trace_reverse_iterator() {
-        let mat1 = Matrix::random((10, 11)).pad_next_power_of_two();
-        let mat2 = Matrix::random((7, mat1.ncols())).pad_next_power_of_two();
-        let input = random_vector::<QuantInteger>(mat1.ncols())
-            .into_iter()
-            .map(|i| i as Element)
-            .collect_vec();
+        let mat1 = Tensor::random::<QuantInteger>(vec![10, 11]).pad_next_power_of_two_2d();
+
+        let input = Tensor::random::<QuantInteger>(vec![mat1.ncols_2d()]);
 
         let mut model = Model::new();
         model.add_layer(Layer::Dense(mat1));
-        model.add_layer(Layer::Dense(mat2));
 
-        let trace = model.run::<F>(input.clone());
+        let trace = model.run(input.clone());
 
         // Test reverse iteration
         let mut rev_iter = trace.iter().rev();
 
         // Last step should come first in reverse
         let (last_input, last_step) = rev_iter.next().unwrap();
-        assert_eq!(last_input, trace.steps[0].output);
+        assert_eq!(*last_input, trace.steps[0].output);
         assert_eq!(last_step.output, trace.steps[1].output);
 
         // First step should come last in reverse
         let (first_input, first_step) = rev_iter.next().unwrap();
-        assert_eq!(first_input, trace.input);
+        assert_eq!(*first_input, trace.input);
         assert_eq!(first_step.output, trace.steps[0].output);
 
         // Iterator should be exhausted
@@ -455,11 +465,11 @@ pub(crate) mod test {
     use ff::Field;
     #[test]
     fn test_model_sequential() {
-        let (model, input) = Model::random(2);
+        let (model, input) = Model::random(1);
         model.describe();
         println!("INPUT: {:?}", input);
         let bb = model.clone();
-        let trace = bb.run::<F>(input.clone());
+        let trace = bb.run(input.clone()).to_field::<F>();
         let matrices = model
             .layers()
             .flat_map(|(_id, l)| match l {
@@ -467,20 +477,28 @@ pub(crate) mod test {
                 _ => None,
             })
             .collect_vec();
-        let matrices_mle = matrices.iter().map(|m| m.to_mle::<F>()).collect_vec();
-        let point1 = random_bool_vector(matrices[1].nrows().ilog2() as usize);
+        let matrices_mle = matrices.iter().map(|m| m.to_mle_2d::<F>()).collect_vec();
+        let point1 = random_bool_vector(matrices[0].nrows_2d().ilog2() as usize);
         println!("point1: {:?}", point1);
-        let computed_eval1 = trace.final_output().to_vec().into_mle().evaluate(&point1);
-        let flatten_mat1 = matrices_mle[1].fix_high_variables(&point1);
-        let input_vector = trace.steps[trace.steps.len() - 2].output.clone();
+        let computed_eval1 = trace.steps[trace.steps.len() - 2]
+            .output
+            .get_data()
+            .to_vec()
+            .into_mle()
+            .evaluate(&point1);
+        let flatten_mat1 = matrices_mle[0].fix_high_variables(&point1);
+        let input_vector = trace.input.clone();
         // y(r) = SUM_i m(r,i) x(i)
-        let full_poly = vec![flatten_mat1.clone().into(), input_vector.into_mle().into()];
+        let full_poly = vec![
+            flatten_mat1.clone().into(),
+            input_vector.get_data().to_vec().into_mle().into(),
+        ];
         let mut vp = VirtualPolynomial::new(flatten_mat1.num_vars());
         vp.add_mle_list(full_poly, F::ONE);
         #[allow(deprecated)]
-        let (proof, state) =
+        let (proof, _state) =
             IOPProverState::<F>::prove_parallel(vp.clone(), &mut default_transcript());
-        let (p2, s2) = IOPProverState::prove_batch_polys(1, vec![vp], &mut default_transcript());
+        let (p2, _s2) = IOPProverState::prove_batch_polys(1, vec![vp], &mut default_transcript());
         let given_eval1 = proof.extract_sum();
         assert_eq!(p2.extract_sum(), proof.extract_sum());
         assert_eq!(computed_eval1, given_eval1);

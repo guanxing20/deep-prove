@@ -3,9 +3,6 @@
 use ff_ext::ExtensionField;
 use gkr::structs::PointAndEval;
 use itertools::Itertools;
-use multilinear_extensions::mle::DenseMultilinearExtension;
-use quantization::QuantInteger;
-use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use serde::{Deserialize, Serialize};
 use transcript::{BasicTranscript, Transcript};
 pub mod activation;
@@ -16,14 +13,15 @@ pub use iop::{
     prover::Prover,
     verifier::{IO, verify},
 };
-mod logup;
+
 pub mod lookup;
-mod matrix;
+// mod matrix;
 pub mod model;
 mod onnx_parse;
 pub mod quantization;
 pub use onnx_parse::load_mlp;
 
+pub mod tensor;
 mod testing;
 mod utils;
 
@@ -146,8 +144,8 @@ mod test {
         },
         lookup::{LogUp, LookupProtocol},
         onnx_parse::load_mlp,
-        quantization::{QuantInteger, VecFielder},
-        testing::random_vector,
+        quantization::{QuantInteger, TensorFielder},
+        tensor::Tensor,
         to_bit_sequence_le,
     };
     use ff_ext::ff::Field;
@@ -156,12 +154,13 @@ mod test {
 
     #[test]
     fn test_model_run() -> anyhow::Result<()> {
-        test_model_run_helper::<LogUp<E>>()?;
+        test_model_run_helper::<LogUp>()?;
         Ok(())
     }
 
     fn test_model_run_helper<L: LookupProtocol<E>>() -> anyhow::Result<()> {
-        let filepath = "assets/scripts/mlp/mlp-model.onnx";
+        let filepath = "zkml/assets/model.onnx";
+
         let model = load_mlp::<Element>(&filepath).unwrap();
         println!("[+] Loaded onnx file");
         let ctx = Context::<E>::generate(&model).expect("unable to generate context");
@@ -169,14 +168,11 @@ mod test {
 
         let shape = model.input_shape();
         assert_eq!(shape.len(), 1);
-        let input = random_vector::<QuantInteger>(shape[0])
-            .into_iter()
-            .map(|i| i as Element)
-            .collect_vec();
+        let input = Tensor::random::<QuantInteger>(vec![shape[0]]);
         let input = model.prepare_input(input);
 
         let trace = model.run(input.clone());
-        let output = trace.final_output().to_vec();
+        let output = trace.final_output().clone();
         println!("[+] Run inference. Result: {:?}", output);
 
         let mut prover_transcript = default_transcript();
@@ -185,7 +181,7 @@ mod test {
         let proof = prover.prove(trace).expect("unable to generate proof");
 
         let mut verifier_transcript = default_transcript();
-        let io = IO::new(input.to_fields(), output.to_vec());
+        let io = IO::new(input.to_fields(), output.to_fields());
         verify::<_, _, L>(ctx, proof, io, &mut verifier_transcript).expect("invalid proof");
         println!("[+] Verify proof: valid");
         Ok(())

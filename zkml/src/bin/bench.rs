@@ -2,8 +2,7 @@ use std::{
     collections::HashMap,
     fs::{File, OpenOptions},
     io::BufReader,
-    path::{self, Path, PathBuf},
-    str::FromStr,
+    path::Path,
     time,
 };
 
@@ -12,15 +11,18 @@ use clap::Parser;
 use csv::WriterBuilder;
 use goldilocks::GoldilocksExt2;
 use itertools::Itertools;
-use log::{debug, info};
+use log::info;
 
 use serde::{Deserialize, Serialize};
 use zkml::{
     Context, Element, IO, Prover, argmax, default_transcript, load_mlp,
     lookup::LogUp,
-    quantization::{Quantizer, VecFielder},
+    quantization::{Quantizer, TensorFielder},
+    tensor::Tensor,
     verify,
 };
+
+use rmp_serde::encode::to_vec_named;
 
 type F = GoldilocksExt2;
 
@@ -60,7 +62,7 @@ impl InputJSON {
     }
     // poor's man validation
     fn validate(&self) -> anyhow::Result<()> {
-        let rrange = (-1.0..=1.0);
+        let rrange = -1.0..=1.0;
         ensure!(self.input_data.len() == 1);
         let input_isreal = self.input_data[0].iter().all(|v| rrange.contains(v));
         // let output_isreal = self.output_data[0].iter().all(|v| rrange.contains(v));
@@ -93,6 +95,7 @@ const CSV_INFERENCE: &str = "inference (ms)";
 const CSV_PROVING: &str = "proving (ms)";
 const CSV_VERIFYING: &str = "verifying (ms)";
 const CSV_ACCURACY: &str = "accuracy (bool)";
+const CSV_PROOF_SIZE: &str = "proof size (KB)";
 
 fn run(args: Args) -> anyhow::Result<()> {
     let mut bencher = CSVBencher::from_headers(vec![
@@ -101,6 +104,7 @@ fn run(args: Args) -> anyhow::Result<()> {
         CSV_INFERENCE,
         CSV_PROVING,
         CSV_VERIFYING,
+        CSV_PROOF_SIZE,
         CSV_ACCURACY,
     ]);
     info!("[+] Reading onnx model");
@@ -110,6 +114,7 @@ fn run(args: Args) -> anyhow::Result<()> {
     model.describe();
     info!("[+] Reading input/output from pytorch");
     let (input, given_output) = InputJSON::from(&args.io).context("loading input:")?;
+    let input = Tensor::<Element>::new(vec![input.len()], input);
     let input = model.prepare_input(input);
     // model.describe();
     // println!("input: {:?}",input);
@@ -123,21 +128,29 @@ fn run(args: Args) -> anyhow::Result<()> {
 
     info!("[+] Running inference");
     let trace = bencher.r(CSV_INFERENCE, || model.run(input.clone()));
-    let output = trace.final_output().to_vec();
-    bencher.set(CSV_ACCURACY, compare(&given_output, &output));
+    let output = trace.final_output().clone();
+    bencher.set(
+        CSV_ACCURACY,
+        compare(&given_output, &output.get_data().to_vec()),
+    );
 
     info!("[+] Running prover");
     let mut prover_transcript = default_transcript();
-    let prover = Prover::<_, _, LogUp<F>>::new(&ctx, &mut prover_transcript);
+    let prover = Prover::<_, _, LogUp>::new(&ctx, &mut prover_transcript);
     let proof = bencher.r(CSV_PROVING, move || {
         prover.prove(trace).expect("unable to generate proof")
     });
 
+    // Serialize proof using MessagePack and calculate size in KB
+    let proof_bytes = to_vec_named(&proof)?;
+    let proof_size_kb = proof_bytes.len() as f64 / 1024.0;
+    bencher.set(CSV_PROOF_SIZE, format!("{:.3}", proof_size_kb));
+
     info!("[+] Running verifier");
     let mut verifier_transcript = default_transcript();
-    let io = IO::new(input.to_fields(), output.to_vec());
+    let io = IO::new(input.to_fields(), output.to_fields());
     bencher.r(CSV_VERIFYING, || {
-        verify::<_, _, LogUp<F>>(ctx, proof, io, &mut verifier_transcript).expect("invalid proof")
+        verify::<_, _, LogUp>(ctx, proof, io, &mut verifier_transcript).expect("invalid proof")
     });
     info!("[+] Verify proof: valid");
 
