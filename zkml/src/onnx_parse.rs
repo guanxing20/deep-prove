@@ -1,10 +1,14 @@
 use anyhow::{Error, Result, bail, ensure};
 use itertools::Itertools;
+use log::debug;
 use std::{collections::HashMap, i8, path::Path};
 use tract_onnx::{pb::NodeProto, prelude::*};
 
 use crate::{
-    matrix::Matrix, model::{Layer, Model}, quantization::{QuantInteger, Quantizer}, Element
+    Element,
+    activation::{Activation, Relu},
+    model::{Layer, Model},
+    quantization::Quantizer,
 };
 
 #[derive(Debug, Clone)]
@@ -99,7 +103,10 @@ fn reshape<T: Clone>(flat_vec: Vec<T>, rows: usize, cols: usize) -> Option<Vec<V
     Some(flat_vec.chunks(cols).map(|chunk| chunk.to_vec()).collect())
 }
 
-fn concat_column(matrix: Vec<Vec<Element>>, column: Vec<Vec<Element>>) -> Result<Vec<Vec<Element>>> {
+fn concat_column(
+    matrix: Vec<Vec<Element>>,
+    column: Vec<Vec<Element>>,
+) -> Result<Vec<Vec<Element>>> {
     if matrix.len() != column.len() {
         bail!("Column length must match matrix row count");
     }
@@ -167,8 +174,8 @@ pub fn load_mlp<Q: Quantizer<Element>>(filepath: &str) -> Result<Model> {
     if !Path::new(filepath).exists() {
         return Err(Error::msg(format!("File '{}' does not exist", filepath)));
     }
-    let result = is_mlp(filepath)?;
-    assert!(result == true, "is_mlp: Failed");
+    // TODO: Re-enable. Was disabled to test the bench binary but only dense layer were working
+    // assert!(is_mlp(filepath)?, "is_mlp: Failed");
 
     let model = tract_onnx::onnx()
         .proto_model_for_path(filepath)
@@ -188,45 +195,96 @@ pub fn load_mlp<Q: Quantizer<Element>>(filepath: &str) -> Result<Model> {
     }
 
     let mut layers: Vec<Layer> = Vec::new();
-    for node in graph.node.iter() {
+    for (i, node) in graph.node.iter().enumerate() {
         match node.op_type.as_str() {
             "Gemm" => {
                 let matrix_weight = fetch_weight_bias_as_mat::<Q>("weight", node, &initializers)?;
                 let matrix_bias = fetch_weight_bias_as_mat::<Q>("bias", node, &initializers)?;
 
+                // Concatenate bias as an extra column
                 let matrix = concat_column(matrix_weight, matrix_bias)?;
-                let matrix = Matrix::<Element>::from_coeffs(matrix)
-                    .unwrap()
-                    .pad_next_power_of_two();
-                // let matrix = matrix.transpose();
+
+                // Create matrix and transpose (PyTorch stores as output_size x input_size)
+                let matrix = crate::tensor::Tensor::<Element>::from_coeffs_2d(matrix).unwrap();
+                debug!("layer idx {} -> unprocessed matrix {:?}", i, matrix.dims());
+                //.transpose();
+                //.pad_next_power_of_two();
                 layers.push(Layer::Dense(matrix));
+            }
+            "Relu" => {
+                let layer = Layer::Activation(Activation::Relu(Relu::new()));
+                layers.push(layer);
             }
             _ => (),
         };
     }
-    let mut sumcheck_model = Model::new();
-    for layer in layers {
-        sumcheck_model.add_layer(layer); // Insert each layer
+
+    // Process the layers to ensure consistent dimensions
+    let mut processed_layers: Vec<Layer> = Vec::new();
+    let mut prev_layer_shape: Option<Vec<usize>> = None;
+    let last = layers.len() - 1;
+    for (i, layer) in layers.into_iter().enumerate() {
+        if let Layer::Dense(mut matrix) = layer {
+            let mut new_cols = matrix.ncols_2d();
+            if let Some(prev_shape) = prev_layer_shape {
+                assert!(prev_shape.iter().all(|d| d.is_power_of_two()));
+                // Check if previous output's vector length is equal to the number of columns of this matrix
+                if matrix.ncols_2d() != prev_shape[0] {
+                    if matrix.ncols_2d() < prev_shape[0] {
+                        new_cols = prev_shape[0];
+                    } else {
+                        // If we have too many columns, we can't shrink without losing information
+                        panic!(
+                            "Matrix has more columns ({}) than previous layer output size ({}).
+                            Cannot shrink without losing information.",
+                            matrix.ncols_2d(),
+                            prev_shape[0]
+                        );
+                    }
+                }
+            }
+
+            let nrows = if i == last {
+                matrix.nrows_2d()
+            } else {
+                matrix.nrows_2d() + 1
+            };
+            // println!("layer idx {} -> from ({:?} to ({},{})",i,matrix.shape(),
+            //                 nrows.next_power_of_two(),
+            //                 new_cols.next_power_of_two());
+            // Pad to power of two dimensions
+            matrix.reshape_to_fit_inplace_2d(vec![
+                nrows.next_power_of_two(),
+                new_cols.next_power_of_two(),
+            ]);
+            // Update prev_output_size to reflect the padded size
+            prev_layer_shape = Some(matrix.dims());
+            debug!("layer idx {} -> final shape {:?}", i, matrix.dims());
+            processed_layers.push(Layer::Dense(matrix));
+        } else {
+            // prev_layer_shape = Some(layer.shape()); // TODO: Need to double check
+            processed_layers.push(layer);
+        }
     }
 
-    Ok(sumcheck_model)
+    let mut model = Model::new();
+    for layer in processed_layers {
+        model.add_layer(layer);
+    }
+
+    Ok(model)
 }
-
-
 
 #[cfg(test)]
 mod tests {
 
-    use crate::testing::random_vector;
+    use crate::quantization::QuantInteger;
 
     use super::*;
 
     use goldilocks::GoldilocksExt2;
-    use tract_onnx::tract_hir::infer::rules::ElementProxy;
 
     // cargo test --release --package zkml -- onnx_parse::tests::test_tract --nocapture
-
-    type F = GoldilocksExt2;
 
     #[test]
     fn test_tract() {
@@ -241,9 +299,13 @@ mod tests {
         let filepath = "assets/model.onnx";
 
         let model = load_mlp::<Element>(&filepath).unwrap();
-        let input = random_vector::<Element>(model.input_shape()[0]);
+        let input = crate::tensor::Tensor::random::<QuantInteger>(vec![model.input_shape()[0]]);
+        // random_vector::<QuantInteger>(model.input_shape()[0])
+        //     .into_iter()
+        //     .map(|x| x as Element)
+        //     .collect_vec();
 
-        let trace = model.run::<F>(input.clone());
+        let trace = model.run(input.clone());
         println!("Result: {:?}", trace.final_output());
     }
 

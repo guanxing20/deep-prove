@@ -1,13 +1,14 @@
-use core::num;
-
 use crate::{
-    activation::{Activation, ActivationCtx, Relu},
+    activation::Activation,
     iop::precommit::{self, PolyID},
-    model::{Layer, Model}, quantization::{Requant},
+    lookup::Context as LookupContext,
+    model::{Layer, Model},
+    quantization::Requant,
 };
 use anyhow::Context as CC;
 use ff_ext::ExtensionField;
 use itertools::Itertools;
+use mpcs::BasefoldCommitment;
 use multilinear_extensions::virtual_poly::VPAuxInfo;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use transcript::Transcript;
@@ -17,10 +18,16 @@ use transcript::Transcript;
 /// cheating on this.
 /// NOTE: The context automatically appends a requant step after each dense layer.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum StepInfo<E> {
+#[serde(bound(serialize = "E: Serialize", deserialize = "E: DeserializeOwned"))]
+pub enum StepInfo<E>
+where
+    E: ExtensionField + DeserializeOwned,
+    E::BaseField: Serialize + DeserializeOwned,
+{
     Dense(DenseInfo<E>),
     Activation(ActivationInfo),
     Requant(RequantInfo),
+    Table(TableInfo<E>),
 }
 
 /// Holds the poly info for the polynomials representing each matrix in the dense layers
@@ -32,28 +39,51 @@ pub struct DenseInfo<E> {
 /// Currently holds the poly info for the output polynomial of the RELU
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ActivationInfo {
+    pub op: Activation,
     pub poly_id: PolyID,
     pub num_vars: usize,
-    pub multiplicity_poly_id: PolyID,
-    pub multiplicity_num_vars: usize,
 }
 
-
-/// Info related to the lookup protocol necessary to requantize 
-#[derive(Clone,Debug,Serialize,Deserialize)]
+/// Info related to the lookup protocol necessary to requantize
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RequantInfo {
+    pub requant: Requant,
     pub poly_id: PolyID,
     pub num_vars: usize,
-    pub multiplicity_poly_id: PolyID,
-    pub multiplicity_num_vars: usize, 
 }
 
-impl<E> StepInfo<E> {
+/// Info related to the lookup protocol tables.
+/// Here `poly_id` is the multiplicity poly for this table.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(bound(serialize = "E: Serialize", deserialize = "E: DeserializeOwned"))]
+pub struct TableInfo<E>
+where
+    E: ExtensionField + DeserializeOwned,
+    E::BaseField: Serialize + DeserializeOwned,
+{
+    pub poly_id: PolyID,
+    pub num_vars: usize,
+    pub table_commitment: BasefoldCommitment<E>,
+}
+
+impl<E> StepInfo<E>
+where
+    E: ExtensionField + DeserializeOwned,
+    E::BaseField: Serialize + DeserializeOwned,
+{
     pub fn variant_name(&self) -> String {
         match self {
             Self::Dense(_) => "Dense".to_string(),
             Self::Activation(_) => "Activation".to_string(),
             Self::Requant(_) => "Requant".to_string(),
+            Self::Table(..) => "Table".to_string(),
+        }
+    }
+
+    pub fn requires_lookup(&self) -> bool {
+        match self {
+            Self::Dense(..) => false,
+            _ => true,
         }
     }
 }
@@ -73,10 +103,8 @@ where
     /// Context related to the commitment and accumulation of claims related to the weights of model.
     /// This part contains the commitment of the weights.
     pub weights: precommit::Context<E>,
-
-    /// Context holding the lookup tables for activation, e.g. the MLEs of the input and output columns for
-    /// RELU for example
-    pub activation: ActivationCtx<E>,
+    /// Context holding all lookup related inforamtion
+    pub lookup: LookupContext<E>,
 }
 
 impl<E: ExtensionField> Context<E>
@@ -89,15 +117,14 @@ where
     /// INFO: it _assumes_ the model is already well padded to power of twos.
     pub fn generate(model: &Model) -> anyhow::Result<Self> {
         let mut last_output_size = model.first_output_shape()[0];
-        let mut current_multiplicity_poly_id = model.layer_count();
         let auxs = model
             .layers()
             .map(|(id, layer)| {
                 match layer {
                     Layer::Dense(matrix) => {
                         // construct dimension of the polynomial given to the sumcheck
-                        let ncols = matrix.ncols();
-                        last_output_size = matrix.nrows();
+                        let ncols = matrix.ncols_2d();
+                        last_output_size = matrix.nrows_2d();
                         // each poly is only two polynomial right now: matrix and vector
                         // for matrix, each time we fix the variables related to rows so we are only left
                         // with the variables related to columns
@@ -113,37 +140,32 @@ where
                         });
                         dense_info
                     }
-                    Layer::Activation(Activation::Relu(_)) => {
-                        let multiplicity_poly_id = current_multiplicity_poly_id;
-                        current_multiplicity_poly_id += 1;
+                    Layer::Activation(Activation::Relu(relu)) => {
                         StepInfo::Activation(ActivationInfo {
+                            op: Activation::Relu(*relu),
                             poly_id: id,
-                            num_vars: Relu::num_vars(),
-                            multiplicity_poly_id,
-                            multiplicity_num_vars: Relu::num_vars(),
+                            num_vars: last_output_size.ilog2() as usize,
                         })
                     }
-                    Layer::Requant(info) => {
-                        let multiplicity_poly_id = current_multiplicity_poly_id;
-                        current_multiplicity_poly_id += 1;
-                        let num_vars = info.range.ilog2() as usize;
-                        StepInfo::Requant(RequantInfo {
-                            poly_id: id,
-                            num_vars,
-                            multiplicity_poly_id,
-                            multiplicity_num_vars: num_vars,
-                        })
-                    }
+                    Layer::Requant(info) => StepInfo::Requant(RequantInfo {
+                        requant: *info,
+                        poly_id: id,
+                        num_vars: last_output_size.ilog2() as usize,
+                    }),
                 }
             })
             .collect_vec();
+        println!("CTX STEP B");
         let commit_ctx = precommit::Context::generate_from_model(model)
             .context("can't generate context for commitment part")?;
-        let activation = ActivationCtx::new();
+        println!("CTX STEP C");
+
+        let lookup = LookupContext::<E>::generate(&auxs)?;
+
         Ok(Self {
             steps_info: auxs.into_iter().rev().collect_vec(),
             weights: commit_ctx,
-            activation,
+            lookup,
         })
     }
 
@@ -157,15 +179,15 @@ where
                 StepInfo::Requant(info) => {
                     t.append_field_element(&E::BaseField::from(info.poly_id as u64));
                     t.append_field_element(&E::BaseField::from(info.num_vars as u64));
-                    t.append_field_element(&E::BaseField::from(info.multiplicity_poly_id as u64));
-                    t.append_field_element(&E::BaseField::from(info.multiplicity_num_vars as u64));
-
                 }
                 StepInfo::Activation(info) => {
                     t.append_field_element(&E::BaseField::from(info.poly_id as u64));
                     t.append_field_element(&E::BaseField::from(info.num_vars as u64));
-                    t.append_field_element(&E::BaseField::from(info.multiplicity_poly_id as u64));
-                    t.append_field_element(&E::BaseField::from(info.multiplicity_num_vars as u64));
+                }
+                StepInfo::Table(info) => {
+                    t.append_field_element(&E::BaseField::from(info.poly_id as u64));
+                    t.append_field_element(&E::BaseField::from(info.num_vars as u64));
+                    t.append_field_elements(info.table_commitment.root().0.as_slice());
                 }
             }
         }
