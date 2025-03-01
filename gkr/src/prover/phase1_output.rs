@@ -30,7 +30,7 @@ impl<E: ExtensionField> IOPProverState<E> {
     ///     g1^{(j)}(y) = \alpha^j * eq(rt_j, t) * eq(ry_j, y)
     ///     g1^{(j)}(y) = \alpha^j * eq(rt_j, t) * copy_to[j](ry_j, y)
     ///     g1^{(j)}(y) = \alpha^j * eq(rt_j, t) * assert_subset_eq(ry, y)
-    #[tracing::instrument(skip_all, name = "prove_and_update_state_output_phase1_step1")]
+    #[tracing::instrument(level = "trace",skip_all, name = "prove_and_update_state_output_phase1_step1")]
     pub(super) fn build_state_output_phase1_step1_sumcheck_poly<'a>(
         &self,
         eq_t: &Vec<Vec<E>>,

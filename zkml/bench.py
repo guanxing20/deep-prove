@@ -118,7 +118,8 @@ def create_model(num_dense, layer_width, output_dir, verbose):
     ex(["python3", PYTORCH_SCRIPT,
         "--num-dense", str(num_dense),
         "--layer-width", str(layer_width),
-        "--export", str(output_dir)], verbose=verbose)
+        "--export", str(output_dir)],
+       verbose=verbose)
 
 def run_zkml_benchmark(config_name, output_dir, verbose):
     """Run ZKML benchmark and save results to CSV"""

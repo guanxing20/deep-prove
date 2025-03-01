@@ -11,7 +11,7 @@ use anyhow::{anyhow, bail, ensure};
 use ff_ext::ExtensionField;
 
 use itertools::Itertools;
-use log::debug;
+use log::{debug, info};
 use multilinear_extensions::mle::{IntoMLE, MultilinearExtension};
 
 use serde::{Serialize, de::DeserializeOwned};
@@ -49,8 +49,8 @@ where
     E: Serialize + DeserializeOwned,
 {
     // Ordering of proofs.
-    println!(
-        "VERIFIER: Proof Order: {:?}",
+    debug!(
+        "VERIFIER: Proof ordering: {:?}",
         proof.steps.iter().map(|p| p.variant_name()).collect_vec()
     );
 

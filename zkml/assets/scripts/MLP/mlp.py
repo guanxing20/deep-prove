@@ -21,7 +21,7 @@ parser.add_argument("--num-dense", type=int, required=True, help="Number of dens
 parser.add_argument("--layer-width", type=int, required=True, help="Width of each layer")
 parser.add_argument("--export", type=Path, required=False, default=Path("."), help="folder where to export model and input")
 parser.add_argument("--no-bias", action="store_true", help="Disable bias in linear layers")
-
+parser.add_argument("--max-samples", type=int, default=100, help="Maximum number of test samples to export (default: 100, use -1 for all)")
 
 args = parser.parse_args()
 print(f"num_dense: {args.num_dense}, layer_width: {args.layer_width}")
@@ -45,10 +45,10 @@ class MLP(nn.Module):
         layers = []
         input_size = 4  # Assuming input size is 4 for the Iris dataset
         for _ in range(num_dense):
-            layers.append(nn.Linear(input_size, layer_width))
+            layers.append(nn.Linear(input_size, layer_width, bias=use_bias))
             layers.append(nn.ReLU())
             input_size = layer_width
-        layers.append(nn.Linear(layer_width, 3))  # Assuming 3 output classes
+        layers.append(nn.Linear(layer_width, 3, bias=use_bias))  # Assuming 3 output classes
         layers.append(nn.ReLU())
         self.layers = nn.ModuleList(layers)
 
@@ -71,11 +71,6 @@ X = scaler.fit_transform(X)
 train_X, test_X, train_y, test_y = train_test_split(
     X, y, test_size=0.2
 )
-#train_X, test_X, train_y, test_y = train_test_split(
-#    dataset[dataset.columns[0:4]].values,  # use columns 0-4 as X
-#    dataset.target,  # use target as y
-#    test_size=0.2  # use 20% of data for testing
-#)
 print("Divided the data into testing and training.")
 
 loss_fn = nn.CrossEntropyLoss()
@@ -121,20 +116,37 @@ ax2.set_xlabel("epochs")
 plt.tight_layout(pad=0.08)
 plt.savefig("accuracy-loss.png")
 
-
-x = test_X[0].reshape(1, 4)
-model.eval()
-
-y_pred = model(test_X[0])
-print("Expected:", test_y[0], "Predicted", torch.argmax(y_pred, dim=0))
-
-from pathlib import Path
-
 model_path = args.export / "mlp-model.onnx"
 data_path = args.export / "mlp-input.json"
 
-x = test_X[0].reshape(1, 4)
+# Get model predictions for test samples
 model.eval()
+
+# Use all test samples but limit to the specified maximum (or all if -1)
+max_samples = len(test_X) if args.max_samples == -1 else min(len(test_X), args.max_samples)
+samples_indices = list(range(max_samples))
+print(f"Exporting {max_samples} test samples (out of {len(test_X)} available)")
+
+# Prepare inputs and expected outputs
+input_data = []
+output_data = []
+
+# Process each selected test sample
+for i in samples_indices:
+    # Process one test sample at a time
+    x = test_X[i].reshape(1, 4)  # Each input is (1, 4) for ONNX format
+    with torch.no_grad():
+        y_pred = model(test_X[i])
+    
+    # Save the input and output in the format expected by bench.rs
+    input_data.append(x.detach().numpy().reshape([-1]).tolist())
+    output_data.append(y_pred.detach().numpy().reshape([-1]).tolist())
+    
+    # Print expected vs predicted for verification
+    print(f"Sample {i}: Expected: {test_y[i]}, Predicted: {torch.argmax(y_pred)}")
+
+# Export ONNX model - using first test sample for shape
+x = test_X[0].reshape(1, 4)
 torch.onnx.export(model,
                   x,
                   model_path,
@@ -148,12 +160,13 @@ torch.onnx.export(model,
 
 print(f"Model onnx exported to {model_path}")
 
-data_array = ((x).detach().numpy()).reshape([-1]).tolist()
-output_array = ((y_pred).detach().numpy()).reshape([-1]).tolist()
-
-data = dict(input_data=[data_array], output_data=[output_array])
+# Export inputs and outputs
+data = {
+    "input_data": input_data,
+    "output_data": output_data
+}
 json.dump(data, open(data_path, 'w'), indent=2)
-print(f"Input/Output to model exported to {data_path}")
+print(f"Exported {max_samples} test samples to {data_path}")
 
 def tensor_to_vecvec(tensor):
     """Convert a PyTorch tensor to a Vec<Vec<_>> format and print it."""

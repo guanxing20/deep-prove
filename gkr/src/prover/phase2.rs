@@ -72,7 +72,7 @@ impl<E: ExtensionField> IOPProverState<E> {
     ///     ) ) + eq(rt, s1) * add(ry, x1)
     ///     f1'^{(j)}(s1 || x1) = subset[j][i](s1 || x1)
     ///     g1'^{(j)}(s1 || x1) = eq(rt, s1) paste_from[j](ry, x1)
-    #[tracing::instrument(skip_all, name = "build_phase2_step1_sumcheck_poly")]
+    #[tracing::instrument(level = "trace",skip_all, name = "build_phase2_step1_sumcheck_poly")]
     pub(super) fn build_phase2_step1_sumcheck_poly<'a>(
         eq: &[Vec<E>; 1],
         layer_id: LayerId,
@@ -267,7 +267,7 @@ impl<E: ExtensionField> IOPProverState<E> {
     ///     g2(s2 || x2) = \sum_{s3}( \sum_{x3}(
     ///         eq(rt, rs1, s2, s3) * mul3(ry, rx1, x2, x3) * layers[i + 1](s3 || x3)
     ///     ) ) + eq(rt, rs1, s2) * mul2(ry, rx1, x2)
-    #[tracing::instrument(skip_all, name = "build_phase2_step2_sumcheck_poly")]
+    #[tracing::instrument(level = "trace",skip_all, name = "build_phase2_step2_sumcheck_poly")]
     pub(super) fn build_phase2_step2_sumcheck_poly<'a>(
         layer_id: LayerId,
         eqs: &[Vec<E>; 2],
