@@ -13,13 +13,7 @@ use std::collections::{HashMap, HashSet};
 use utils::compute_multiplicity_poly;
 
 use crate::{
-    Claim, Element,
-    activation::Relu,
-    commit::{Pcs, precommit::PolyID},
-    iop::context::StepInfo,
-    model::{InferenceTrace, StepIdx},
-    quantization::{Fieldizer, Requant},
-    tensor::Tensor,
+    activation::Relu, commit::{precommit::PolyID, Pcs}, iop::context::StepInfo, model::{InferenceTrace, StepIdx}, quantization::{self, Fieldizer, Requant}, tensor::Tensor, Claim, Element
 };
 use gkr_circuits::{
     lookups_circuit::lookup_wire_fractional_sumcheck, table_circuit::table_fractional_sumcheck,
@@ -409,15 +403,15 @@ where
                             ))?
                             .into_iter()
                             .map(|evaluations| {
-                                DenseMultilinearExtension::<E>::from_evaluations_vec(8, evaluations)
+                                DenseMultilinearExtension::<E>::from_evaluations_vec(quantization::BIT_LEN, evaluations)
                             })
                             .collect::<Vec<DenseMultilinearExtension<E>>>();
-                        let (pp, _) = Pcs::<E>::trim(params.clone(), 1 << 8)?;
+                        let (pp, _) = Pcs::<E>::trim(params.clone(), 1 << quantization::BIT_LEN)?;
                         let commit = Pcs::<E>::batch_commit(&pp, &mles)?.to_commitment();
 
                         let relu_table_info = TableInfo {
                             poly_id: table_poly_id,
-                            num_vars: 8,
+                            num_vars: quantization::BIT_LEN,
                             table_commitment: commit,
                             circuit: lookup_type.make_circuit::<E>(),
                             lookup_type,

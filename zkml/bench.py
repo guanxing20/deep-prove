@@ -126,13 +126,17 @@ def run_zkml_benchmark(config_name, output_dir, verbose):
     """Run ZKML benchmark and save results to CSV"""
     zkml_csv = output_dir / f"zkml_{config_name}.csv"
     
-    print(f"Running ZKML benchmark for {config_name}")
+    # Load the input JSON file to count samples
+    with open(output_dir / INPUT, "r") as f:
+        input_data = json.load(f)
+    num_samples = len(input_data["input_data"])
+    
     ensure_command_exists("cargo")
     out = ex(["cargo", "run", "--release", "--", 
               "-i", str(output_dir / INPUT),
               "-o", str(output_dir / MODEL),
               "--bench", str(zkml_csv)], verbose=verbose)
-    print("ZKML benchmark completed")
+    print(f"ZKML benchmark completed (processed {num_samples} samples)")
     return zkml_csv
 
 def run_ezkl_benchmark(config_name, run_index, output_dir, verbose, args):
@@ -178,15 +182,18 @@ def run_ezkl_benchmark(config_name, run_index, output_dir, verbose, args):
         for sample_idx in range(max_samples):
             print(f"\n[+] Processing EZKL sample {sample_idx+1}/{max_samples}")
             
-            # Create a temporary JSON file with just this input/output pair
+            # Create a temporary JSON file with just this input (no output)
             temp_input = {
-                "input_data": [original_input_data["input_data"][sample_idx]],
-                "output_data": [original_input_data["output_data"][sample_idx]]
+                "input_data": [original_input_data["input_data"][sample_idx]]
+                # No output_data field
             }
             
             temp_input_file = f"temp_input_{sample_idx}.json"
             with open(temp_input_file, "w") as f:
                 json.dump(temp_input, f)
+            
+            # Store the expected output separately for comparison later
+            expected_output = original_input_data["output_data"][sample_idx]
             
             # Initialize bencher for this sample
             bencher = CSVBencher([CONFIG, RUN, SAMPLE, SETUP, INFERENCE, PROVING, VERIFYING, ACCURACY, PROOF_SIZE])
@@ -229,7 +236,8 @@ def run_ezkl_benchmark(config_name, run_index, output_dir, verbose, args):
             print(f"EZKL outputs len: {len(proof_data['pretty_public_inputs']['rescaled_outputs'])}")
             print(f"EZKL output: {ezkl_outputs}, argmax: {ezkl_argmax}")
             
-            pytorch_outputs = [float(x) for x in temp_input["output_data"][0]]
+            # Use the stored expected output instead of looking in temp_input
+            pytorch_outputs = [float(x) for x in expected_output]
             pytorch_argmax = pytorch_outputs.index(max(pytorch_outputs))
             print(f"PyTorch output: {pytorch_outputs} (len {len(pytorch_outputs)}), argmax: {pytorch_argmax}")
             
@@ -264,15 +272,32 @@ def run_benchmark(num_dense, layer_width, run_index, output_dir, verbose, run_ez
     # Step 1: Create PyTorch model
     create_model(num_dense, layer_width, output_dir, verbose)
     
+    # Load the input JSON file to count samples
+    with open(output_dir / INPUT, "r") as f:
+        input_data = json.load(f)
+    total_samples = len(input_data["input_data"])
+    
     # Step 2: Run ZKML benchmark
     zkml_csv = run_zkml_benchmark(config_name, output_dir, verbose)
     
     # Step 3: Conditionally Run EZKL benchmark
+    ezkl_samples = 0
     if run_ezkl:
         ezkl_csv = run_ezkl_benchmark(config_name, run_index, output_dir, verbose, args)
+        ezkl_samples = args.max_ezkl_samples if args.max_ezkl_samples != -1 else total_samples
+        ezkl_samples = min(ezkl_samples, total_samples)
         print(f"Results saved to {zkml_csv} and {ezkl_csv}")
     else:
         print(f"Results saved to {zkml_csv} (EZKL comparison skipped)")
+
+    # Print summary
+    print(f"\n{'='*80}")
+    print(f"Benchmark Summary: dense={num_dense}, width={layer_width}, run={run_index}")
+    print(f"- Total samples: {total_samples}")
+    print(f"- ZKML samples processed: {total_samples}")
+    if run_ezkl:
+        print(f"- EZKL samples processed: {ezkl_samples}")
+    print(f"{'='*80}\n")
 
     return zkml_csv, ezkl_csv if run_ezkl else None
 
