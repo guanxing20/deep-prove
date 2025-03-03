@@ -49,8 +49,8 @@ where
     E: Serialize + DeserializeOwned,
 {
     // Ordering of proofs.
-    debug!(
-        "VERIFIER: Proof ordering: {:?}",
+    println!(
+        "VERIFIER: Proof Order: {:?}",
         proof.steps.iter().map(|p| p.variant_name()).collect_vec()
     );
 

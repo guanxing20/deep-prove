@@ -27,7 +27,6 @@ pub trait Quantizer<Output> {
 
 impl Quantizer<Element> for Element {
     fn from_f32_unsafe(e: &f32) -> Self {
-        assert!(*e >= -1.0 && *e <= 1.0);
         // even tho we are requantizing starting from Element, we only want to requantize for QuantInteger
         // the reason we have these two types is to handle overflow
         let max = QuantInteger::MAX;
@@ -61,6 +60,7 @@ impl<F: ExtensionField> Fieldizer<F> for QuantInteger {
     fn to_field(&self) -> F {
         if self.is_negative() {
             // Doing wrapped arithmetic : p-128 ... p-1 means negative number
+
             -F::from(self.unsigned_abs() as u64)
         } else {
             // for positive and zero, it's just the number
@@ -188,15 +188,6 @@ impl Requant {
         )
     }
 
-    /// Applies requantization to a single element.
-    ///
-    /// This function performs the following steps:
-    /// 1. Adds a large offset (max_bit) to ensure all values are positive
-    /// 2. Right-shifts by the specified amount to reduce the bit width
-    /// 3. Subtracts the shifted offset to restore the correct value range
-    ///
-    /// The result is a value that has been scaled down to fit within the
-    /// target bit width while preserving the relative magnitudes.
     #[inline(always)]
     pub fn apply(&self, e: &Element) -> Element {
         let max_bit = (self.range << 1) as i128;

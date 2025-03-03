@@ -341,11 +341,7 @@ impl<'a, E: ExtensionField> IOPProverState<'a, E> {
     /// next round.
     ///
     /// Main algorithm used is from section 3.2 of [XZZPS19](https://eprint.iacr.org/2019/317.pdf#subsection.3.2).
-    #[tracing::instrument(
-        level = "trace",
-        skip_all,
-        name = "sumcheck::prove_round_and_update_state"
-    )]
+    #[tracing::instrument(skip_all, name = "sumcheck::prove_round_and_update_state")]
     pub(crate) fn prove_round_and_update_state(
         &mut self,
         challenge: &Option<Challenge<E>>,

@@ -29,11 +29,7 @@ impl<E: ExtensionField> IOPProverState<E> {
     ///     sigma = layers[i](rt || ry) - add_const(ry),
     ///     f1'^{(j)}(x1) = subset[j][i](rt || x1)
     ///     g1'^{(j)}(x1) = paste_from[j](ry, x1)
-    #[tracing::instrument(
-        level = "trace",
-        skip_all,
-        name = "prove_and_update_state_input_phase2_step1"
-    )]
+    #[tracing::instrument(skip_all, name = "prove_and_update_state_input_phase2_step1")]
     pub(super) fn prove_and_update_state_input_phase2_step1(
         &mut self,
         circuit: &Circuit<E>,
