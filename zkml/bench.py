@@ -175,12 +175,21 @@ def run_ezkl_benchmark(config_name, run_index, output_dir, verbose, args):
         max_samples = num_samples if args.max_samples is None else min(num_samples, args.max_samples)
         print(f"Found {num_samples} input/output pairs in {INPUT}, will process {max_samples}")
         
-        # Run setup steps once (these don't depend on the input data)
-        ex(["ezkl", "gen-settings", "-K", str(LOGROWS),"-M", MODEL], verbose=verbose)
-        ex(["ezkl", "calibrate-settings", "-M", MODEL, "-D", INPUT,"--max-logrows", str(LOGROWS)], verbose=verbose)
+        # Create a calibration file with just the first sample
+        calibration_file = "calibration_input.json"
+        with open(calibration_file, "w") as f:
+            json.dump({
+                "input_data": [original_input_data["input_data"][0]],
+                "output_data": [original_input_data["output_data"][0]]
+            }, f)
+        
+        # Run setup steps using the calibration file
+        print(f"Running calibration using the first sample...")
+        ex(["ezkl", "gen-settings", "-K", str(LOGROWS), "-M", MODEL], verbose=verbose)
+        ex(["ezkl", "calibrate-settings", "-M", MODEL, "-D", calibration_file, "--max-logrows", str(LOGROWS)], verbose=verbose)
         if not Path(EZKL_KZG_PARAMS).exists():
             print("Downloading SRS params")
-            ex(["ezkl", "get-srs", "--logrows", str(LOGROWS),"--srs-path", EZKL_KZG_PARAMS], verbose=verbose)
+            ex(["ezkl", "get-srs", "--logrows", str(LOGROWS), "--srs-path", EZKL_KZG_PARAMS], verbose=verbose)
         ex(["ezkl", "compile-circuit", "-M", MODEL], verbose=verbose)
         
         # Run setup once and measure time
@@ -188,9 +197,9 @@ def run_ezkl_benchmark(config_name, run_index, output_dir, verbose, args):
         ex(["ezkl", "setup", "--srs-path", EZKL_KZG_PARAMS], verbose=verbose)
         setup_time_ms = (time.perf_counter() - setup_start) * 1000
         
-        # Process each input/output pair up to the limit
-        for sample_idx in range(max_samples):
-            print(f"\n[+] Processing EZKL sample {sample_idx+1}/{max_samples}")
+        # Process each input/output pair starting from the second sample
+        for sample_idx in range(1, max_samples):
+            print(f"\n[+] Processing EZKL sample {sample_idx}/{max_samples-1}")
             
             # Create a temporary JSON file with just this input (no output)
             temp_input = {
@@ -265,8 +274,12 @@ def run_ezkl_benchmark(config_name, run_index, output_dir, verbose, args):
             
             # Clean up temporary file
             os.remove(temp_input_file)
-            
+        
+        # Clean up calibration file
+        os.remove(calibration_file)
+        
         return ezkl_csv
+        
     finally:
         # Always return to the original directory
         os.chdir(original_dir)
