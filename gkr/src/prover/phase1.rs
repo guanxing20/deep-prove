@@ -25,7 +25,7 @@ impl<E: ExtensionField> IOPProverState<E> {
     ///     f1^{(j)}(y) = layers[i](t || y)
     ///     g1^{(j)}(y) = \alpha^j * eq(rt_j, t) * eq(ry_j, y)
     ///     g1^{(j)}(y) = \alpha^j * eq(rt_j, t) * copy_to[j](ry_j, y)
-    #[tracing::instrument(level = "trace",skip_all, name = "build_phase1_step1_sumcheck_poly")]
+    #[tracing::instrument(level = "trace", skip_all, name = "build_phase1_step1_sumcheck_poly")]
     pub(super) fn build_phase1_step1_sumcheck_poly<'a>(
         &self,
         layer_id: LayerId,

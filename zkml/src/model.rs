@@ -1,8 +1,8 @@
+use crate::quantization::Quantizer;
 use ff_ext::ExtensionField;
 use itertools::Itertools;
 use log::debug;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
-use crate::quantization::Quantizer;
 
 use crate::{
     Element,
@@ -86,7 +86,7 @@ impl Layer {
                         .iter()
                         .cloned()
                         .chain(std::iter::once(Element::from_f32_unsafe(&1.0)))
-                        // we need to pad since matrix is already padded but at this stage the 
+                        // we need to pad since matrix is already padded but at this stage the
                         // input is not padded yet.
                         .chain(std::iter::repeat(0))
                         .take(matrix.ncols_2d())

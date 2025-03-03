@@ -13,7 +13,13 @@ use std::collections::{HashMap, HashSet};
 use utils::compute_multiplicity_poly;
 
 use crate::{
-    activation::Relu, commit::{precommit::PolyID, Pcs}, iop::context::StepInfo, model::{InferenceTrace, StepIdx}, quantization::{self, Fieldizer, Requant}, tensor::Tensor, Claim, Element
+    Claim, Element,
+    activation::Relu,
+    commit::{Pcs, precommit::PolyID},
+    iop::context::StepInfo,
+    model::{InferenceTrace, StepIdx},
+    quantization::{self, Fieldizer, Requant},
+    tensor::Tensor,
 };
 use gkr_circuits::{
     lookups_circuit::lookup_wire_fractional_sumcheck, table_circuit::table_fractional_sumcheck,
@@ -403,7 +409,10 @@ where
                             ))?
                             .into_iter()
                             .map(|evaluations| {
-                                DenseMultilinearExtension::<E>::from_evaluations_vec(quantization::BIT_LEN, evaluations)
+                                DenseMultilinearExtension::<E>::from_evaluations_vec(
+                                    quantization::BIT_LEN,
+                                    evaluations,
+                                )
                             })
                             .collect::<Vec<DenseMultilinearExtension<E>>>();
                         let (pp, _) = Pcs::<E>::trim(params.clone(), 1 << quantization::BIT_LEN)?;

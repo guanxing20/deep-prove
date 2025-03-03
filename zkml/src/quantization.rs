@@ -140,18 +140,28 @@ impl<const BIT_LEN: usize> QuantRange<BIT_LEN> {
         // Then we just take the maximum
         let nrows = m.nrows_2d();
         let ncols = m.ncols_2d();
-        let max_output_range= m.get_data().iter().chunks(ncols).into_iter().map(|row| {
-            let row_range = row.map(|weight| (weight * MIN as Element,weight * MAX as Element)).fold((0,0), |(min,max), (wmin,wmax)| (min + wmin, max + wmax));
-            // weight * MIN can be positive and higher then MAX*weight if weight's negative
-            // so we take the absolute value of the difference
-            (row_range.1 - row_range.0).unsigned_abs() as usize
-        }).max().expect("No max range found").next_power_of_two();
+        let max_output_range = m
+            .get_data()
+            .iter()
+            .chunks(ncols)
+            .into_iter()
+            .map(|row| {
+                let row_range = row
+                    .map(|weight| (weight * MIN as Element, weight * MAX as Element))
+                    .fold((0, 0), |(min, max), (wmin, wmax)| (min + wmin, max + wmax));
+                // weight * MIN can be positive and higher then MAX*weight if weight's negative
+                // so we take the absolute value of the difference
+                (row_range.1 - row_range.0).unsigned_abs() as usize
+            })
+            .max()
+            .expect("No max range found")
+            .next_power_of_two();
         // input matrix scaling factor is S = 1 since it's already in range <=> k1 = BIT_LEN ( S = 2^k1 / 2^BIT_LEN = 1)
         // input vector scaling factor is S = 1 since it's already in range <=> k2 = BIT_LEN
         // output scaling factor is computeed already ^
         // so shift = k1 + k2 - k3 - BIT_LEN = BIT_LEN - k3
         // BUT this doesn't work - it panics when starting to prepare because of number columns in lookup too high.
-        let shift = BIT_LEN - max_output_range.ilog2() as usize ;
+        let shift = BIT_LEN - max_output_range.ilog2() as usize;
         let shift = max_output_range.ilog2() as usize - BIT_LEN;
         Requant {
             range: output_range.max_range,
@@ -198,12 +208,12 @@ impl Requant {
     }
 
     /// Applies requantization to a single element.
-    /// 
+    ///
     /// This function performs the following steps:
     /// 1. Adds a large offset (max_bit) to ensure all values are positive
     /// 2. Right-shifts by the specified amount to reduce the bit width
     /// 3. Subtracts the shifted offset to restore the correct value range
-    /// 
+    ///
     /// The result is a value that has been scaled down to fit within the
     /// target bit width while preserving the relative magnitudes.
     #[inline(always)]
