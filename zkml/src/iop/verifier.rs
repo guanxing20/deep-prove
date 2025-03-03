@@ -11,7 +11,7 @@ use anyhow::{anyhow, bail, ensure};
 use ff_ext::ExtensionField;
 
 use itertools::Itertools;
-use log::{debug, info};
+use log::debug;
 use multilinear_extensions::mle::{IntoMLE, MultilinearExtension};
 
 use serde::{Serialize, de::DeserializeOwned};

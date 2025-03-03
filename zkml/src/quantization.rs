@@ -118,19 +118,6 @@ impl<const BIT_LEN: usize> QuantRange<BIT_LEN> {
     /// NOTE2: It is using the simplfiication of finding the max range which is a power of two
     /// so we only need to "right shift" during requant
     fn compute_matvec_quant(m: &crate::tensor::Tensor<Element>) -> Requant {
-        // NOTE this way below is correct but is taking a huge loss
-        // BIT_LEN * 2 because of multiplication
-        // log because of additions
-        // let bit_len = BIT_LEN * 2  + m.ncols().ilog2() as usize;
-        // let output_range = Self {
-        //    max_range: (2 as usize).pow(bit_len as u32),
-        //};
-        // NOTE 2: this way is more precise
-        let ind_range = (MAX as i64 - MIN as i64) as usize;
-        let output_range = Self {
-            max_range: (ind_range.pow(2) + m.ncols_2d() as usize * ind_range).next_power_of_two(),
-        };
-        let shift = output_range.max_range.ilog2() as usize - BIT_LEN;
         // Instead of using the max range possible without looking at the matrices weight, we actually trim down to
         // the max range that the matrix can produce when multiplied by any input vector.
         // We still assume a single range for the whole matrix (vs one for each row or each weight)
@@ -156,15 +143,9 @@ impl<const BIT_LEN: usize> QuantRange<BIT_LEN> {
             .max()
             .expect("No max range found")
             .next_power_of_two();
-        // input matrix scaling factor is S = 1 since it's already in range <=> k1 = BIT_LEN ( S = 2^k1 / 2^BIT_LEN = 1)
-        // input vector scaling factor is S = 1 since it's already in range <=> k2 = BIT_LEN
-        // output scaling factor is computeed already ^
-        // so shift = k1 + k2 - k3 - BIT_LEN = BIT_LEN - k3
-        // BUT this doesn't work - it panics when starting to prepare because of number columns in lookup too high.
-        let shift = BIT_LEN - max_output_range.ilog2() as usize;
         let shift = max_output_range.ilog2() as usize - BIT_LEN;
         Requant {
-            range: output_range.max_range,
+            range: max_output_range,
             right_shift: shift,
             after_range: 1 << BIT_LEN,
         }
@@ -342,8 +323,6 @@ impl Requant {
 #[cfg(test)]
 mod test {
     use crate::quantization::Fieldizer;
-    use ff_ext::ExtensionField;
-    use goldilocks::SmallField;
 
     use crate::Element;
     type F = goldilocks::GoldilocksExt2;

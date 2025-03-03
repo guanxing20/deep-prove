@@ -381,7 +381,7 @@ mod test {
 
     use super::compute_betas_eval;
     use crate::{
-        Claim, Element, default_transcript, pad_vector,
+        Claim, default_transcript, pad_vector,
         quantization::QuantInteger,
         tensor::Tensor,
         testing::{random_bool_vector, random_field_vector},

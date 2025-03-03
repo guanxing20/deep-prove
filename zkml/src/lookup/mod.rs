@@ -1148,7 +1148,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::{default_transcript, model::Model};
+    use crate::{default_transcript, init_test_logging, model::Model};
 
     use super::*;
 
@@ -1159,7 +1159,7 @@ mod tests {
 
     #[test]
     fn test_prover_steps() -> anyhow::Result<()> {
-        tracing_subscriber::fmt::init();
+        init_test_logging();
         let (model, input) = Model::random(4);
         model.describe();
         let trace = model.run(input);
