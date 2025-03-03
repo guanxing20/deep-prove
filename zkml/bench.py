@@ -122,7 +122,7 @@ def create_model(num_dense, layer_width, output_dir, verbose):
         "--export", str(output_dir)],
        verbose=verbose)
 
-def run_zkml_benchmark(config_name, output_dir, verbose):
+def run_zkml_benchmark(config_name, output_dir, verbose, args):
     """Run ZKML benchmark and save results to CSV"""
     zkml_csv = output_dir / f"zkml_{config_name}.csv"
     
@@ -131,12 +131,22 @@ def run_zkml_benchmark(config_name, output_dir, verbose):
         input_data = json.load(f)
     num_samples = len(input_data["input_data"])
     
+    # Apply sample limit if specified
+    max_samples = num_samples if args.max_samples is None else min(num_samples, args.max_samples)
+    
+    print(f"Running ZKML benchmark for {config_name} with {max_samples}/{num_samples} samples")
     ensure_command_exists("cargo")
-    out = ex(["cargo", "run", "--release", "--", 
-              "-i", str(output_dir / INPUT),
-              "-o", str(output_dir / MODEL),
-              "--bench", str(zkml_csv)], verbose=verbose)
-    print(f"ZKML benchmark completed (processed {num_samples} samples)")
+    cmd = ["cargo", "run", "--release", "--", 
+           "-i", str(output_dir / INPUT),
+           "-o", str(output_dir / MODEL),
+           "--bench", str(zkml_csv)]
+    
+    # Add max_samples parameter if specified
+    if args.max_samples is not None:
+        cmd.extend(["--max-samples", str(args.max_samples)])
+    
+    out = ex(cmd, verbose=verbose)
+    print(f"ZKML benchmark completed (processed {max_samples} samples)")
     return zkml_csv
 
 def run_ezkl_benchmark(config_name, run_index, output_dir, verbose, args):
@@ -162,7 +172,7 @@ def run_ezkl_benchmark(config_name, run_index, output_dir, verbose, args):
         num_samples = len(original_input_data["input_data"])
         
         # Apply the sample limit
-        max_samples = num_samples if args.max_ezkl_samples == -1 else min(num_samples, args.max_ezkl_samples)
+        max_samples = num_samples if args.max_samples is None else min(num_samples, args.max_samples)
         print(f"Found {num_samples} input/output pairs in {INPUT}, will process {max_samples}")
         
         # Run setup steps once (these don't depend on the input data)
@@ -278,25 +288,23 @@ def run_benchmark(num_dense, layer_width, run_index, output_dir, verbose, run_ez
     total_samples = len(input_data["input_data"])
     
     # Step 2: Run ZKML benchmark
-    zkml_csv = run_zkml_benchmark(config_name, output_dir, verbose)
+    zkml_csv = run_zkml_benchmark(config_name, output_dir, verbose, args)
     
     # Step 3: Conditionally Run EZKL benchmark
-    ezkl_samples = 0
     if run_ezkl:
         ezkl_csv = run_ezkl_benchmark(config_name, run_index, output_dir, verbose, args)
-        ezkl_samples = args.max_ezkl_samples if args.max_ezkl_samples != -1 else total_samples
-        ezkl_samples = min(ezkl_samples, total_samples)
         print(f"Results saved to {zkml_csv} and {ezkl_csv}")
     else:
         print(f"Results saved to {zkml_csv} (EZKL comparison skipped)")
 
     # Print summary
+    max_samples = args.max_samples if args.max_samples is not None else total_samples
+    max_samples = min(max_samples, total_samples)
+    
     print(f"\n{'='*80}")
     print(f"Benchmark Summary: dense={num_dense}, width={layer_width}, run={run_index}")
-    print(f"- Total samples: {total_samples}")
-    print(f"- ZKML samples processed: {total_samples}")
-    if run_ezkl:
-        print(f"- EZKL samples processed: {ezkl_samples}")
+    print(f"- Total samples available: {total_samples}")
+    print(f"- Samples processed: {max_samples}")
     print(f"{'='*80}\n")
 
     return zkml_csv, ezkl_csv if run_ezkl else None
@@ -367,8 +375,8 @@ def parse_arguments():
                         help="Enable EZKL comparison (off by default)")
     parser.add_argument("--num-threads", type=int, default=None,
                         help="Limit the number of threads used (default: no limit)")
-    parser.add_argument("--max-ezkl-samples", type=int, default=20,
-                        help="Maximum number of samples to process with EZKL (default: 100, use -1 for all)")
+    parser.add_argument("--max-samples", type=int, default=None,
+                        help="Maximum number of samples to process (default: all available samples)")
     return parser.parse_args()
 
 def setup_environment(args):

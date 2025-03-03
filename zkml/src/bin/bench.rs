@@ -37,6 +37,9 @@ struct Args {
     /// File where to write the benchmarks
     #[arg(short,long,default_value_t = {"bench.csv".to_string()})]
     bench: String,
+    /// Maximum number of samples to process (default: all samples)
+    #[arg(short, long)]
+    max_samples: Option<usize>,
 }
 pub fn main() -> anyhow::Result<()> {
     env_logger::init();
@@ -118,9 +121,19 @@ fn run(args: Args) -> anyhow::Result<()> {
     model.describe();
     
     info!("[+] Reading input/output pairs from pytorch");
-    let io_pairs = InputJSON::from(&args.io).context("loading input:")?;
+    let mut io_pairs = InputJSON::from(&args.io).context("loading input:")?;
+    let total_samples = io_pairs.len();
+    
+    // Apply sample limit if specified
+    if let Some(max_samples) = args.max_samples {
+        if max_samples < total_samples {
+            info!("[+] Limiting to {} samples out of {} available", max_samples, total_samples);
+            io_pairs.truncate(max_samples);
+        }
+    }
+    
     let num_pairs = io_pairs.len();
-    info!("[+] Loaded {} input/output pairs", num_pairs);
+    info!("[+] Processing {} input/output pairs", num_pairs);
     
     // Generate context for proving (done once)
     info!("[+] Generating context for proving");
@@ -130,6 +143,10 @@ fn run(args: Args) -> anyhow::Result<()> {
     
     let shape = model.input_shape();
     assert_eq!(shape.len(), 1, "only support vector as input for now");
+    
+    // Track total accuracy
+    let mut correct_predictions = 0;
+    let mut total_predictions = 0;
     
     // Process each input/output pair
     for (sample_idx, (input_vec, given_output)) in io_pairs.into_iter().enumerate() {
@@ -180,16 +197,28 @@ fn run(args: Args) -> anyhow::Result<()> {
         // Run verifier
         info!("[+] Running verifier for sample {}", sample_idx);
         let mut verifier_transcript = default_transcript();
-        let io = IO::new(input.to_fields(), output.to_fields());
+        let io = IO::new(input.to_fields(), output.clone().to_fields());
         bencher.r(CSV_VERIFYING, || {
             verify::<_, _, LogUp>(ctx.clone(), proof, io, &mut verifier_transcript).expect("invalid proof")
         });
         info!("[+] Verify proof: valid for sample {}", sample_idx);
         
+        // Update accuracy tracking
+        let is_correct = compare(&given_output, &output.get_data().to_vec());
+        if is_correct == 1 {
+            correct_predictions += 1;
+        }
+        total_predictions += 1;
+        
         // Write results to CSV
         bencher.flush(&args.bench)?;
         info!("[+] Benchmark results for sample {} appended to {}", sample_idx, args.bench);
     }
+    
+    // Print total accuracy at the end
+    let accuracy_percentage = (correct_predictions as f64 / total_predictions as f64) * 100.0;
+    info!("[+] Overall accuracy: {}/{} correct predictions ({:.2}%)", 
+          correct_predictions, total_predictions, accuracy_percentage);
     
     Ok(())
 }

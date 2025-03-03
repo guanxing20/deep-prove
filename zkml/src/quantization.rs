@@ -27,6 +27,7 @@ pub trait Quantizer<Output> {
 
 impl Quantizer<Element> for Element {
     fn from_f32_unsafe(e: &f32) -> Self {
+        assert!(*e >= -1.0 && *e <= 1.0);
         // even tho we are requantizing starting from Element, we only want to requantize for QuantInteger
         // the reason we have these two types is to handle overflow
         let max = QuantInteger::MAX;
@@ -145,7 +146,7 @@ impl<const BIT_LEN: usize> QuantRange<BIT_LEN> {
             // so we take the absolute value of the difference
             (row_range.1 - row_range.0).unsigned_abs() as usize
         }).max().expect("No max range found").next_power_of_two();
-        // input matrix scaling factor is S = 1 since it's already in range <=> k1 = BIT_LEN
+        // input matrix scaling factor is S = 1 since it's already in range <=> k1 = BIT_LEN ( S = 2^k1 / 2^BIT_LEN = 1)
         // input vector scaling factor is S = 1 since it's already in range <=> k2 = BIT_LEN
         // output scaling factor is computeed already ^
         // so shift = k1 + k2 - k3 - BIT_LEN = BIT_LEN - k3

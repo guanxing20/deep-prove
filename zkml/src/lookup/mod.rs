@@ -143,7 +143,7 @@ impl LookupType {
         match self {
             LookupType::Requant(.., num_vars) => lookup_wire_fractional_sumcheck(1, *num_vars),
             LookupType::Relu(num_vars) => lookup_wire_fractional_sumcheck(2, *num_vars),
-            LookupType::ReluTable => table_fractional_sumcheck(2, 8),
+            LookupType::ReluTable => table_fractional_sumcheck(2, quantization::BIT_LEN),
             LookupType::RequantTable(num_vars) => table_fractional_sumcheck(1, *num_vars),
             LookupType::NoLookup => Circuit::<E>::default(),
         }
@@ -180,7 +180,7 @@ impl LookupType {
         match self {
             LookupType::Requant(.., num_vars) => *num_vars,
             LookupType::Relu(num_vars) => *num_vars,
-            LookupType::ReluTable => 8,
+            LookupType::ReluTable => quantization::BIT_LEN,
             LookupType::RequantTable(num_vars) => *num_vars,
             LookupType::NoLookup => 0,
         }

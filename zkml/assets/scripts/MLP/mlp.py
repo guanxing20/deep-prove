@@ -45,11 +45,12 @@ class MLP(nn.Module):
         layers = []
         input_size = 4  # Assuming input size is 4 for the Iris dataset
         for _ in range(num_dense):
-            layers.append(nn.Linear(input_size, layer_width, bias=use_bias))
+            layers.append(nn.Linear(input_size, layer_width))
             layers.append(nn.ReLU())
             input_size = layer_width
-        layers.append(nn.Linear(layer_width, 3, bias=use_bias))  # Assuming 3 output classes
+        layers.append(nn.Linear(layer_width, 3))  # Assuming 3 output classes
         layers.append(nn.ReLU())
+
         self.layers = nn.ModuleList(layers)
 
     def forward(self, x):
@@ -135,15 +136,29 @@ output_data = []
 for i in samples_indices:
     # Process one test sample at a time
     x = test_X[i].reshape(1, 4)  # Each input is (1, 4) for ONNX format
+    
+    # Save the input in the format expected by bench.rs
+    input_data.append(x.detach().numpy().reshape([-1]).tolist())
+    
+    # Run inference to get model output
     with torch.no_grad():
         y_pred = model(test_X[i])
     
-    # Save the input and output in the format expected by bench.rs
-    input_data.append(x.detach().numpy().reshape([-1]).tolist())
-    output_data.append(y_pred.detach().numpy().reshape([-1]).tolist())
+    # Get the true label
+    true_label = test_y[i].item()
+    print(f"true_label: {test_y[i]}")
+    # Create one-hot encoded ground truth output
+    one_hot_output = [0.0, 0.0, 0.0]  # Initialize with zeros
+    one_hot_output[true_label] = 1.0  # Set the true class to 1.0
+    
+    # Save the one-hot encoded ground truth
+    output_data.append(one_hot_output)
+    #output_data.append(y_pred.detach().numpy().reshape([-1]).tolist())
     
     # Print expected vs predicted for verification
-    print(f"Sample {i}: Expected: {test_y[i]}, Predicted: {torch.argmax(y_pred)}")
+    print(f"Sample {i}: Expected class: {true_label}, Predicted class: {torch.argmax(y_pred).item()}")
+    print(f"  - Ground truth (one-hot): {one_hot_output}")
+    print(f"  - Model output: {y_pred.detach().numpy().reshape([-1]).tolist()}")
 
 # Export ONNX model - using first test sample for shape
 x = test_X[0].reshape(1, 4)
@@ -182,15 +197,15 @@ for i, layer in enumerate(model.layers):
         bias_vector = layer.bias.data
         print(f"Layer {i} weight matrix dimensions: {weight_matrix.size()}")
         print(f"Layer {i} bias vector dimensions: {bias_vector.size()}")
-        #print(f"Layer {i} weight matrix (Vec<Vec<_>> format):")
-        #tensor_to_vecvec(weight_matrix)
-        #print(f"Layer {i} bias vector (Vec<_> format):")
-        #tensor_to_vecvec(bias_vector.unsqueeze(0))
+        print(f"Layer {i} weight matrix (Vec<Vec<_>> format):")
+        tensor_to_vecvec(weight_matrix)
+        print(f"Layer {i} bias vector (Vec<_> format):")
+        tensor_to_vecvec(bias_vector.unsqueeze(0))
 
 # Print initial weights
-#for i, layer in enumerate(model.layers):
-#    if isinstance(layer, nn.Linear):
-#        print(f"Layer {i} initial weight matrix (Vec<Vec<_>> format):")
-#        tensor_to_vecvec(layer.weight.data)
-#        print(f"Layer {i} initial bias vector (Vec<_> format):")
-#        tensor_to_vecvec(layer.bias.data.unsqueeze(0))
+for i, layer in enumerate(model.layers):
+    if isinstance(layer, nn.Linear):
+        print(f"Layer {i} initial weight matrix (Vec<Vec<_>> format):")
+        tensor_to_vecvec(layer.weight.data)
+        print(f"Layer {i} initial bias vector (Vec<_> format):")
+        tensor_to_vecvec(layer.bias.data.unsqueeze(0))
