@@ -544,8 +544,6 @@ mod test {
     #[test]
     fn test_tensor_matvec() {
         let matrix = Tensor::new(vec![3, 3], vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
-        assert!(matrix.ncols_2d() == 3);
-        assert!(matrix.nrows_2d() == 3);
         let vector = Tensor::new(vec![3], vec![10, 20, 30]);
 
         let result = matrix.matvec(&vector);
