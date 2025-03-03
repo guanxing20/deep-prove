@@ -18,7 +18,7 @@ use crate::{
     commit::{Pcs, precommit::PolyID},
     iop::context::StepInfo,
     model::{InferenceTrace, StepIdx},
-    quantization::{Fieldizer, Requant},
+    quantization::{self, Fieldizer, Requant},
     tensor::Tensor,
 };
 use gkr_circuits::{
@@ -149,7 +149,7 @@ impl LookupType {
         match self {
             LookupType::Requant(.., num_vars) => lookup_wire_fractional_sumcheck(1, *num_vars),
             LookupType::Relu(num_vars) => lookup_wire_fractional_sumcheck(2, *num_vars),
-            LookupType::ReluTable => table_fractional_sumcheck(2, 8),
+            LookupType::ReluTable => table_fractional_sumcheck(2, quantization::BIT_LEN),
             LookupType::RequantTable(num_vars) => table_fractional_sumcheck(1, *num_vars),
             LookupType::NoLookup => Circuit::<E>::default(),
         }
@@ -186,7 +186,7 @@ impl LookupType {
         match self {
             LookupType::Requant(.., num_vars) => *num_vars,
             LookupType::Relu(num_vars) => *num_vars,
-            LookupType::ReluTable => 8,
+            LookupType::ReluTable => quantization::BIT_LEN,
             LookupType::RequantTable(num_vars) => *num_vars,
             LookupType::NoLookup => 0,
         }
@@ -409,15 +409,18 @@ where
                             ))?
                             .into_iter()
                             .map(|evaluations| {
-                                DenseMultilinearExtension::<E>::from_evaluations_vec(8, evaluations)
+                                DenseMultilinearExtension::<E>::from_evaluations_vec(
+                                    quantization::BIT_LEN,
+                                    evaluations,
+                                )
                             })
                             .collect::<Vec<DenseMultilinearExtension<E>>>();
-                        let (pp, _) = Pcs::<E>::trim(params.clone(), 1 << 8)?;
+                        let (pp, _) = Pcs::<E>::trim(params.clone(), 1 << quantization::BIT_LEN)?;
                         let commit = Pcs::<E>::batch_commit(&pp, &mles)?.to_commitment();
 
                         let relu_table_info = TableInfo {
                             poly_id: table_poly_id,
-                            num_vars: 8,
+                            num_vars: quantization::BIT_LEN,
                             table_commitment: commit,
                             circuit: lookup_type.make_circuit::<E>(),
                             lookup_type,

@@ -77,7 +77,7 @@ where
         step: &InferenceStep<'b, E>,
         info: &StepInfo<E>,
     ) -> anyhow::Result<Claim<E>> {
-        println!("PROVER: proving layer {}", step.layer.to_string());
+        debug!("PROVER: proving layer {}", step.layer.to_string());
         let claim = match (step.layer, info) {
             (Layer::Dense(matrix), StepInfo::Dense(info)) => {
                 // NOTE: here we treat the ID of the step AS the ID of the polynomial. THat's okay because we only care
@@ -192,7 +192,6 @@ where
             .zip(self.ctx.lookup.get_table_circuits().iter())
             .try_for_each(|(table_witness, table_info)| {
                 let poly_id = table_info.poly_id;
-                println!("PROVING table of type: {:?}", table_info.lookup_type);
                 // Make the proof for the table
                 let table_proof =
                     L::prove_table(&table_info.circuit, &table_witness, self.transcript)?;

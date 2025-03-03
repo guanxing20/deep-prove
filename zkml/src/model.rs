@@ -1,3 +1,4 @@
+use crate::quantization::Quantizer;
 use ff_ext::ExtensionField;
 use itertools::Itertools;
 use log::debug;
@@ -65,7 +66,7 @@ impl Layer {
                 format!("RELU: {}", 1 << Relu::num_vars())
             }
             Layer::Requant(info) => {
-                format!("Requant: {}", info.shape()[1])
+                format!("Requant: (informative but not real) {}", info.shape()[1])
             }
         }
     }
@@ -76,17 +77,21 @@ impl Layer {
             Layer::Dense(ref matrix) => {
                 if input.get_data().len() == matrix.ncols_2d() {
                     // no need to do anything if it's already at the right format
+                    panic!("input is already at the right format");
                     input
                 } else {
                     // append 1 for the bias factor and pad to right size
                     let data = input
                         .get_data()
-                        .to_vec()
-                        .into_iter()
-                        .chain(std::iter::once(1))
+                        .iter()
+                        .cloned()
+                        .chain(std::iter::once(Element::from_f32_unsafe(&1.0)))
+                        // we need to pad since matrix is already padded but at this stage the
+                        // input is not padded yet.
                         .chain(std::iter::repeat(0))
                         .take(matrix.ncols_2d())
                         .collect_vec();
+                    assert_eq!(data.len(), matrix.ncols_2d());
                     Tensor::new(vec![matrix.ncols_2d()], data)
                 }
             }
