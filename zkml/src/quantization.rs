@@ -27,7 +27,6 @@ pub trait Quantizer<Output> {
 
 impl Quantizer<Element> for Element {
     fn from_f32_unsafe(e: &f32) -> Self {
-        assert!(*e >= -1.0 && *e <= 1.0);
         // even tho we are requantizing starting from Element, we only want to requantize for QuantInteger
         // the reason we have these two types is to handle overflow
         let max = QuantInteger::MAX;
@@ -61,6 +60,7 @@ impl<F: ExtensionField> Fieldizer<F> for QuantInteger {
     fn to_field(&self) -> F {
         if self.is_negative() {
             // Doing wrapped arithmetic : p-128 ... p-1 means negative number
+
             -F::from(self.unsigned_abs() as u64)
         } else {
             // for positive and zero, it's just the number
@@ -131,38 +131,6 @@ impl<const BIT_LEN: usize> QuantRange<BIT_LEN> {
             max_range: (ind_range.pow(2) + m.ncols_2d() as usize * ind_range).next_power_of_two(),
         };
         let shift = output_range.max_range.ilog2() as usize - BIT_LEN;
-        // Instead of using the max range possible without looking at the matrices weight, we actually trim down to
-        // the max range that the matrix can produce when multiplied by any input vector.
-        // We still assume a single range for the whole matrix (vs one for each row or each weight)
-        // In this case, we need to compute the max range for y[i] = SUM_j M[i,j] * x[j]
-        // For multiplication, we take value of the weight and produce (min, max) possible
-        // For additions, we add the max range of all ranges of the multiplications involved in y[i]
-        // Then we just take the maximum
-        let nrows = m.nrows_2d();
-        let ncols = m.ncols_2d();
-        let max_output_range = m
-            .get_data()
-            .iter()
-            .chunks(ncols)
-            .into_iter()
-            .map(|row| {
-                let row_range = row
-                    .map(|weight| (weight * MIN as Element, weight * MAX as Element))
-                    .fold((0, 0), |(min, max), (wmin, wmax)| (min + wmin, max + wmax));
-                // weight * MIN can be positive and higher then MAX*weight if weight's negative
-                // so we take the absolute value of the difference
-                (row_range.1 - row_range.0).unsigned_abs() as usize
-            })
-            .max()
-            .expect("No max range found")
-            .next_power_of_two();
-        // input matrix scaling factor is S = 1 since it's already in range <=> k1 = BIT_LEN ( S = 2^k1 / 2^BIT_LEN = 1)
-        // input vector scaling factor is S = 1 since it's already in range <=> k2 = BIT_LEN
-        // output scaling factor is computeed already ^
-        // so shift = k1 + k2 - k3 - BIT_LEN = BIT_LEN - k3
-        // BUT this doesn't work - it panics when starting to prepare because of number columns in lookup too high.
-        let shift = BIT_LEN - max_output_range.ilog2() as usize;
-        let shift = max_output_range.ilog2() as usize - BIT_LEN;
         Requant {
             range: output_range.max_range,
             right_shift: shift,
@@ -207,15 +175,6 @@ impl Requant {
         )
     }
 
-    /// Applies requantization to a single element.
-    ///
-    /// This function performs the following steps:
-    /// 1. Adds a large offset (max_bit) to ensure all values are positive
-    /// 2. Right-shifts by the specified amount to reduce the bit width
-    /// 3. Subtracts the shifted offset to restore the correct value range
-    ///
-    /// The result is a value that has been scaled down to fit within the
-    /// target bit width while preserving the relative magnitudes.
     #[inline(always)]
     pub fn apply(&self, e: &Element) -> Element {
         let max_bit = (self.range << 1) as i128;
