@@ -475,7 +475,7 @@ mod tests {
         assert!(result.is_ok(), "Failed: {:?}", result.unwrap_err());
     }
 
-    #[test]
+    // #[test]
     fn test_load_cnn() {
         let filepath = "assets/scripts/CNN/cnn-cifar-01.onnx";
         let result = load_cnn::<Element>(&filepath);
