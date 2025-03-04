@@ -29,7 +29,7 @@ impl Relu {
         Self
     }
     pub fn num_vars() -> usize {
-        BIT_LEN
+        *BIT_LEN
     }
     pub fn poly_len() -> usize {
         1 << Self::num_vars()
@@ -41,7 +41,7 @@ impl Relu {
     /// f_i: one containing the input column values
     /// f_o: one containing the output column values
     pub fn to_mle<E: ExtensionField>() -> (Vec<E::BaseField>, Vec<E::BaseField>) {
-        (quantization::MIN..=quantization::MAX)
+        (*quantization::MIN..=*quantization::MAX)
             .map(|i| {
                 let val: E = i.to_field();
                 let op_val: E = Relu::apply(i as i128).to_field();

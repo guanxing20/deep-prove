@@ -15,7 +15,7 @@ use crate::Element;
 pub fn random_vector(n: usize) -> Vec<Element> {
     let mut rng = thread_rng();
     (0..n)
-        .map(|_| rng.gen_range(quantization::MIN..quantization::MAX))
+        .map(|_| rng.gen_range(*quantization::MIN..=*quantization::MAX))
         .collect_vec()
 }
 
@@ -37,7 +37,7 @@ pub fn random_vector_seed(n: usize, seed: Option<u64>) -> Vec<Element> {
     (0..n)
         .map(|i| {
             let mut rng = StdRng::seed_from_u64(seed + i as u64);
-            rng.gen_range((quantization::MIN..quantization::MAX))
+            rng.gen_range((*quantization::MIN..=*quantization::MAX))
         })
         .collect_vec()
 }
