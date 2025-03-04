@@ -32,7 +32,7 @@ impl Quantizer<Element> for Element {
         // even tho we are requantizing starting from Element, we only want to requantize for QuantInteger
         // the reason we have these two types is to handle overflow
         // (a -b) / 2^Q
-        let scale = (1.0 - (-1.0)) / (MAX - MIN) as f64;
+        let scale = (1.0 - (-1.0)) / (1 << BIT_LEN) as f64;
         let zero_point = 0;
 
         // formula is q = round(r/S) + z
@@ -134,9 +134,20 @@ impl<const BIT_LEN: usize> QuantRange<BIT_LEN> {
             .chunks(ncols)
             .into_iter()
             .map(|row| {
-                let row_range = row
-                    .map(|weight| (weight * MIN, weight * MAX))
-                    .fold((0, 0), |(min, max), (wmin, wmax)| (min + wmin, max + wmax));
+                let row_range = row.map(|weight| {
+                    let min = if weight.is_negative() {
+                        weight * MAX as Element
+                    } else {
+                        weight * MIN as Element
+                    };
+                    let max = if weight.is_negative() {
+                        weight * MIN as Element
+                    } else {
+                        weight * MAX as Element
+                    };
+                    (min, max)
+                })
+                .fold((0, 0), |(min, max), (wmin, wmax)| (min + wmin, max + wmax));
                 // weight * MIN can be positive and higher then MAX*weight if weight's negative
                 // so we take the absolute value of the difference
                 (row_range.1 - row_range.0).unsigned_abs() as usize
