@@ -415,7 +415,7 @@ mod tests {
 
     #[test]
     fn test_tract() {
-        let filepath = "assets/models/MLP/mlp-iris-01.onnx";
+        let filepath = "assets/scripts/MLP/mlp-iris-01.onnx";
         let result = load_mlp::<Element>(&filepath);
 
         assert!(result.is_ok(), "Failed: {:?}", result.unwrap_err());
@@ -423,7 +423,7 @@ mod tests {
 
     #[test]
     fn test_model_run() {
-        let filepath = "assets/models/MLP/mlp-iris-01.onnx";
+        let filepath = "assets/scripts/MLP/mlp-iris-01.onnx";
 
         let model = load_mlp::<Element>(&filepath).unwrap();
         let input = crate::tensor::Tensor::random(vec![model.input_shape()[0]]);
@@ -469,7 +469,7 @@ mod tests {
 
     #[test]
     fn test_is_cnn() {
-        let filepath = "assets/models/CNN/cnn-cifar-01.onnx";
+        let filepath = "assets/scripts/CNN/cnn-cifar-01.onnx";
         let result = is_cnn(&filepath);
 
         assert!(result.is_ok(), "Failed: {:?}", result.unwrap_err());
@@ -477,7 +477,7 @@ mod tests {
 
     #[test]
     fn test_load_cnn() {
-        let filepath = "assets/models/CNN/cnn-cifar-01.onnx";
+        let filepath = "assets/scripts/CNN/cnn-cifar-01.onnx";
         let result = load_cnn::<Element>(&filepath);
 
         assert!(result.is_ok(), "Failed: {:?}", result.unwrap_err());
