@@ -407,8 +407,6 @@ pub fn load_cnn<Q: Quantizer<Element>>(
 #[cfg(test)]
 mod tests {
 
-    use crate::quantization::QuantInteger;
-
     use super::*;
 
     use goldilocks::GoldilocksExt2;
@@ -428,7 +426,7 @@ mod tests {
         let filepath = "assets/models/MLP/mlp-iris-01.onnx";
 
         let model = load_mlp::<Element>(&filepath).unwrap();
-        let input = crate::tensor::Tensor::random::<QuantInteger>(vec![model.input_shape()[0]]);
+        let input = crate::tensor::Tensor::random(vec![model.input_shape()[0]]);
         // random_vector::<QuantInteger>(model.input_shape()[0])
         //     .into_iter()
         //     .map(|x| x as Element)

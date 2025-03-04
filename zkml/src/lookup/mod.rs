@@ -18,7 +18,7 @@ use crate::{
     commit::{Pcs, precommit::PolyID},
     iop::context::StepInfo,
     model::{InferenceTrace, StepIdx},
-    quantization::{Fieldizer, Requant},
+    quantization::{BIT_LEN, Fieldizer, Requant},
     tensor::Tensor,
 };
 use gkr_circuits::{
@@ -409,7 +409,10 @@ where
                             ))?
                             .into_iter()
                             .map(|evaluations| {
-                                DenseMultilinearExtension::<E>::from_evaluations_vec(8, evaluations)
+                                DenseMultilinearExtension::<E>::from_evaluations_vec(
+                                    BIT_LEN,
+                                    evaluations,
+                                )
                             })
                             .collect::<Vec<DenseMultilinearExtension<E>>>();
                         let (pp, _) = Pcs::<E>::trim(params.clone(), 1 << 8)?;
