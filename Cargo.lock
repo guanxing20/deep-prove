@@ -2937,6 +2937,7 @@ dependencies = [
  "mpcs",
  "multilinear_extensions",
  "num-traits",
+ "once_cell",
  "poseidon",
  "rayon",
  "rmp-serde",

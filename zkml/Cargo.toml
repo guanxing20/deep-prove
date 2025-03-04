@@ -26,6 +26,7 @@ multilinear_extensions = { version = "0.1.0", path = "../multilinear_extensions"
     "parallel",
 ] }
 num-traits = "0.2.19"
+once_cell = "1.20.3"
 poseidon = { version = "0.1.0", path = "../poseidon" }
 rayon.workspace = true
 rmp-serde = "1.3.0"
