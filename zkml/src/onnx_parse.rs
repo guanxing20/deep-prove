@@ -163,8 +163,9 @@ pub fn load_mlp<Q: Quantizer<Element>>(filepath: &str) -> Result<Model> {
         match node.op_type.as_str() {
             "Gemm" => {
                 let matrix_weight =
-                    fetch_weight_bias_as_tensor::<Q>("weight", node, &initializers)?;
-                let matrix_bias = fetch_weight_bias_as_tensor::<Q>("bias", node, &initializers)?;
+                    fetch_weight_bias_as_tensor::<Q>(1.0, "weight", node, &initializers)?;
+                let matrix_bias =
+                    fetch_weight_bias_as_tensor::<Q>(1.0, "bias", node, &initializers)?;
 
                 // Concatenate bias as an extra column
                 let matrix = matrix_weight.concat_matvec_col(&matrix_bias);
@@ -238,25 +239,30 @@ pub fn load_mlp<Q: Quantizer<Element>>(filepath: &str) -> Result<Model> {
     Ok(model)
 }
 
+// TODO: Need to get max_abs by looking at the range of the weights and biases during calibration.
 fn fetch_weight_bias_as_tensor<Q: Quantizer<Element>>(
+    max_abs: f64,
     weight_or_bias: &str,
     node: &NodeProto,
     initializers: &HashMap<String, Tensor>,
 ) -> Result<crate::tensor::Tensor<Element>> {
     ensure!(weight_or_bias == "weight" || weight_or_bias == "bias");
 
-    let alpha_or_beta = node
-        .attribute
-        .iter()
-        .filter(|x| {
-            x.name.contains(match weight_or_bias {
-                "weight" => "alpha",
-                _ => "beta",
+    let mut alpha_or_beta: f32 = 1.0;
+    if node.name.contains("Gemm") {
+        let result = node
+            .attribute
+            .iter()
+            .filter(|x| {
+                x.name.contains(match weight_or_bias {
+                    "weight" => "alpha",
+                    _ => "beta",
+                })
             })
-        })
-        .map(|x| x.f)
-        .collect_vec();
-    let alpha_or_beta = alpha_or_beta[0];
+            .map(|x| x.f)
+            .collect_vec();
+        alpha_or_beta = result[0];
+    }
 
     let tensor_vec = node
         .input
@@ -269,15 +275,16 @@ fn fetch_weight_bias_as_tensor<Q: Quantizer<Element>>(
     let tensor_t = tensor_vec[0].clone();
     let tensor_t_f32 = tensor_t.as_slice::<f32>().unwrap().to_vec();
     let tensor_t_f32 = tensor_t_f32.iter().map(|x| x * alpha_or_beta).collect_vec();
-    let tensor_f = tensor_t_f32.iter().map(Q::from_f32_unsafe).collect_vec();
+    let tensor_f = tensor_t_f32
+        .iter()
+        .map(|x| Q::from_f32_unsafe_clamp(x, max_abs))
+        .collect_vec();
     let tensor_result = crate::tensor::Tensor::new(tensor_t.shape().to_vec(), tensor_f);
 
     Ok(tensor_result)
 }
 
-pub fn load_cnn<Q: Quantizer<Element>>(
-    filepath: &str,
-) -> Result<Vec<crate::tensor::Tensor<Element>>> {
+pub fn load_cnn<Q: Quantizer<Element>>(filepath: &str) -> Result<Model> {
     if !Path::new(filepath).exists() {
         return Err(Error::msg(format!("File '{}' does not exist", filepath)));
     }
@@ -302,32 +309,38 @@ pub fn load_cnn<Q: Quantizer<Element>>(
         initializers.insert(key, value);
     }
 
-    let mut tensors = Vec::new();
-
-    for node in graph.node.iter() {
+    let mut layers: Vec<Layer> = Vec::new();
+    for (i, node) in graph.node.iter().enumerate() {
+        println!("Layer: {}", node.op_type.as_str());
         match node.op_type.as_str() {
             "Gemm" => {
-                let matrix_weight =
-                    fetch_weight_bias_as_tensor::<Q>("weight", node, &initializers)?;
-                let matrix_bias = fetch_weight_bias_as_tensor::<Q>("bias", node, &initializers)?;
+                let weight = fetch_weight_bias_as_tensor::<Q>(1.0, "weight", node, &initializers)?;
+                let bias = fetch_weight_bias_as_tensor::<Q>(1.0, "bias", node, &initializers)?;
+                // Concatenate bias as an extra column
+                let matrix = weight.concat_matvec_col(&bias);
 
-                let matrix = matrix_weight.concat_matvec_col(&matrix_bias);
-                let matrix = matrix.pad_next_power_of_two_2d();
-
-                // let layer = Layer::Dense(matrix);
-                // sumcheck_model.add_layer(layer);
-                tensors.push(matrix);
+                debug!("layer idx {} -> unprocessed matrix {:?}", i, matrix.dims());
+                layers.push(Layer::Dense(matrix));
+            }
+            "Relu" => {
+                let layer = Layer::Activation(Activation::Relu(Relu::new()));
+                layers.push(layer);
             }
             "Conv" => {
-                let weights = fetch_weight_bias_as_tensor::<Q>("weight", node, &initializers)?;
-                let _ = fetch_weight_bias_as_tensor::<Q>("bias", node, &initializers)?;
-                tensors.push(weights);
+                let weight = fetch_weight_bias_as_tensor::<Q>(1.0, "weight", node, &initializers)?;
+                let bias = fetch_weight_bias_as_tensor::<Q>(1.0, "bias", node, &initializers)?;
             }
+            "MaxPool" => {}
+            "Flatten" | "Reshape" => {}
             _ => (),
         };
     }
 
-    Ok(tensors)
+    let mut model = Model::new();
+    for layer in layers {
+        model.add_layer(layer);
+    }
+    Ok(model)
 }
 
 #[cfg(test)]
@@ -396,8 +409,9 @@ mod tests {
         assert!(result.is_ok(), "Failed: {:?}", result.unwrap_err());
     }
 
-    // #[test]
+    #[test]
     fn test_load_cnn() {
+        // let filepath = "assets/scripts/CNN/lenet-mnist-01.onnx";
         let filepath = "assets/scripts/CNN/cnn-cifar-01.onnx";
         let result = load_cnn::<Element>(&filepath);
 

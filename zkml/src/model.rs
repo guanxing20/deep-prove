@@ -1,4 +1,5 @@
 use ff_ext::ExtensionField;
+use goldilocks::GoldilocksExt2;
 use itertools::Itertools;
 use log::debug;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
