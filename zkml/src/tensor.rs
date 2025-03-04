@@ -22,7 +22,7 @@ use std::{
 use crate::{
     Element,
     quantization::Fieldizer,
-    testing::{VecInto, random_vector, random_vector_seed},
+    testing::{random_vector, random_vector_seed},
     to_bit_sequence_le,
 };
 
@@ -379,30 +379,20 @@ impl Tensor<Element> {
     /// Creates a random matrix with a given number of rows and cols.
     /// NOTE: doesn't take a rng as argument because to generate it in parallel it needs be sync +
     /// sync which is not true for basic rng core.
-    pub fn random<Q>(shape: Vec<usize>) -> Self
-    where
-        Standard: Distribution<Q>,
-        Q: Send + Sync,
-        Element: From<Q>,
+    pub fn random(shape: Vec<usize>) -> Self
     {
         let size = shape.iter().product();
-        let data = random_vector::<Q>(size);
-        let data: Vec<Element> = data.vec_into();
+        let data = random_vector(size);
         Self { data, shape }
     }
 
     /// Creates a random matrix with a given number of rows and cols.
     /// NOTE: doesn't take a rng as argument because to generate it in parallel it needs be sync +
     /// sync which is not true for basic rng core.
-    pub fn random_seed<Q>(shape: Vec<usize>, seed: Option<u64>) -> Self
-    where
-        Standard: Distribution<Q>,
-        Q: Send + Sync,
-        Element: From<Q>,
+    pub fn random_seed(shape: Vec<usize>, seed: Option<u64>) -> Self
     {
         let size = shape.iter().product();
-        let data = random_vector_seed::<Q>(size, seed);
-        let data = data.vec_into();
+        let data = random_vector_seed(size, seed);
         Self { data, shape }
     }
 
@@ -503,8 +493,6 @@ mod test {
     use goldilocks::GoldilocksExt2;
     use multilinear_extensions::mle::MultilinearExtension;
 
-    use crate::quantization::QuantInteger;
-
     use super::*;
 
     #[test]
@@ -584,7 +572,7 @@ mod test {
     #[test]
     fn test_tensor_next_pow_of_two() {
         let shape = vec![3usize, 3];
-        let mat = Tensor::<Element>::random_seed::<QuantInteger>(shape.clone(), Some(213));
+        let mat = Tensor::random_seed(shape.clone(), Some(213));
         // println!("{}", mat);
         let new_shape = vec![shape[0].next_power_of_two(), shape[1].next_power_of_two()];
         let new_mat = mat.pad_next_power_of_two_2d();
@@ -610,7 +598,7 @@ mod test {
 
     #[test]
     fn test_tensor_mle() {
-        let mat = Tensor::random::<QuantInteger>(vec![3, 5]);
+        let mat = Tensor::random(vec![3, 5]);
         let shape = mat.dims();
         let mat = mat.pad_next_power_of_two_2d();
         println!("matrix {}", mat);

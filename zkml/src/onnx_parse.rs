@@ -278,8 +278,6 @@ pub fn load_mlp<Q: Quantizer<Element>>(filepath: &str) -> Result<Model> {
 #[cfg(test)]
 mod tests {
 
-    use crate::quantization::QuantInteger;
-
     use super::*;
 
     use goldilocks::GoldilocksExt2;
@@ -299,7 +297,7 @@ mod tests {
         let filepath = "assets/model.onnx";
 
         let model = load_mlp::<Element>(&filepath).unwrap();
-        let input = crate::tensor::Tensor::random::<QuantInteger>(vec![model.input_shape()[0]]);
+        let input = crate::tensor::Tensor::random(vec![model.input_shape()[0]]);
         // random_vector::<QuantInteger>(model.input_shape()[0])
         //     .into_iter()
         //     .map(|x| x as Element)
