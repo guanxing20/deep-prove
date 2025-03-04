@@ -23,8 +23,10 @@ impl<E: ExtensionField> BasicTranscript<E> {
 
 impl<E: ExtensionField> Transcript<E> for BasicTranscript<E> {
     fn append_field_elements(&mut self, elements: &[E::BaseField]) {
-        self.permutation.set_from_slice(elements, 0);
-        self.permutation.permute();
+        for chunk in elements.chunks(12) {
+            self.permutation.set_from_slice(chunk, 0);
+            self.permutation.permute();
+        }
     }
 
     fn append_field_element_ext(&mut self, element: &E) {
