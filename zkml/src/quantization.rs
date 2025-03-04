@@ -27,9 +27,8 @@ impl Quantizer<Element> for Element {
     fn from_f32_unsafe(e: &f32) -> Self {
         // even tho we are requantizing starting from Element, we only want to requantize for QuantInteger
         // the reason we have these two types is to handle overflow
-        let max = MAX;
         // (a -b) / 2^Q
-        let scale = (1.0 - (-1.0)) / max as f64;
+        let scale = (1.0 - (-1.0)) / (MAX - MIN) as f64;
         let zero_point = 0;
 
         // formula is q = round(r/S) + z
