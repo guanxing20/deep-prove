@@ -15,7 +15,7 @@ use crate::{Element, tensor::Tensor};
 /// We run it over `[Element]` since we need to handle overflows. But all the quantization and requantization
 pub const BIT_LEN: usize = 8;
 pub const MIN: Element = -(1 << (BIT_LEN - 1));
-pub const MAX: Element = 1 << (BIT_LEN - 1) - 1;
+pub const MAX: Element = (1 << (BIT_LEN - 1)) - 1;
 pub const ZERO: Element = 0;
 
 /// Trait used to quantize original floating point number to integer
@@ -25,6 +25,9 @@ pub trait Quantizer<Output> {
 
 impl Quantizer<Element> for Element {
     fn from_f32_unsafe(e: &f32) -> Self {
+        assert!(*e >= -1.0 && *e <= 1.0, "Input value must be between -1.0 and 1.0");
+        assert!(MIN == -128);
+        assert!(MAX == 127);
         // even tho we are requantizing starting from Element, we only want to requantize for QuantInteger
         // the reason we have these two types is to handle overflow
         // (a -b) / 2^Q
