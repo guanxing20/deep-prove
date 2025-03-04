@@ -134,82 +134,6 @@ fn is_cnn(filepath: &str) -> Result<bool> {
     Ok(is_cnn)
 }
 
-// Given a flat vector, converts it to matrix in row major form
-fn reshape<T: Clone>(flat_vec: Vec<T>, rows: usize, cols: usize) -> Option<Vec<Vec<T>>> {
-    if flat_vec.len() != rows * cols {
-        return None; // Return None if dimensions don't match the number of elements
-    }
-
-    Some(flat_vec.chunks(cols).map(|chunk| chunk.to_vec()).collect())
-}
-
-fn concat_column(
-    matrix: Vec<Vec<Element>>,
-    column: Vec<Vec<Element>>,
-) -> Result<Vec<Vec<Element>>> {
-    if matrix.len() != column.len() {
-        bail!("Column length must match matrix row count");
-    }
-
-    let new_matrix: Vec<Vec<Element>> = matrix
-        .into_iter()
-        .zip(column.into_iter())
-        .map(|(mut row, col_val)| {
-            if col_val.len() != 1 {
-                bail!("Column vector must have a single value per row");
-            }
-            row.push(col_val[0]); // Append the single column value
-            Ok(row)
-        })
-        .collect::<Result<Vec<_>>>()?; // Collect results into Vec<Vec<u64>>
-
-    Ok(new_matrix)
-}
-
-fn fetch_weight_bias_as_mat<Q: Quantizer<Element>>(
-    weight_or_bias: &str,
-    node: &NodeProto,
-    initializers: &HashMap<String, Tensor>,
-) -> Result<Vec<Vec<Element>>> {
-    ensure!(weight_or_bias == "weight" || weight_or_bias == "bias");
-
-    let alpha_or_beta = node
-        .attribute
-        .iter()
-        .filter(|x| {
-            x.name.contains(match weight_or_bias {
-                "weight" => "alpha",
-                _ => "beta",
-            })
-        })
-        .map(|x| x.f)
-        .collect_vec();
-    let alpha_or_beta = alpha_or_beta[0];
-
-    let tensor_vec = node
-        .input
-        .iter()
-        .filter(|x| x.contains(weight_or_bias))
-        .filter_map(|key| initializers.get(key).cloned())
-        .collect_vec();
-
-    // If a node is Gemm, then it has only one tensor of the form "fcN.weight"
-    let tensor_t = tensor_vec[0].clone();
-    let tensor_t_f32 = tensor_t.as_slice::<f32>().unwrap().to_vec();
-    let tensor_t_f32 = tensor_t_f32.iter().map(|x| x * alpha_or_beta).collect_vec();
-    let tensor_f = tensor_t_f32.iter().map(Q::from_f32_unsafe).collect_vec();
-
-    let (rows, cols) = match tensor_t.shape().len() {
-        1 => (tensor_t.shape()[0], 1),
-        2 => (tensor_t.shape()[0], tensor_t.shape()[1]),
-        _ => bail!("Invalid tensor shape: expected 1D or 2D tensor"),
-    };
-
-    let field_matrix = reshape(tensor_f, rows, cols).unwrap();
-
-    Ok(field_matrix)
-}
-
 pub fn load_mlp<Q: Quantizer<Element>>(filepath: &str) -> Result<Model> {
     if !Path::new(filepath).exists() {
         return Err(Error::msg(format!("File '{}' does not exist", filepath)));
@@ -238,14 +162,13 @@ pub fn load_mlp<Q: Quantizer<Element>>(filepath: &str) -> Result<Model> {
     for (i, node) in graph.node.iter().enumerate() {
         match node.op_type.as_str() {
             "Gemm" => {
-                let matrix_weight = fetch_weight_bias_as_mat::<Q>("weight", node, &initializers)?;
-                let matrix_bias = fetch_weight_bias_as_mat::<Q>("bias", node, &initializers)?;
+                let matrix_weight =
+                    fetch_weight_bias_as_tensor::<Q>("weight", node, &initializers)?;
+                let matrix_bias = fetch_weight_bias_as_tensor::<Q>("bias", node, &initializers)?;
 
                 // Concatenate bias as an extra column
-                let matrix = concat_column(matrix_weight, matrix_bias)?;
+                let matrix = matrix_weight.concat_matvec_col(&matrix_bias);
 
-                // Create matrix and transpose (PyTorch stores as output_size x input_size)
-                let matrix = crate::tensor::Tensor::<Element>::from_coeffs_2d(matrix).unwrap();
                 debug!("layer idx {} -> unprocessed matrix {:?}", i, matrix.dims());
                 //.transpose();
                 //.pad_next_power_of_two();
@@ -322,13 +245,18 @@ fn fetch_weight_bias_as_tensor<Q: Quantizer<Element>>(
 ) -> Result<crate::tensor::Tensor<Element>> {
     ensure!(weight_or_bias == "weight" || weight_or_bias == "bias");
 
-    // let mut inputs = node.input.clone();
-    // inputs.sort();
-    // inputs.reverse();
-    // println!("Inputs: {:?}", inputs);
-    // for tensor in tensor_vec.iter() {
-    //     println!("Tensor: {:?}", tensor);
-    // }
+    let alpha_or_beta = node
+        .attribute
+        .iter()
+        .filter(|x| {
+            x.name.contains(match weight_or_bias {
+                "weight" => "alpha",
+                _ => "beta",
+            })
+        })
+        .map(|x| x.f)
+        .collect_vec();
+    let alpha_or_beta = alpha_or_beta[0];
 
     let tensor_vec = node
         .input
@@ -340,6 +268,7 @@ fn fetch_weight_bias_as_tensor<Q: Quantizer<Element>>(
     // If a node is Gemm, then it has only one tensor of the form "fcN.weight"
     let tensor_t = tensor_vec[0].clone();
     let tensor_t_f32 = tensor_t.as_slice::<f32>().unwrap().to_vec();
+    let tensor_t_f32 = tensor_t_f32.iter().map(|x| x * alpha_or_beta).collect_vec();
     let tensor_f = tensor_t_f32.iter().map(Q::from_f32_unsafe).collect_vec();
     let tensor_result = crate::tensor::Tensor::new(tensor_t.shape().to_vec(), tensor_f);
 
@@ -378,15 +307,12 @@ pub fn load_cnn<Q: Quantizer<Element>>(
     for node in graph.node.iter() {
         match node.op_type.as_str() {
             "Gemm" => {
-                let matrix_tensor =
+                let matrix_weight =
                     fetch_weight_bias_as_tensor::<Q>("weight", node, &initializers)?;
-                let matrix_weight = fetch_weight_bias_as_mat::<Q>("weight", node, &initializers)?;
-                let matrix_bias = fetch_weight_bias_as_mat::<Q>("bias", node, &initializers)?;
+                let matrix_bias = fetch_weight_bias_as_tensor::<Q>("bias", node, &initializers)?;
 
-                let matrix = concat_column(matrix_weight, matrix_bias)?;
-                let matrix = crate::tensor::Tensor::<Element>::from_coeffs_2d(matrix)
-                    .unwrap()
-                    .pad_next_power_of_two_2d();
+                let matrix = matrix_weight.concat_matvec_col(&matrix_bias);
+                let matrix = matrix.pad_next_power_of_two_2d();
 
                 // let layer = Layer::Dense(matrix);
                 // sumcheck_model.add_layer(layer);
@@ -427,11 +353,6 @@ mod tests {
 
         let model = load_mlp::<Element>(&filepath).unwrap();
         let input = crate::tensor::Tensor::random(vec![model.input_shape()[0]]);
-        // random_vector::<QuantInteger>(model.input_shape()[0])
-        //     .into_iter()
-        //     .map(|x| x as Element)
-        //     .collect_vec();
-
         let trace = model.run(input.clone());
         println!("Result: {:?}", trace.final_output());
     }
