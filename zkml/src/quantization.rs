@@ -110,7 +110,7 @@ impl<const BIT_LEN: usize> QuantRange<BIT_LEN> {
         //    max_range: (2 as usize).pow(bit_len as u32),
         //};
         // NOTE 2: this way is more precise
-        let ind_range = (MAX - MIN ) as usize;
+        let ind_range = (MAX - MIN) as usize;
         let output_range = Self {
             max_range: (ind_range.pow(2) + m.ncols_2d() as usize * ind_range).next_power_of_two(),
         };
@@ -140,7 +140,7 @@ impl<const BIT_LEN: usize> QuantRange<BIT_LEN> {
             .max()
             .expect("No max range found")
             .next_power_of_two();
-        //trace!("max_output_range: {} - ilog2: {}", max_output_range, max_output_range.ilog2());
+        // trace!("max_output_range: {} - ilog2: {}", max_output_range, max_output_range.ilog2());
         let shift = max_output_range.ilog2() as usize - BIT_LEN;
         Requant {
             range: max_output_range,

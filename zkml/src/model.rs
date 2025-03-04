@@ -317,7 +317,7 @@ pub(crate) mod test {
         activation::{Activation, Relu},
         default_transcript,
         model::Layer,
-        quantization::{ Requant, TensorFielder},
+        quantization::{Requant, TensorFielder},
         tensor::Tensor,
         testing::random_bool_vector,
     };
@@ -340,8 +340,7 @@ pub(crate) mod test {
                     // last row becomes new column
                     let (nrows, ncols) = (rng.gen_range(3..15), last_row);
                     last_row = nrows;
-                    let mat = Tensor::random(vec![nrows, ncols])
-                        .pad_next_power_of_two_2d();
+                    let mat = Tensor::random(vec![nrows, ncols]).pad_next_power_of_two_2d();
                     model.add_layer(Layer::Dense(mat));
                 } else if selector % MOD_SELECTOR == SELECTOR_RELU {
                     model.add_layer(Layer::Activation(Activation::Relu(Relu::new())));
@@ -367,8 +366,7 @@ pub(crate) mod test {
     #[test]
     fn test_model_run() {
         let mat1 = Tensor::random(vec![10, 11]).pad_next_power_of_two_2d();
-        let mat2 =
-            Tensor::random(vec![7, mat1.ncols_2d()]).pad_next_power_of_two_2d();
+        let mat2 = Tensor::random(vec![7, mat1.ncols_2d()]).pad_next_power_of_two_2d();
         let input = Tensor::random(vec![mat1.ncols_2d()]);
         let output1 = mat1.matvec(&input);
         let requant = Requant::from_matrix_default(&mat1);
@@ -396,8 +394,7 @@ pub(crate) mod test {
     fn test_inference_trace_iterator() {
         let mat1 = Tensor::random(vec![10, 11]).pad_next_power_of_two_2d();
         // let relu1 = Activation::Relu(Relu);
-        let mat2 =
-            Tensor::random(vec![7, mat1.ncols_2d()]).pad_next_power_of_two_2d();
+        let mat2 = Tensor::random(vec![7, mat1.ncols_2d()]).pad_next_power_of_two_2d();
         // let relu2 = Activation::Relu(Relu);
         let input = Tensor::random(vec![mat1.ncols_2d()]);
 

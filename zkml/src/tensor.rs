@@ -379,8 +379,7 @@ impl Tensor<Element> {
     /// Creates a random matrix with a given number of rows and cols.
     /// NOTE: doesn't take a rng as argument because to generate it in parallel it needs be sync +
     /// sync which is not true for basic rng core.
-    pub fn random(shape: Vec<usize>) -> Self
-    {
+    pub fn random(shape: Vec<usize>) -> Self {
         let size = shape.iter().product();
         let data = random_vector(size);
         Self { data, shape }
@@ -389,8 +388,7 @@ impl Tensor<Element> {
     /// Creates a random matrix with a given number of rows and cols.
     /// NOTE: doesn't take a rng as argument because to generate it in parallel it needs be sync +
     /// sync which is not true for basic rng core.
-    pub fn random_seed(shape: Vec<usize>, seed: Option<u64>) -> Self
-    {
+    pub fn random_seed(shape: Vec<usize>, seed: Option<u64>) -> Self {
         let size = shape.iter().product();
         let data = random_vector_seed(size, seed);
         Self { data, shape }
