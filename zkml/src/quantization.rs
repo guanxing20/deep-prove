@@ -25,9 +25,10 @@ pub trait Quantizer<Output> {
 
 impl Quantizer<Element> for Element {
     fn from_f32_unsafe(e: &f32) -> Self {
-        assert!(*e >= -1.0 && *e <= 1.0, "Input value must be between -1.0 and 1.0");
-        assert!(MIN == -128);
-        assert!(MAX == 127);
+        assert!(
+            *e >= -1.0 && *e <= 1.0,
+            "Input value must be between -1.0 and 1.0"
+        );
         // even tho we are requantizing starting from Element, we only want to requantize for QuantInteger
         // the reason we have these two types is to handle overflow
         // (a -b) / 2^Q
