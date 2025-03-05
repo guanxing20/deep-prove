@@ -35,7 +35,9 @@ pub mod utils;
 pub use logup::LogUp;
 
 type MLE<E> = DenseMultilinearExtension<E>;
-
+fn max_poly_size() -> usize {
+    (*BIT_LEN*2) + 1
+}
 /// Proof from a GKR based lookup.
 /// The commitment is a batch commitment to all of the witness wires.
 /// When this is a "normal" lookup proof (not the final table) this is a batch commitment to all of the inputs
@@ -149,7 +151,7 @@ impl LookupType {
         match self {
             LookupType::Requant(.., num_vars) => lookup_wire_fractional_sumcheck(1, *num_vars),
             LookupType::Relu(num_vars) => lookup_wire_fractional_sumcheck(2, *num_vars),
-            LookupType::ReluTable => table_fractional_sumcheck(2, 8),
+            LookupType::ReluTable => table_fractional_sumcheck(2, *BIT_LEN),
             LookupType::RequantTable(num_vars) => table_fractional_sumcheck(1, *num_vars),
             LookupType::NoLookup => Circuit::<E>::default(),
         }
@@ -186,7 +188,7 @@ impl LookupType {
         match self {
             LookupType::Requant(.., num_vars) => *num_vars,
             LookupType::Relu(num_vars) => *num_vars,
-            LookupType::ReluTable => 8,
+            LookupType::ReluTable => *BIT_LEN,
             LookupType::RequantTable(num_vars) => *num_vars,
             LookupType::NoLookup => 0,
         }
@@ -381,7 +383,7 @@ where
         let mut step_index_map = HashMap::<StepIdx, usize>::new();
         // Make some Pcs params so we can commit to items that should be passed to the transcript, we
         // pick 17 as the max number of variables for now as we should never have to deal with a table bigger than this.
-        let params = Pcs::<E>::setup(1 << 17)?;
+        let params = Pcs::<E>::setup(1 << max_poly_size())?;
 
         // We start table related poly ids after the ones relating to layers of the model
         let mut table_poly_id = steps_info.len();
@@ -415,7 +417,7 @@ where
                                 )
                             })
                             .collect::<Vec<DenseMultilinearExtension<E>>>();
-                        let (pp, _) = Pcs::<E>::trim(params.clone(), 1 << 8)?;
+                        let (pp, _) = Pcs::<E>::trim(params.clone(), 1 << *BIT_LEN)?;
                         let commit = Pcs::<E>::batch_commit(&pp, &mles)?.to_commitment();
 
                         let relu_table_info = TableInfo {
@@ -455,6 +457,7 @@ where
                                 )
                             })
                             .collect::<Vec<DenseMultilinearExtension<E>>>();
+
                         let (pp, _) = Pcs::<E>::trim(params.clone(), 1 << num_vars)?;
                         let commit = Pcs::<E>::batch_commit(&pp, &mles)?.to_commitment();
                         let table_info = TableInfo {
@@ -518,7 +521,7 @@ where
             .collect::<HashMap<String, E::BaseField>>();
 
         // make the basefold params to commit to all the polys (we won't open them this is just to save some hashing in the verifier).
-        let params = Pcs::<E>::setup(1 << 17)?;
+        let params = Pcs::<E>::setup(1 << max_poly_size())?;
 
         let mut final_table_lookups = HashMap::<LookupType, Vec<E::BaseField>>::new();
         // Initiate a vec to hold all the witness poly info
