@@ -11,32 +11,6 @@ use crate::{
     quantization::Quantizer,
 };
 
-#[derive(Debug, Clone)]
-struct Gemm {
-    name: String,
-    alpha: f32,
-    beta: f32,
-    trans_a: bool,
-    trans_b: bool,
-}
-
-// Given a ONNX node, build a struct which contains information about the Gemm
-fn build_gemm(node: &NodeProto) -> Result<Gemm> {
-    let name = node.name.to_string();
-    let alpha = node.get_attr_opt("alpha")?.unwrap_or(1.);
-    let beta = node.get_attr_opt("beta")?.unwrap_or(1.);
-    let trans_a = node.get_attr_opt("transA")?.unwrap_or(false);
-    let trans_b = node.get_attr_opt("transB")?.unwrap_or(false);
-    let gemm = Gemm {
-        name,
-        alpha,
-        beta,
-        trans_a,
-        trans_b,
-    };
-    Ok(gemm)
-}
-
 // Given serialized data and its tract DatumType, build a tract tensor.
 fn create_tensor(shape: Vec<usize>, dt: DatumType, data: &[u8]) -> TractResult<Tensor> {
     unsafe {
@@ -327,11 +301,16 @@ pub fn load_cnn<Q: Quantizer<Element>>(filepath: &str) -> Result<Model> {
                 layers.push(layer);
             }
             "Conv" => {
+                // TODO
                 let weight = fetch_weight_bias_as_tensor::<Q>(1.0, "weight", node, &initializers)?;
                 let bias = fetch_weight_bias_as_tensor::<Q>(1.0, "bias", node, &initializers)?;
             }
-            "MaxPool" => {}
-            "Flatten" | "Reshape" => {}
+            "MaxPool" => {
+                // TODO
+            }
+            "Flatten" | "Reshape" => {
+                // TODO
+            }
             _ => (),
         };
     }
