@@ -275,15 +275,66 @@ def run_benchmark(num_dense, layer_width, run_index, output_dir, verbose, run_ez
     # Step 2: Run ZKML benchmark
     zkml_csv = run_zkml_benchmark(config_name, output_dir, verbose, num_samples)
     
-    # Step 3: Conditionally Run EZKL benchmark
+    # Step 3: Calculate PyTorch accuracy from the input_output.json
+    pytorch_csv = calculate_pytorch_accuracy(config_name, run_index, output_dir)
+    
+    # Step 4: Run EZKL benchmark if requested
+    ezkl_csv = None
     if run_ezkl:
         ezkl_csv = run_ezkl_benchmark(config_name, run_index, output_dir, verbose, num_samples)
-        print(f"Results saved to {zkml_csv} and {ezkl_csv}")
+        print(f"Results saved to {zkml_csv}, {pytorch_csv}, and {ezkl_csv}")
     else:
-        print(f"Results saved to {zkml_csv} (EZKL comparison skipped)")
-        ezkl_csv = None
+        print(f"Results saved to {zkml_csv} and {pytorch_csv} (EZKL comparison skipped)")
+        
+    return zkml_csv, ezkl_csv, pytorch_csv
 
-    return zkml_csv, ezkl_csv if run_ezkl else None
+def argmax(values):
+    """Return the index of the maximum value in a list."""
+    return values.index(max(values)) if values else None
+
+def calculate_pytorch_accuracy(config_name, run_index, output_dir):
+    """Calculate accuracy of PyTorch model from the input/output JSON"""
+    print(f"Calculating PyTorch accuracy for {config_name}")
+    
+    # Create the output CSV path
+    pytorch_csv = output_dir / f"pytorch_{config_name}.csv"
+    absolute_pytorch_csv = pytorch_csv.absolute()
+    
+    # Load the input/output JSON
+    input_json_path = output_dir / INPUT
+    with open(input_json_path, 'r') as f:
+        data = json.load(f)
+    
+    # Ensure we have pytorch_output in the data - panic if missing
+    if "pytorch_output" not in data:
+        print(f"❌ Error: input/output JSON does not contain PyTorch outputs")
+        print(f"Please regenerate the input file with an updated script that includes pytorch_output.")
+        sys.exit(1)
+    
+    # Calculate accuracy for each sample
+    for i, (expected_output, pytorch_output) in enumerate(zip(data["output_data"], data["pytorch_output"])):
+        # Create a new bencher for each sample
+        bencher = CSVBencher([CONFIG, RUN, SAMPLE, ACCURACY])
+        
+        # Get expected class (argmax of one-hot encoded output)
+        expected_class = argmax(expected_output)
+        
+        # Get PyTorch prediction (argmax of raw outputs)
+        predicted_class = argmax(pytorch_output)
+        
+        # Compute accuracy (1 if match, 0 if not)
+        accuracy = 1 if expected_class == predicted_class else 0
+        
+        # Add to bencher
+        bencher.set(CONFIG, config_name)
+        bencher.set(RUN, str(run_index))
+        bencher.set(SAMPLE, str(i))
+        bencher.set(ACCURACY, str(accuracy))
+        
+        # Flush to CSV
+        bencher.flush(str(absolute_pytorch_csv))
+    
+    return pytorch_csv
 
 def set_cpu_affinity(max_threads: int):
     """Set CPU affinity to limit the process and its children to `max_threads` logical CPUs."""
@@ -365,6 +416,16 @@ def compute_summary_statistics(output_dir, configs, run_ezkl):
             print(f"❌ Error processing ZKML data for {config_name}: {e}")
             sys.exit(1)
         
+        # Load PyTorch data
+        pytorch_csv = output_dir / f"pytorch_{config_name}.csv"
+        if pytorch_csv.exists():
+            try:
+                pytorch_df = pd.read_csv(pytorch_csv)
+                if not pytorch_df.empty:
+                    config_data["pytorch_accuracy"] = pytorch_df[ACCURACY].mean()
+            except Exception as e:
+                print(f"❌ Error processing PyTorch data for {config_name}: {e}")
+        
         # Load EZKL data if requested
         if run_ezkl:
             ezkl_csv = output_dir / f"ezkl_{config_name}.csv"
@@ -396,24 +457,22 @@ def save_summary_csv(summary_df, output_dir):
     return summary_path
 
 def print_summary_table(summary_df, run_ezkl):
-    """Print a nicely formatted summary table."""
-    print("\n" + "="*80)
-    print("BENCHMARK SUMMARY")
-    print("="*80)
-    
-    # Format the dataframe for display
+    """Print summary statistics as a formatted table."""
+    # Create a copy of the DataFrame for display formatting
     display_df = summary_df.copy()
+    
+    # Format times in milliseconds
+    for col in display_df.columns:
+        if "time" in col:
+            display_df[col] = display_df[col].apply(lambda x: f"{x:.1f} ms" if pd.notnull(x) else "N/A")
     
     # Format accuracy as percentage
     if "zkml_accuracy" in display_df.columns:
         display_df["zkml_accuracy"] = display_df["zkml_accuracy"].apply(lambda x: f"{x*100:.1f}%" if pd.notnull(x) else "N/A")
     if "ezkl_accuracy" in display_df.columns:
         display_df["ezkl_accuracy"] = display_df["ezkl_accuracy"].apply(lambda x: f"{x*100:.1f}%" if pd.notnull(x) else "N/A")
-    
-    # Format times in ms
-    for col in display_df.columns:
-        if col.endswith("_time"):
-            display_df[col] = display_df[col].apply(lambda x: f"{x:.1f} ms" if pd.notnull(x) else "N/A")
+    if "pytorch_accuracy" in display_df.columns:
+        display_df["pytorch_accuracy"] = display_df["pytorch_accuracy"].apply(lambda x: f"{x*100:.1f}%" if pd.notnull(x) else "N/A")
     
     # Format proof sizes in KB
     if "zkml_proof_size" in display_df.columns:
@@ -421,27 +480,49 @@ def print_summary_table(summary_df, run_ezkl):
     if "ezkl_proof_size" in display_df.columns:
         display_df["ezkl_proof_size"] = display_df["ezkl_proof_size"].apply(lambda x: f"{x:.2f} KB" if pd.notnull(x) else "N/A")
     
-    # Rename columns for better display
+    # Rename columns for better readability
     column_renames = {
         "num_dense": "Dense Layers",
         "layer_width": "Width",
         "zkml_accuracy": "ZKML Accuracy",
-        "zkml_proving_time": "ZKML Proving Time",
-        "zkml_verifying_time": "ZKML Verifying Time",
+        "zkml_proving_time": "ZKML Proving",
+        "zkml_verifying_time": "ZKML Verifying",
         "zkml_proof_size": "ZKML Proof Size",
         "ezkl_accuracy": "EZKL Accuracy",
-        "ezkl_proving_time": "EZKL Proving Time",
-        "ezkl_verifying_time": "EZKL Verifying Time",
-        "ezkl_proof_size": "EZKL Proof Size"
+        "ezkl_proving_time": "EZKL Proving",
+        "ezkl_verifying_time": "EZKL Verifying",
+        "ezkl_proof_size": "EZKL Proof Size",
+        "pytorch_accuracy": "PyTorch Accuracy"
     }
     display_df = display_df.rename(columns=column_renames)
     
-    # Select columns based on what's available
-    columns_to_show = ["Dense Layers", "Width", 
-                      "ZKML Accuracy", "ZKML Proving Time", "ZKML Verifying Time", "ZKML Proof Size"]
+    # Select columns based on what's available, grouped by metric type
+    # First the configuration columns
+    columns_to_show = ["Dense Layers", "Width"]
     
+    # Group all accuracy columns together
+    accuracy_columns = ["PyTorch Accuracy", "ZKML Accuracy"]
     if run_ezkl:
-        columns_to_show.extend(["EZKL Accuracy", "EZKL Proving Time", "EZKL Verifying Time", "EZKL Proof Size"])
+        accuracy_columns.append("EZKL Accuracy")
+    columns_to_show.extend(accuracy_columns)
+    
+    # Group all proving time columns together
+    proving_columns = ["ZKML Proving"]
+    if run_ezkl:
+        proving_columns.append("EZKL Proving")
+    columns_to_show.extend(proving_columns)
+    
+    # Group all verification time columns together
+    verify_columns = ["ZKML Verifying"]
+    if run_ezkl:
+        verify_columns.append("EZKL Verifying")
+    columns_to_show.extend(verify_columns)
+    
+    # Group all proof size columns together
+    size_columns = ["ZKML Proof Size"]
+    if run_ezkl:
+        size_columns.append("EZKL Proof Size")
+    columns_to_show.extend(size_columns)
     
     # Only include columns that actually exist in the dataframe
     columns_to_show = [col for col in columns_to_show if col in display_df.columns]
@@ -481,6 +562,7 @@ def run_configurations(configs, args):
     
     zkml_csv_files = []
     ezkl_csv_files = []
+    pytorch_csv_files = []
     
     for config in configs:
         num_dense, layer_width = config
@@ -491,7 +573,7 @@ def run_configurations(configs, args):
         
         for run_idx in range(args.repeats):
             # Pass args.samples to run_benchmark
-            zkml_csv, ezkl_csv = run_benchmark(
+            zkml_csv, ezkl_csv, pytorch_csv = run_benchmark(
                 num_dense, layer_width, run_idx, output_dir, 
                 args.verbose, args.run_ezkl, args.samples
             )
@@ -500,23 +582,30 @@ def run_configurations(configs, args):
                 zkml_csv_files.append(zkml_csv)
             if ezkl_csv:
                 ezkl_csv_files.append(ezkl_csv)
+            if pytorch_csv:
+                pytorch_csv_files.append(pytorch_csv)
     
-    return zkml_csv_files, ezkl_csv_files
+    return zkml_csv_files, ezkl_csv_files, pytorch_csv_files
 
-def calculate_and_print_results(configs, zkml_csv_files, ezkl_csv_files, args):
+def calculate_and_print_results(configs, zkml_csv_files, ezkl_csv_files, pytorch_csv_files, args):
     """Calculate and print average accuracy for all runs."""
     for config_name in configs:
         zkml_csv = Path(args.output_dir) / f"zkml_d{config_name[0]}_w{config_name[1]}.csv"
         ezkl_csv = Path(args.output_dir) / f"ezkl_d{config_name[0]}_w{config_name[1]}.csv"
+        pytorch_csv = Path(args.output_dir) / f"pytorch_d{config_name[0]}_w{config_name[1]}.csv"
         
         zkml_accuracy = calculate_average_accuracy(zkml_csv)
         ezkl_accuracy = calculate_average_accuracy(ezkl_csv) if args.run_ezkl else None
+        pytorch_accuracy = calculate_average_accuracy(pytorch_csv) if pytorch_csv.exists() else None
         
         if zkml_accuracy is not None:
             print(f"Average accuracy for ZKML (d{config_name[0]}_w{config_name[1]}): {zkml_accuracy:.2f}")
         
         if ezkl_accuracy is not None:
             print(f"Average accuracy for EZKL (d{config_name[0]}_w{config_name[1]}): {ezkl_accuracy:.2f}")
+        
+        if pytorch_accuracy is not None:
+            print(f"Average accuracy for PyTorch (d{config_name[0]}_w{config_name[1]}): {pytorch_accuracy:.2f}")
 
 def main():
     args = parse_arguments()
@@ -539,8 +628,8 @@ def main():
     
     print(f"Running {len(configs)} configurations, each repeated {args.repeats} times")
     
-    zkml_csv_files, ezkl_csv_files = run_configurations(configs, args)
-    calculate_and_print_results(configs, zkml_csv_files, ezkl_csv_files, args)
+    zkml_csv_files, ezkl_csv_files, pytorch_csv_files = run_configurations(configs, args)
+    calculate_and_print_results(configs, zkml_csv_files, ezkl_csv_files, pytorch_csv_files, args)
     
     # Generate and print summary statistics
     summary_df = compute_summary_statistics(args.output_dir, configs, args.run_ezkl)
