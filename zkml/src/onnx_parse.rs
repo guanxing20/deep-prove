@@ -11,6 +11,13 @@ use crate::{
     quantization::Quantizer,
 };
 
+// Supported operators
+const ACTIVATION_FUNCTIONS: [&str; 1] = ["Relu"];
+const CNN_OPERATIONS: [&str; 1] = ["Conv"];
+const SAMPLING_OPERATIONS: [&str; 1] = ["MaxPool"];
+const MATRIX_OPERATIONS: [&str; 2] = ["Gemm", "MatMul"];
+const FLATTEN_OPERATIONS: [&str; 2] = ["Flatten", "Reshape"];
+
 // Given serialized data and its tract DatumType, build a tract tensor.
 fn create_tensor(shape: Vec<usize>, dt: DatumType, data: &[u8]) -> TractResult<Tensor> {
     unsafe {
@@ -36,9 +43,7 @@ fn create_tensor(shape: Vec<usize>, dt: DatumType, data: &[u8]) -> TractResult<T
 }
 
 fn is_mlp(filepath: &str) -> Result<bool> {
-    let activation_functions = ["Relu", "Sigmoid", "Tanh", "LeakyRelu", "Elu", "Selu"];
-
-    let mut is_mlp = true;
+    let is_mlp = true;
     let mut prev_was_gemm_or_matmul = false;
 
     let model = tract_onnx::onnx()
@@ -47,21 +52,21 @@ fn is_mlp(filepath: &str) -> Result<bool> {
     let graph = model.graph.unwrap();
 
     for node in graph.node.iter() {
-        if node.op_type == "Gemm" || node.op_type == "MatMul" {
+        if MATRIX_OPERATIONS.contains(&node.op_type.as_str()) {
             if prev_was_gemm_or_matmul {
-                is_mlp = false;
-                break;
+                return Ok(false);
             }
             prev_was_gemm_or_matmul = true;
-        } else if activation_functions.contains(&node.op_type.as_str()) {
+        } else if ACTIVATION_FUNCTIONS.contains(&node.op_type.as_str()) {
             if !prev_was_gemm_or_matmul {
-                is_mlp = false;
-                break;
+                return Ok(false);
             }
             prev_was_gemm_or_matmul = false;
         } else {
-            is_mlp = false;
-            break;
+            return Err(Error::msg(format!(
+                "Operator '{}' unsupported, yet.",
+                node.op_type.as_str()
+            )));
         }
     }
 
@@ -69,17 +74,6 @@ fn is_mlp(filepath: &str) -> Result<bool> {
 }
 
 fn is_cnn(filepath: &str) -> Result<bool> {
-    let cnn_operations = ["Conv", "ConvTranspose"];
-    let sampling_operations = [
-        "MaxPool",
-        "AveragePool",
-        "GlobalAveragePool",
-        "GlobalMaxPool",
-    ];
-    let activation_functions = ["Relu", "Sigmoid", "Tanh", "LeakyRelu", "Elu", "Selu"];
-    let matrix_operations = ["Gemm", "Einsum", "MatMul"];
-    let flatten_operations = ["Flatten", "Reshape"];
-
     let is_cnn = true;
     // let mut prev_op = None;
 
@@ -93,13 +87,16 @@ fn is_cnn(filepath: &str) -> Result<bool> {
     for node in graph.node.iter() {
         let op_type = node.op_type.as_str();
 
-        if !cnn_operations.contains(&op_type)
-            && !sampling_operations.contains(&op_type)
-            && !activation_functions.contains(&op_type)
-            && !matrix_operations.contains(&op_type)
-            && !flatten_operations.contains(&op_type)
+        if !CNN_OPERATIONS.contains(&op_type)
+            && !SAMPLING_OPERATIONS.contains(&op_type)
+            && !ACTIVATION_FUNCTIONS.contains(&op_type)
+            && !MATRIX_OPERATIONS.contains(&op_type)
+            && !FLATTEN_OPERATIONS.contains(&op_type)
         {
-            return Ok(false);
+            return Err(Error::msg(format!(
+                "Operator '{}' unsupported, yet.",
+                op_type
+            )));
         }
 
         // TODO: Need to check if the sequence of operations are correct.
