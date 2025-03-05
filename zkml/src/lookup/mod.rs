@@ -389,7 +389,6 @@ where
         let mut table_poly_id = steps_info.len();
 
         // Iterate through the step info and make the relevant circuit for each.
-        println!("LOOKUP CTX BEFORE FOR EACH");
         steps_info
             .iter()
             .enumerate()
@@ -418,11 +417,8 @@ where
                                 )
                             })
                             .collect::<Vec<DenseMultilinearExtension<E>>>();
-                        println!("BEFORE TRIM {:?}", lookup_type);
                         let (pp, _) = Pcs::<E>::trim(params.clone(), 1 << *BIT_LEN)?;
-                        println!("AFTER TRIM {:?}", lookup_type);
                         let commit = Pcs::<E>::batch_commit(&pp, &mles)?.to_commitment();
-                        println!("AFTER BATCH COMMIT {:?}", lookup_type);
 
                         let relu_table_info = TableInfo {
                             poly_id: table_poly_id,
@@ -462,11 +458,8 @@ where
                             })
                             .collect::<Vec<DenseMultilinearExtension<E>>>();
 
-                        println!("BEFORE TRIM  {:?} - numvars {} -max poly size {}", lookup_type,num_vars, max_poly_size());
                         let (pp, _) = Pcs::<E>::trim(params.clone(), 1 << num_vars)?;
-                        println!("AFTER TRIM  {:?} - numvars {}", lookup_type,num_vars);
                         let commit = Pcs::<E>::batch_commit(&pp, &mles)?.to_commitment();
-                        println!("AFTER BATCH COMMIT  {:?} - numvars {}", lookup_type,num_vars);
                         let table_info = TableInfo {
                             poly_id: table_poly_id,
                             num_vars,
@@ -482,7 +475,6 @@ where
                 _ => unreachable!(),
             })?;
 
-        println!("LOOKUP CTX AFTER FOR EACH");
         Ok(Context {
             step_index_map,
             lookup_circuits,
