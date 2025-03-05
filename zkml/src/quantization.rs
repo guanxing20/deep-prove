@@ -5,9 +5,9 @@ use ff_ext::ExtensionField;
 use gkr::util::ceil_log2;
 use goldilocks::SmallField;
 use itertools::Itertools;
-use std::env;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
+use std::env;
 use transcript::Transcript;
 
 use crate::{Element, tensor::Tensor};
@@ -21,13 +21,14 @@ pub static BIT_LEN: Lazy<usize> = Lazy::new(|| {
 });
 
 // These values depend on BIT_LEN and need to be computed at runtime
-pub static MIN: Lazy<Element> = Lazy::new(|| -(1 << (*BIT_LEN - 1))); 
+pub static MIN: Lazy<Element> = Lazy::new(|| -(1 << (*BIT_LEN - 1)));
 pub static MAX: Lazy<Element> = Lazy::new(|| (1 << (*BIT_LEN - 1)) - 1);
 pub static ZERO: Lazy<Element> = Lazy::new(|| 0);
 
 /// Trait used to quantize original floating point number to integer
 pub trait Quantizer<Output> {
     fn from_f32_unsafe(e: &f32) -> Output;
+    fn from_f32_unsafe_clamp(e: &f32, max_abs: f64) -> Output;
 }
 
 impl Quantizer<Element> for Element {
@@ -44,6 +45,29 @@ impl Quantizer<Element> for Element {
 
         // formula is q = round(r/S) + z
         let scaled = (*e as f64 / scale).round() as Element + zero_point;
+        scaled as Element
+    }
+
+    fn from_f32_unsafe_clamp(e: &f32, max_abs: f64) -> Self {
+        let e = *e as f64;
+        assert!(
+            max_abs > 0.0,
+            "max_abs should be greater than zero. Domain range is between [-max_abs, max_abs]."
+        );
+
+        let scale = (2.0 * max_abs) / (*MAX - *MIN) as f64;
+        let zero_point = 0;
+
+        // formula is q = round(r/S) + z
+        let scaled = (e / scale).round() as Element + zero_point;
+        let scaled = scaled.clamp(*MIN, *MAX);
+
+        if e < -max_abs || e > max_abs {
+            println!(
+                "Quantization: Value {} is out of [-{}, {}]. But quantized to {}.",
+                e, max_abs, max_abs, scaled
+            );
+        }
         scaled as Element
     }
 }
