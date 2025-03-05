@@ -74,8 +74,8 @@ fn is_mlp(filepath: &str) -> Result<bool> {
 }
 
 fn is_cnn(filepath: &str) -> Result<bool> {
-    let is_cnn = true;
-    // let mut prev_op = None;
+    let mut is_cnn = true;
+    let mut found_lin = false;
 
     // Load the ONNX model
     let model = tract_onnx::onnx()
@@ -83,6 +83,7 @@ fn is_cnn(filepath: &str) -> Result<bool> {
         .map_err(|e| Error::msg(format!("Failed to load model: {:?}", e)))?;
 
     let graph = model.graph.unwrap();
+    let mut previous_op = "";
 
     for node in graph.node.iter() {
         let op_type = node.op_type.as_str();
@@ -99,7 +100,27 @@ fn is_cnn(filepath: &str) -> Result<bool> {
             )));
         }
 
-        // TODO: Need to check if the sequence of operations are correct.
+        println!("Prev op: {}. Status: {}", previous_op, is_cnn);
+        if ACTIVATION.contains(&op_type) {
+            is_cnn =
+                is_cnn && (LINEAR_ALG.contains(&previous_op) || CONVOLUTION.contains(&previous_op));
+        }
+
+        if DOWNSAMPLING.contains(&op_type) {
+            is_cnn = is_cnn && ACTIVATION.contains(&previous_op);
+        }
+
+        // Check for dense layers
+        if LINEAR_ALG.contains(&op_type) {
+            found_lin = true;
+        }
+
+        // Conv layers should appear before dense layers
+        if found_lin && CONVOLUTION.contains(&op_type) {
+            is_cnn = false;
+            break;
+        }
+        previous_op = op_type;
     }
 
     Ok(is_cnn)
