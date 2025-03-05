@@ -5,18 +5,25 @@ use ff_ext::ExtensionField;
 use gkr::util::ceil_log2;
 use goldilocks::SmallField;
 use itertools::Itertools;
-
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
+use std::env;
 use transcript::Transcript;
 
 use crate::{Element, tensor::Tensor};
 
-/// The type of integer we do arithmetics over. Note this is NOT the type we run the inference over actually
-/// We run it over `[Element]` since we need to handle overflows. But all the quantization and requantization
-pub const BIT_LEN: usize = 8;
-pub const MIN: Element = -(1 << (BIT_LEN - 1));
-pub const MAX: Element = (1 << (BIT_LEN - 1)) - 1;
-pub const ZERO: Element = 0;
+// Get BIT_LEN from environment variable or use default value
+pub static BIT_LEN: Lazy<usize> = Lazy::new(|| {
+    env::var("ZKML_BIT_LEN")
+        .ok()
+        .and_then(|val| val.parse::<usize>().ok())
+        .unwrap_or(8) // Default value if env var is not set or invalid
+});
+
+// These values depend on BIT_LEN and need to be computed at runtime
+pub static MIN: Lazy<Element> = Lazy::new(|| -(1 << (*BIT_LEN - 1)));
+pub static MAX: Lazy<Element> = Lazy::new(|| (1 << (*BIT_LEN - 1)) - 1);
+pub static ZERO: Lazy<Element> = Lazy::new(|| 0);
 
 /// Trait used to quantize original floating point number to integer
 pub trait Quantizer<Output> {
@@ -33,7 +40,7 @@ impl Quantizer<Element> for Element {
         // even tho we are requantizing starting from Element, we only want to requantize for QuantInteger
         // the reason we have these two types is to handle overflow
         // (a -b) / 2^Q
-        let scale = (1.0 - (-1.0)) / (1 << BIT_LEN) as f64;
+        let scale = (1.0 - (-1.0)) / (1 << *BIT_LEN) as f64;
         let zero_point = 0;
 
         // formula is q = round(r/S) + z
@@ -48,12 +55,12 @@ impl Quantizer<Element> for Element {
             "max_abs should be greater than zero. Domain range is between [-max_abs, max_abs]."
         );
 
-        let scale = (2.0 * max_abs) / (MAX - MIN) as f64;
+        let scale = (2.0 * max_abs) / (*MAX - *MIN) as f64;
         let zero_point = 0;
 
         // formula is q = round(r/S) + z
         let scaled = (e / scale).round() as Element + zero_point;
-        let scaled = scaled.clamp(MIN, MAX);
+        let scaled = scaled.clamp(*MIN, *MAX);
 
         if e < -max_abs || e > max_abs {
             println!(
@@ -110,18 +117,18 @@ where
 /// This struct is gonna be useful down the road to handle more precise requantization techniques.
 /// BIT_LEN is the target bit length we want to reduce any number to
 #[derive(Clone, Debug)]
-struct QuantRange<const BIT_LEN: usize> {
+struct QuantRange {
     // a - b: at the beginning a power of two to simplify requantization
     pub(crate) max_range: usize,
 }
 
-impl<const BIT_LEN: usize> Default for QuantRange<BIT_LEN> {
+impl Default for QuantRange {
     fn default() -> Self {
         QuantRange { max_range: 2 }
     }
 }
 
-impl<const BIT_LEN: usize> QuantRange<BIT_LEN> {
+impl QuantRange {
     /// Computes the quantization info that a matrix x vec will produce
     /// self should be the quant info of the matrix
     /// The quantization info is depending on the number of columns in the matrix
@@ -130,27 +137,6 @@ impl<const BIT_LEN: usize> QuantRange<BIT_LEN> {
     /// NOTE2: It is using the simplfiication of finding the max range which is a power of two
     /// so we only need to "right shift" during requant
     fn compute_matvec_quant(m: &crate::tensor::Tensor<Element>) -> Requant {
-        // NOTE this way below is correct but is taking a huge loss
-        // BIT_LEN * 2 because of multiplication
-        // log because of additions
-        // let bit_len = BIT_LEN * 2  + m.ncols().ilog2() as usize;
-        // let output_range = Self {
-        //    max_range: (2 as usize).pow(bit_len as u32),
-        //};
-        // NOTE 2: this way is more precise
-        let ind_range = (MAX - MIN) as usize;
-        let output_range = Self {
-            max_range: (ind_range.pow(2) + m.ncols_2d() as usize * ind_range).next_power_of_two(),
-        };
-        let shift = output_range.max_range.ilog2() as usize - BIT_LEN;
-        // Instead of using the max range possible without looking at the matrices weight, we actually trim down to
-        // the max range that the matrix can produce when multiplied by any input vector.
-        // We still assume a single range for the whole matrix (vs one for each row or each weight)
-        // In this case, we need to compute the max range for y[i] = SUM_j M[i,j] * x[j]
-        // For multiplication, we take value of the weight and produce (min, max) possible
-        // For additions, we add the max range of all ranges of the multiplications involved in y[i]
-        // Then we just take the maximum
-        let nrows = m.nrows_2d();
         let ncols = m.ncols_2d();
         let max_output_range = m
             .get_data()
@@ -158,20 +144,21 @@ impl<const BIT_LEN: usize> QuantRange<BIT_LEN> {
             .chunks(ncols)
             .into_iter()
             .map(|row| {
-                let row_range = row.map(|weight| {
-                    let min = if weight.is_negative() {
-                        weight * MAX as Element
-                    } else {
-                        weight * MIN as Element
-                    };
-                    let max = if weight.is_negative() {
-                        weight * MIN as Element
-                    } else {
-                        weight * MAX as Element
-                    };
-                    (min, max)
-                })
-                .fold((0, 0), |(min, max), (wmin, wmax)| (min + wmin, max + wmax));
+                let row_range = row
+                    .map(|weight| {
+                        let min = if weight.is_negative() {
+                            weight * *MAX as Element
+                        } else {
+                            weight * *MIN as Element
+                        };
+                        let max = if weight.is_negative() {
+                            weight * *MIN as Element
+                        } else {
+                            weight * *MAX as Element
+                        };
+                        (min, max)
+                    })
+                    .fold((0, 0), |(min, max), (wmin, wmax)| (min + wmin, max + wmax));
                 // weight * MIN can be positive and higher then MAX*weight if weight's negative
                 // so we take the absolute value of the difference
                 (row_range.1 - row_range.0).unsigned_abs() as usize
@@ -180,23 +167,12 @@ impl<const BIT_LEN: usize> QuantRange<BIT_LEN> {
             .expect("No max range found")
             .next_power_of_two();
         // trace!("max_output_range: {} - ilog2: {}", max_output_range, max_output_range.ilog2());
-        let shift = max_output_range.ilog2() as usize - BIT_LEN;
+        let shift = max_output_range.ilog2() as usize - *BIT_LEN;
         Requant {
             range: max_output_range,
             right_shift: shift,
-            after_range: 1 << BIT_LEN,
+            after_range: 1 << *BIT_LEN,
         }
-    }
-    /// Computes the right shift required to perform after multiplying two numbers
-    /// Here `output` should be the range that the value is in AFTER requantizing
-    fn mult_shift(&self, rhs: &QuantRange<BIT_LEN>, output: &QuantRange<BIT_LEN>) -> usize {
-        assert!(self.max_range.is_power_of_two());
-        assert!(rhs.max_range.is_power_of_two());
-        assert!(output.max_range.is_power_of_two());
-        let slog = self.max_range.ilog2() as usize;
-        let rlog = rhs.max_range.ilog2() as usize;
-        let olog = output.max_range.ilog2() as usize;
-        olog + BIT_LEN - slog - rlog
     }
 }
 
@@ -215,7 +191,7 @@ pub struct Requant {
 
 impl Requant {
     pub fn from_matrix_default(m: &crate::tensor::Tensor<Element>) -> Self {
-        QuantRange::<BIT_LEN>::compute_matvec_quant(m)
+        QuantRange::compute_matvec_quant(m)
     }
 
     pub fn op(&self, input: &crate::tensor::Tensor<Element>) -> crate::tensor::Tensor<Element> {

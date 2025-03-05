@@ -410,7 +410,7 @@ where
                             .into_iter()
                             .map(|evaluations| {
                                 DenseMultilinearExtension::<E>::from_evaluations_vec(
-                                    BIT_LEN,
+                                    *BIT_LEN,
                                     evaluations,
                                 )
                             })
