@@ -11,31 +11,12 @@ use crate::{
     quantization::Quantizer,
 };
 
-#[derive(Debug, Clone)]
-struct Gemm {
-    name: String,
-    alpha: f32,
-    beta: f32,
-    trans_a: bool,
-    trans_b: bool,
-}
-
-// Given a ONNX node, build a struct which contains information about the Gemm
-fn build_gemm(node: &NodeProto) -> Result<Gemm> {
-    let name = node.name.to_string();
-    let alpha = node.get_attr_opt("alpha")?.unwrap_or(1.);
-    let beta = node.get_attr_opt("beta")?.unwrap_or(1.);
-    let trans_a = node.get_attr_opt("transA")?.unwrap_or(false);
-    let trans_b = node.get_attr_opt("transB")?.unwrap_or(false);
-    let gemm = Gemm {
-        name,
-        alpha,
-        beta,
-        trans_a,
-        trans_b,
-    };
-    Ok(gemm)
-}
+// Supported operators
+const ACTIVATION: [&str; 1] = ["Relu"];
+const CONVOLUTION: [&str; 1] = ["Conv"];
+const DOWNSAMPLING: [&str; 1] = ["MaxPool"];
+const LINEAR_ALG: [&str; 2] = ["Gemm", "MatMul"];
+const RESHAPE: [&str; 2] = ["Flatten", "Reshape"];
 
 // Given serialized data and its tract DatumType, build a tract tensor.
 fn create_tensor(shape: Vec<usize>, dt: DatumType, data: &[u8]) -> TractResult<Tensor> {
@@ -62,9 +43,7 @@ fn create_tensor(shape: Vec<usize>, dt: DatumType, data: &[u8]) -> TractResult<T
 }
 
 fn is_mlp(filepath: &str) -> Result<bool> {
-    let activation_functions = ["Relu", "Sigmoid", "Tanh", "LeakyRelu", "Elu", "Selu"];
-
-    let mut is_mlp = true;
+    let is_mlp = true;
     let mut prev_was_gemm_or_matmul = false;
 
     let model = tract_onnx::onnx()
@@ -73,101 +52,78 @@ fn is_mlp(filepath: &str) -> Result<bool> {
     let graph = model.graph.unwrap();
 
     for node in graph.node.iter() {
-        if node.op_type == "Gemm" || node.op_type == "MatMul" {
+        if LINEAR_ALG.contains(&node.op_type.as_str()) {
             if prev_was_gemm_or_matmul {
-                is_mlp = false;
-                break;
+                return Ok(false);
             }
             prev_was_gemm_or_matmul = true;
-        } else if activation_functions.contains(&node.op_type.as_str()) {
+        } else if ACTIVATION.contains(&node.op_type.as_str()) {
             if !prev_was_gemm_or_matmul {
-                is_mlp = false;
-                break;
+                return Ok(false);
             }
             prev_was_gemm_or_matmul = false;
         } else {
-            is_mlp = false;
-            break;
+            return Err(Error::msg(format!(
+                "Operator '{}' unsupported, yet.",
+                node.op_type.as_str()
+            )));
         }
     }
 
     Ok(is_mlp)
 }
 
-// Given a flat vector, converts it to matrix in row major form
-fn reshape<T: Clone>(flat_vec: Vec<T>, rows: usize, cols: usize) -> Option<Vec<Vec<T>>> {
-    if flat_vec.len() != rows * cols {
-        return None; // Return None if dimensions don't match the number of elements
+fn is_cnn(filepath: &str) -> Result<bool> {
+    let mut is_cnn = true;
+    let mut found_lin = false;
+
+    // Load the ONNX model
+    let model = tract_onnx::onnx()
+        .proto_model_for_path(filepath)
+        .map_err(|e| Error::msg(format!("Failed to load model: {:?}", e)))?;
+
+    let graph = model.graph.unwrap();
+    let mut previous_op = "";
+
+    for node in graph.node.iter() {
+        let op_type = node.op_type.as_str();
+
+        if !CONVOLUTION.contains(&op_type)
+            && !DOWNSAMPLING.contains(&op_type)
+            && !ACTIVATION.contains(&op_type)
+            && !LINEAR_ALG.contains(&op_type)
+            && !RESHAPE.contains(&op_type)
+        {
+            return Err(Error::msg(format!(
+                "Operator '{}' unsupported, yet.",
+                op_type
+            )));
+        }
+
+        println!("Prev op: {}. Status: {}", previous_op, is_cnn);
+        if ACTIVATION.contains(&op_type) {
+            is_cnn =
+                is_cnn && (LINEAR_ALG.contains(&previous_op) || CONVOLUTION.contains(&previous_op));
+        }
+
+        if DOWNSAMPLING.contains(&op_type) {
+            is_cnn = is_cnn && ACTIVATION.contains(&previous_op);
+        }
+
+        // Check for dense layers
+        if LINEAR_ALG.contains(&op_type) {
+            found_lin = true;
+        }
+
+        // Conv layers should appear before dense layers
+        if found_lin && CONVOLUTION.contains(&op_type) {
+            is_cnn = false;
+            break;
+        }
+        previous_op = op_type;
     }
 
-    Some(flat_vec.chunks(cols).map(|chunk| chunk.to_vec()).collect())
-}
-
-fn concat_column(
-    matrix: Vec<Vec<Element>>,
-    column: Vec<Vec<Element>>,
-) -> Result<Vec<Vec<Element>>> {
-    if matrix.len() != column.len() {
-        bail!("Column length must match matrix row count");
-    }
-
-    let new_matrix: Vec<Vec<Element>> = matrix
-        .into_iter()
-        .zip(column.into_iter())
-        .map(|(mut row, col_val)| {
-            if col_val.len() != 1 {
-                bail!("Column vector must have a single value per row");
-            }
-            row.push(col_val[0]); // Append the single column value
-            Ok(row)
-        })
-        .collect::<Result<Vec<_>>>()?; // Collect results into Vec<Vec<u64>>
-
-    Ok(new_matrix)
-}
-
-fn fetch_weight_bias_as_mat<Q: Quantizer<Element>>(
-    weight_or_bias: &str,
-    node: &NodeProto,
-    initializers: &HashMap<String, Tensor>,
-) -> Result<Vec<Vec<Element>>> {
-    ensure!(weight_or_bias == "weight" || weight_or_bias == "bias");
-
-    let alpha_or_beta = node
-        .attribute
-        .iter()
-        .filter(|x| {
-            x.name.contains(match weight_or_bias {
-                "weight" => "alpha",
-                _ => "beta",
-            })
-        })
-        .map(|x| x.f)
-        .collect_vec();
-    let alpha_or_beta = alpha_or_beta[0];
-
-    let tensor_vec = node
-        .input
-        .iter()
-        .filter(|x| x.contains(weight_or_bias))
-        .filter_map(|key| initializers.get(key).cloned())
-        .collect_vec();
-
-    // If a node is Gemm, then it has only one tensor of the form "fcN.weight"
-    let tensor_t = tensor_vec[0].clone();
-    let tensor_t_f32 = tensor_t.as_slice::<f32>().unwrap().to_vec();
-    let tensor_t_f32 = tensor_t_f32.iter().map(|x| x * alpha_or_beta).collect_vec();
-    let tensor_f = tensor_t_f32.iter().map(Q::from_f32_unsafe).collect_vec();
-
-    let (rows, cols) = match tensor_t.shape().len() {
-        1 => (tensor_t.shape()[0], 1),
-        2 => (tensor_t.shape()[0], tensor_t.shape()[1]),
-        _ => bail!("Invalid tensor shape: expected 1D or 2D tensor"),
-    };
-
-    let field_matrix = reshape(tensor_f, rows, cols).unwrap();
-
-    Ok(field_matrix)
+    Ok(is_cnn)
 }
 
 pub fn load_mlp<Q: Quantizer<Element>>(filepath: &str) -> Result<Model> {
@@ -197,21 +153,21 @@ pub fn load_mlp<Q: Quantizer<Element>>(filepath: &str) -> Result<Model> {
     let mut layers: Vec<Layer> = Vec::new();
     for (i, node) in graph.node.iter().enumerate() {
         match node.op_type.as_str() {
-            "Gemm" => {
-                let matrix_weight = fetch_weight_bias_as_mat::<Q>("weight", node, &initializers)?;
-                let matrix_bias = fetch_weight_bias_as_mat::<Q>("bias", node, &initializers)?;
+            op if LINEAR_ALG.contains(&op) => {
+                let matrix_weight =
+                    fetch_weight_bias_as_tensor::<Q>(1.0, "weight", node, &initializers)?;
+                let matrix_bias =
+                    fetch_weight_bias_as_tensor::<Q>(1.0, "bias", node, &initializers)?;
 
                 // Concatenate bias as an extra column
-                let matrix = concat_column(matrix_weight, matrix_bias)?;
+                let matrix = matrix_weight.concat_matvec_col(&matrix_bias);
 
-                // Create matrix and transpose (PyTorch stores as output_size x input_size)
-                let matrix = crate::tensor::Tensor::<Element>::from_coeffs_2d(matrix).unwrap();
                 debug!("layer idx {} -> unprocessed matrix {:?}", i, matrix.dims());
                 //.transpose();
                 //.pad_next_power_of_two();
                 layers.push(Layer::Dense(matrix));
             }
-            "Relu" => {
+            op if ACTIVATION.contains(&op) => {
                 let layer = Layer::Activation(Activation::Relu(Relu::new()));
                 layers.push(layer);
             }
@@ -275,6 +231,118 @@ pub fn load_mlp<Q: Quantizer<Element>>(filepath: &str) -> Result<Model> {
     Ok(model)
 }
 
+// TODO: Need to get max_abs by looking at the range of the weights and biases during calibration.
+fn fetch_weight_bias_as_tensor<Q: Quantizer<Element>>(
+    max_abs: f64,
+    weight_or_bias: &str,
+    node: &NodeProto,
+    initializers: &HashMap<String, Tensor>,
+) -> Result<crate::tensor::Tensor<Element>> {
+    ensure!(weight_or_bias == "weight" || weight_or_bias == "bias");
+
+    let mut alpha_or_beta: f32 = 1.0;
+    if node.name.contains("Gemm") {
+        let result = node
+            .attribute
+            .iter()
+            .filter(|x| {
+                x.name.contains(match weight_or_bias {
+                    "weight" => "alpha",
+                    _ => "beta",
+                })
+            })
+            .map(|x| x.f)
+            .collect_vec();
+        alpha_or_beta = result[0];
+    }
+
+    let tensor_vec = node
+        .input
+        .iter()
+        .filter(|x| x.contains(weight_or_bias))
+        .filter_map(|key| initializers.get(key).cloned())
+        .collect_vec();
+
+    // If a node is Gemm, then it has only one tensor of the form "fcN.weight"
+    let tensor_t = tensor_vec[0].clone();
+    let tensor_t_f32 = tensor_t.as_slice::<f32>().unwrap().to_vec();
+    let tensor_t_f32 = tensor_t_f32.iter().map(|x| x * alpha_or_beta).collect_vec();
+    let tensor_f = tensor_t_f32
+        .iter()
+        .map(|x| Q::from_f32_unsafe_clamp(x, max_abs))
+        .collect_vec();
+    let tensor_result = crate::tensor::Tensor::new(tensor_t.shape().to_vec(), tensor_f);
+
+    Ok(tensor_result)
+}
+
+pub fn load_cnn<Q: Quantizer<Element>>(filepath: &str) -> Result<Model> {
+    if !Path::new(filepath).exists() {
+        return Err(Error::msg(format!("File '{}' does not exist", filepath)));
+    }
+    let result = is_cnn(filepath)?;
+    if !result {
+        bail!("is_cnn: Failed");
+    }
+
+    let model = tract_onnx::onnx()
+        .proto_model_for_path(filepath)
+        .map_err(|e| Error::msg(format!("Failed to load model: {:?}", e)))?;
+
+    let graph = model.graph.unwrap();
+    let mut initializers: HashMap<String, Tensor> = HashMap::new();
+    for item in graph.initializer {
+        let dt = tract_onnx::pb::tensor_proto::DataType::from_i32(item.data_type)
+            .unwrap()
+            .try_into()?;
+        let shape: Vec<usize> = item.dims.iter().map(|&i| i as usize).collect();
+        let value = create_tensor(shape, dt, &item.raw_data).unwrap();
+        let key = item.name.to_string();
+        initializers.insert(key, value);
+    }
+
+    let mut layers: Vec<Layer> = Vec::new();
+    for (i, node) in graph.node.iter().enumerate() {
+        println!("Layer: {}", node.op_type.as_str());
+        match node.op_type.as_str() {
+            op if LINEAR_ALG.contains(&op) => {
+                let weight = fetch_weight_bias_as_tensor::<Q>(1.0, "weight", node, &initializers)?;
+                let bias = fetch_weight_bias_as_tensor::<Q>(1.0, "bias", node, &initializers)?;
+                // Concatenate bias as an extra column
+                let matrix = weight.concat_matvec_col(&bias);
+
+                debug!("layer idx {} -> unprocessed matrix {:?}", i, matrix.dims());
+                layers.push(Layer::Dense(matrix));
+            }
+            op if ACTIVATION.contains(&op) => {
+                let layer = Layer::Activation(Activation::Relu(Relu::new()));
+                layers.push(layer);
+            }
+            op if CONVOLUTION.contains(&op) => {
+                // TODO
+                let weight = fetch_weight_bias_as_tensor::<Q>(1.0, "weight", node, &initializers)?;
+                let bias = fetch_weight_bias_as_tensor::<Q>(1.0, "bias", node, &initializers)?;
+                unimplemented!()
+            }
+            op if DOWNSAMPLING.contains(&op) => {
+                unimplemented!()
+                // TODO
+            }
+            op if RESHAPE.contains(&op) => {
+                unimplemented!()
+                // TODO
+            }
+            _ => (),
+        };
+    }
+
+    let mut model = Model::new();
+    for layer in layers {
+        model.add_layer(layer);
+    }
+    Ok(model)
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -286,7 +354,7 @@ mod tests {
 
     #[test]
     fn test_tract() {
-        let filepath = "assets/model.onnx";
+        let filepath = "assets/scripts/MLP/mlp-iris-01.onnx";
         let result = load_mlp::<Element>(&filepath);
 
         assert!(result.is_ok(), "Failed: {:?}", result.unwrap_err());
@@ -294,15 +362,10 @@ mod tests {
 
     #[test]
     fn test_model_run() {
-        let filepath = "assets/model.onnx";
+        let filepath = "assets/scripts/MLP/mlp-iris-01.onnx";
 
         let model = load_mlp::<Element>(&filepath).unwrap();
         let input = crate::tensor::Tensor::random(vec![model.input_shape()[0]]);
-        // random_vector::<QuantInteger>(model.input_shape()[0])
-        //     .into_iter()
-        //     .map(|x| x as Element)
-        //     .collect_vec();
-
         let trace = model.run(input.clone());
         println!("Result: {:?}", trace.final_output());
     }
@@ -336,5 +399,22 @@ mod tests {
             1.0,
             <Element as Quantizer<Element>>::from_f32_unsafe(&1.0)
         );
+    }
+
+    #[test]
+    fn test_is_cnn() {
+        let filepath = "assets/scripts/CNN/cnn-cifar-01.onnx";
+        let result = is_cnn(&filepath);
+
+        assert!(result.is_ok(), "Failed: {:?}", result.unwrap_err());
+    }
+
+    // #[test]
+    fn test_load_cnn() {
+        // let filepath = "assets/scripts/CNN/lenet-mnist-01.onnx";
+        let filepath = "assets/scripts/CNN/cnn-cifar-01.onnx";
+        let result = load_cnn::<Element>(&filepath);
+
+        assert!(result.is_ok(), "Failed: {:?}", result.unwrap_err());
     }
 }
