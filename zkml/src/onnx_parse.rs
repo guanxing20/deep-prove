@@ -12,11 +12,11 @@ use crate::{
 };
 
 // Supported operators
-const ACTIVATION_FUNCTIONS: [&str; 1] = ["Relu"];
-const CNN_OPERATIONS: [&str; 1] = ["Conv"];
-const SAMPLING_OPERATIONS: [&str; 1] = ["MaxPool"];
-const MATRIX_OPERATIONS: [&str; 2] = ["Gemm", "MatMul"];
-const FLATTEN_OPERATIONS: [&str; 2] = ["Flatten", "Reshape"];
+const ACTIVATION: [&str; 1] = ["Relu"];
+const CONVOLUTION: [&str; 1] = ["Conv"];
+const DOWNSAMPLING: [&str; 1] = ["MaxPool"];
+const LINEAR_ALG: [&str; 2] = ["Gemm", "MatMul"];
+const RESHAPE: [&str; 2] = ["Flatten", "Reshape"];
 
 // Given serialized data and its tract DatumType, build a tract tensor.
 fn create_tensor(shape: Vec<usize>, dt: DatumType, data: &[u8]) -> TractResult<Tensor> {
@@ -52,12 +52,12 @@ fn is_mlp(filepath: &str) -> Result<bool> {
     let graph = model.graph.unwrap();
 
     for node in graph.node.iter() {
-        if MATRIX_OPERATIONS.contains(&node.op_type.as_str()) {
+        if LINEAR_ALG.contains(&node.op_type.as_str()) {
             if prev_was_gemm_or_matmul {
                 return Ok(false);
             }
             prev_was_gemm_or_matmul = true;
-        } else if ACTIVATION_FUNCTIONS.contains(&node.op_type.as_str()) {
+        } else if ACTIVATION.contains(&node.op_type.as_str()) {
             if !prev_was_gemm_or_matmul {
                 return Ok(false);
             }
@@ -87,11 +87,11 @@ fn is_cnn(filepath: &str) -> Result<bool> {
     for node in graph.node.iter() {
         let op_type = node.op_type.as_str();
 
-        if !CNN_OPERATIONS.contains(&op_type)
-            && !SAMPLING_OPERATIONS.contains(&op_type)
-            && !ACTIVATION_FUNCTIONS.contains(&op_type)
-            && !MATRIX_OPERATIONS.contains(&op_type)
-            && !FLATTEN_OPERATIONS.contains(&op_type)
+        if !CONVOLUTION.contains(&op_type)
+            && !DOWNSAMPLING.contains(&op_type)
+            && !ACTIVATION.contains(&op_type)
+            && !LINEAR_ALG.contains(&op_type)
+            && !RESHAPE.contains(&op_type)
         {
             return Err(Error::msg(format!(
                 "Operator '{}' unsupported, yet.",
@@ -132,7 +132,7 @@ pub fn load_mlp<Q: Quantizer<Element>>(filepath: &str) -> Result<Model> {
     let mut layers: Vec<Layer> = Vec::new();
     for (i, node) in graph.node.iter().enumerate() {
         match node.op_type.as_str() {
-            "Gemm" => {
+            op if LINEAR_ALG.contains(&op) => {
                 let matrix_weight =
                     fetch_weight_bias_as_tensor::<Q>(1.0, "weight", node, &initializers)?;
                 let matrix_bias =
@@ -146,7 +146,7 @@ pub fn load_mlp<Q: Quantizer<Element>>(filepath: &str) -> Result<Model> {
                 //.pad_next_power_of_two();
                 layers.push(Layer::Dense(matrix));
             }
-            "Relu" => {
+            op if ACTIVATION.contains(&op) => {
                 let layer = Layer::Activation(Activation::Relu(Relu::new()));
                 layers.push(layer);
             }
@@ -284,7 +284,7 @@ pub fn load_cnn<Q: Quantizer<Element>>(filepath: &str) -> Result<Model> {
     for (i, node) in graph.node.iter().enumerate() {
         println!("Layer: {}", node.op_type.as_str());
         match node.op_type.as_str() {
-            "Gemm" => {
+            op if LINEAR_ALG.contains(&op) => {
                 let weight = fetch_weight_bias_as_tensor::<Q>(1.0, "weight", node, &initializers)?;
                 let bias = fetch_weight_bias_as_tensor::<Q>(1.0, "bias", node, &initializers)?;
                 // Concatenate bias as an extra column
@@ -293,21 +293,21 @@ pub fn load_cnn<Q: Quantizer<Element>>(filepath: &str) -> Result<Model> {
                 debug!("layer idx {} -> unprocessed matrix {:?}", i, matrix.dims());
                 layers.push(Layer::Dense(matrix));
             }
-            "Relu" => {
+            op if ACTIVATION.contains(&op) => {
                 let layer = Layer::Activation(Activation::Relu(Relu::new()));
                 layers.push(layer);
             }
-            "Conv" => {
+            op if CONVOLUTION.contains(&op) => {
                 // TODO
                 let weight = fetch_weight_bias_as_tensor::<Q>(1.0, "weight", node, &initializers)?;
                 let bias = fetch_weight_bias_as_tensor::<Q>(1.0, "bias", node, &initializers)?;
                 unimplemented!()
             }
-            "MaxPool" => {
+            op if DOWNSAMPLING.contains(&op) => {
                 unimplemented!()
                 // TODO
             }
-            "Flatten" | "Reshape" => {
+            op if RESHAPE.contains(&op) => {
                 unimplemented!()
                 // TODO
             }
