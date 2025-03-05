@@ -12,15 +12,15 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
 import tqdm
-from sklearn.preprocessing import MinMaxScaler
+from sklearn.preprocessing import MinMaxScaler, StandardScaler
 import argparse
 from pathlib import Path
+import torch.optim as optim
 
 parser = argparse.ArgumentParser(description="mlp generator --num-dense and --layer-width")
 parser.add_argument("--num-dense", type=int, required=True, help="Number of dense layers")
 parser.add_argument("--layer-width", type=int, required=True, help="Width of each layer")
 parser.add_argument("--export", type=Path, required=False, default=Path("."), help="folder where to export model and input")
-parser.add_argument("--no-bias", action="store_true", help="Disable bias in linear layers")
 parser.add_argument("--num-samples", type=int, default=100, help="Number of test samples to export")
 
 args = parser.parse_args()
@@ -40,15 +40,15 @@ print("Loaded iris data")
 
 
 class MLP(nn.Module):
-    def __init__(self, num_dense, layer_width, use_bias=True):
+    def __init__(self, num_dense, layer_width):
         super(MLP, self).__init__()
         layers = []
         input_size = 4  # Assuming input size is 4 for the Iris dataset
         for _ in range(num_dense):
-            layers.append(nn.Linear(input_size, layer_width))
+            layers.append(nn.Linear(input_size, layer_width, bias=True))
             layers.append(nn.ReLU())
             input_size = layer_width
-        layers.append(nn.Linear(layer_width, 3))  # Assuming 3 output classes
+        layers.append(nn.Linear(layer_width, 3, bias=True))  # Assuming 3 output classes
         layers.append(nn.ReLU())
         self.layers = nn.ModuleList(layers)
 
@@ -58,7 +58,7 @@ class MLP(nn.Module):
         return x
 
 
-model = MLP(num_dense=args.num_dense, layer_width=args.layer_width, use_bias=not args.no_bias)
+model = MLP(num_dense=args.num_dense, layer_width=args.layer_width)
 # Extract input features
 X = dataset[dataset.columns[0:4]].values
 y = dataset.target
@@ -71,11 +71,6 @@ X = scaler.fit_transform(X)
 train_X, test_X, train_y, test_y = train_test_split(
     X, y, test_size=0.2
 )
-#train_X, test_X, train_y, test_y = train_test_split(
-#    dataset[dataset.columns[0:4]].values,  # use columns 0-4 as X
-#    dataset.target,  # use target as y
-#    test_size=0.2  # use 20% of data for testing
-#)
 print("Divided the data into testing and training.")
 
 loss_fn = nn.CrossEntropyLoss()
@@ -154,11 +149,16 @@ num_samples = min(args.num_samples, len(test_X))
 # Prepare data arrays
 input_data = []
 output_data = []
+pytorch_output = []
 
 # Process each selected test sample
 for i in range(num_samples):
     x = test_X[i]
     true_label = test_y[i].item()
+    
+    # Evaluate model with original tensor
+    model_output = model(x.unsqueeze(0)).squeeze(0)
+    raw_output = model_output.tolist()
     
     # Get input data
     input_data.append(x.detach().numpy().reshape([-1]).tolist())
@@ -167,9 +167,10 @@ for i in range(num_samples):
     one_hot_output = [0.0, 0.0, 0.0]  # For 3 classes in Iris
     one_hot_output[true_label] = 1.0
     output_data.append(one_hot_output)
+    pytorch_output.append(raw_output)
 
 # Save multiple input/output pairs to JSON
-data = {"input_data": input_data, "output_data": output_data}
+data = {"input_data": input_data, "output_data": output_data, "pytorch_output": pytorch_output}
 json.dump(data, open(data_path, 'w'), indent=2)
 print(f"Input/Output data for {num_samples} samples exported to {data_path}")
 
@@ -187,15 +188,3 @@ for i, layer in enumerate(model.layers):
         bias_vector = layer.bias.data
         print(f"Layer {i} weight matrix dimensions: {weight_matrix.size()}")
         print(f"Layer {i} bias vector dimensions: {bias_vector.size()}")
-        #print(f"Layer {i} weight matrix (Vec<Vec<_>> format):")
-        #tensor_to_vecvec(weight_matrix)
-        #print(f"Layer {i} bias vector (Vec<_> format):")
-        #tensor_to_vecvec(bias_vector.unsqueeze(0))
-
-# Print initial weights
-#for i, layer in enumerate(model.layers):
-#    if isinstance(layer, nn.Linear):
-#        print(f"Layer {i} initial weight matrix (Vec<Vec<_>> format):")
-#        tensor_to_vecvec(layer.weight.data)
-#        print(f"Layer {i} initial bias vector (Vec<_> format):")
-#        tensor_to_vecvec(layer.bias.data.unsqueeze(0))
