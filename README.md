@@ -4,7 +4,7 @@ This repository contains the implementation of the Lagrange Machine Learning Pro
 
 ## Getting Started
 
-Head out to the zkml's README and follow the instructions !
+Head out to the [zkml's README](zkml/README.md) and follow the instructions !
 
 ## Acknowledgements
 
