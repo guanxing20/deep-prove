@@ -1,6 +1,8 @@
 # Lagrange Machine Learning Provable Inference
 
-This repository contains the implementation of the Lagrange Machine Learning Provable Inference project.
+**Warning: This codebase has not been audited, use at your own risk!**
+
+This repository contains the implementation of DeepProve, the Lagrange machine learning provable inference project.
 
 ## Getting Started
 
