@@ -151,3 +151,8 @@ The script also prints the average accuracy for each configuration after complet
 - **Memory Limitations**: Large models may require substantial memory. Consider reducing model size or using a machine with more RAM if you encounter memory errors.
 
 - **Performance Variability**: For the most consistent results, close other resource-intensive applications when running benchmarks and consider using the `--num-threads` option.
+
+
+## License
+
+This project is licensed as specified in the [LICENSE](LICENSE) file.
