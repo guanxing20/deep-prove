@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # 🚀 DeepProve: Zero-Knowledge Machine Learning (zkml) Inference
 
 Welcome to **DeepProve**, a cutting-edge framework designed to prove neural network inference using zero-knowledge cryptographic techniques. Whether you're working with Multi-Layer Perceptrons (MLPs) or Convolutional Neural Networks (CNNs), DeepProve offers a fast and efficient way to verify computations without revealing the underlying data.
