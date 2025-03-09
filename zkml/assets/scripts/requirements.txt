@@ -1,3 +1,5 @@
+torchvision
+tabulate
 onnx
 matplotlib
 pandas

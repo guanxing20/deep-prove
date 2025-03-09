@@ -1,16 +1,29 @@
 use crate::quantization;
-use ark_std::rand::{
-    self, Rng, SeedableRng,
-    distributions::{Standard, uniform::SampleUniform},
-    prelude::Distribution,
-    rngs::StdRng,
-    thread_rng,
-};
+use ark_std::rand::{self, Rng, SeedableRng, rngs::StdRng, thread_rng};
 use ff_ext::ExtensionField;
 use itertools::Itertools;
-use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
 use crate::Element;
+
+pub trait NextPowerOfTwo {
+    /// Returns a new vector where each element is the next power of two.
+    fn next_power_of_two(&self) -> Self;
+    fn prod(&self) -> usize;
+}
+// For unsigned integer vectors
+impl NextPowerOfTwo for Vec<usize> {
+    fn next_power_of_two(&self) -> Self {
+        self.iter().map(|&i| i.next_power_of_two()).collect()
+    }
+    fn prod(&self) -> usize {
+        self.iter().product::<usize>()
+    }
+}
+
+pub fn _random_vector<E: ExtensionField>(n: usize) -> Vec<E> {
+    let mut rng = thread_rng();
+    (0..n).map(|_| E::random(&mut rng)).collect_vec()
+}
 
 pub fn random_vector(n: usize) -> Vec<Element> {
     let mut rng = thread_rng();
@@ -40,9 +53,4 @@ pub fn random_vector_seed(n: usize, seed: Option<u64>) -> Vec<Element> {
             rng.gen_range(*quantization::MIN..=*quantization::MAX)
         })
         .collect_vec()
-}
-
-pub fn random_ranged_vector(n: usize, range: std::ops::Range<Element>) -> Vec<Element> {
-    let mut rng = thread_rng();
-    (0..n).map(|_| rng.gen_range(range.clone())).collect_vec()
 }

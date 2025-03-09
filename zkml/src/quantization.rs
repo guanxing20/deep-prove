@@ -8,6 +8,7 @@ use itertools::Itertools;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::env;
+use tracing::debug;
 use transcript::Transcript;
 
 use crate::{Element, tensor::Tensor};
@@ -63,7 +64,7 @@ impl Quantizer<Element> for Element {
         let scaled = scaled.clamp(*MIN, *MAX);
 
         if e < -max_abs || e > max_abs {
-            println!(
+            debug!(
                 "Quantization: Value {} is out of [-{}, {}]. But quantized to {}.",
                 e, max_abs, max_abs, scaled
             );
@@ -84,6 +85,28 @@ impl<F: ExtensionField> Fieldizer<F> for Element {
         } else {
             // for positive and zero, it's just the number
             F::from(*self as u64)
+        }
+    }
+}
+pub(crate) trait IntoElement {
+    fn into_element(&self) -> Element;
+}
+
+impl<F: ExtensionField> IntoElement for F {
+    fn into_element(&self) -> Element {
+        let e = self.to_canonical_u64_vec()[0] as Element;
+        let modulus_half = <F::BaseField as SmallField>::MODULUS_U64 >> 1;
+        // That means he's a positive number
+        if *self == F::ZERO {
+            0
+        // we dont assume any bounds on the field elements, requant might happen at a later stage
+        // so we assume the worst case
+        } else if e <= modulus_half as Element {
+            e
+        } else {
+            // That means he's a negative number - so take the diff with the modulus and recenter around 0
+            let diff = <F::BaseField as SmallField>::MODULUS_U64 - e as u64;
+            -(diff as Element)
         }
     }
 }
@@ -113,67 +136,18 @@ where
     }
 }
 
-/// QuantRange is an intermediary struct to compute the final quantization information.
-/// This struct is gonna be useful down the road to handle more precise requantization techniques.
-/// BIT_LEN is the target bit length we want to reduce any number to
-#[derive(Clone, Debug)]
-struct QuantRange {
-    // a - b: at the beginning a power of two to simplify requantization
-    pub(crate) max_range: usize,
-}
-
-impl Default for QuantRange {
-    fn default() -> Self {
-        QuantRange { max_range: 2 }
-    }
-}
-
-impl QuantRange {
-    /// Computes the quantization info that a matrix x vec will produce
-    /// self should be the quant info of the matrix
-    /// The quantization info is depending on the number of columns in the matrix
-    /// NOTE: this is assuming the vector has the same quantization factor as the matrix coeff
-    ///       and it assumes these are the default range.
-    /// NOTE2: It is using the simplfiication of finding the max range which is a power of two
-    /// so we only need to "right shift" during requant
-    fn compute_matvec_quant(m: &crate::tensor::Tensor<Element>) -> Requant {
-        let ncols = m.ncols_2d();
-        let max_output_range = m
-            .get_data()
-            .iter()
-            .chunks(ncols)
-            .into_iter()
-            .map(|row| {
-                let row_range = row
-                    .map(|weight| {
-                        let min = if weight.is_negative() {
-                            weight * *MAX as Element
-                        } else {
-                            weight * *MIN as Element
-                        };
-                        let max = if weight.is_negative() {
-                            weight * *MIN as Element
-                        } else {
-                            weight * *MAX as Element
-                        };
-                        (min, max)
-                    })
-                    .fold((0, 0), |(min, max), (wmin, wmax)| (min + wmin, max + wmax));
-                // weight * MIN can be positive and higher then MAX*weight if weight's negative
-                // so we take the absolute value of the difference
-                (row_range.1 - row_range.0).unsigned_abs() as usize
-            })
-            .max()
-            .expect("No max range found")
-            .next_power_of_two();
-        // trace!("max_output_range: {} - ilog2: {}", max_output_range, max_output_range.ilog2());
-        let shift = max_output_range.ilog2() as usize - *BIT_LEN;
-        Requant {
-            range: max_output_range,
-            right_shift: shift,
-            after_range: 1 << *BIT_LEN,
-        }
-    }
+pub fn range_from_weight(weight: &Element) -> (Element, Element) {
+    let min = if weight.is_negative() {
+        weight * *MAX as Element
+    } else {
+        weight * *MIN as Element
+    };
+    let max = if weight.is_negative() {
+        weight * *MIN as Element
+    } else {
+        weight * *MAX as Element
+    };
+    (min, max)
 }
 
 /// Information about a requantization step:
@@ -190,10 +164,6 @@ pub struct Requant {
 }
 
 impl Requant {
-    pub fn from_matrix_default(m: &crate::tensor::Tensor<Element>) -> Self {
-        QuantRange::compute_matvec_quant(m)
-    }
-
     pub fn op(&self, input: &crate::tensor::Tensor<Element>) -> crate::tensor::Tensor<Element> {
         crate::tensor::Tensor::<Element>::new(
             input.dims(),
@@ -383,6 +353,28 @@ mod test {
             let res = ap * bp;
             let expected = case.res.to_field();
             assert_eq!(res, expected, "test case {}: {:?}", i, case);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    type F = goldilocks::GoldilocksExt2;
+    #[test]
+    fn test_element_field_roundtrip() {
+        // Also test a few specific values explicitly
+        let test_values = [*MIN, -100, -50, -1, 0, 1, 50, 100, *MAX];
+        for &val in &test_values {
+            let field_val: F = val.to_field();
+            let roundtrip = field_val.into_element();
+
+            assert_eq!(
+                val, roundtrip,
+                "Element {} did not roundtrip correctly (got {})",
+                val, roundtrip
+            );
         }
     }
 }

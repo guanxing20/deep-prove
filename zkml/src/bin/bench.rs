@@ -10,14 +10,14 @@ use anyhow::{Context as CC, ensure};
 use clap::Parser;
 use csv::WriterBuilder;
 use goldilocks::GoldilocksExt2;
-use itertools::Itertools;
-use log::info;
-use zkml::quantization::Quantizer;
+use tracing::info;
+use tracing_subscriber::{EnvFilter, fmt};
+use zkml::{load_model, quantization::Quantizer};
 
 use serde::{Deserialize, Serialize};
 use zkml::{
-    Context, Element, IO, Prover, argmax, default_transcript, load_mlp, lookup::LogUp,
-    quantization::TensorFielder, tensor::Tensor, verify,
+    Context, Element, IO, Prover, argmax, default_transcript, lookup::LogUp,
+    quantization::TensorFielder, verify,
 };
 
 use rmp_serde::encode::to_vec_named;
@@ -41,7 +41,12 @@ struct Args {
 }
 
 pub fn main() -> anyhow::Result<()> {
-    env_logger::init();
+    // tracing_subscriber::fmt::init();
+    let subscriber = fmt::Subscriber::builder()
+        .with_env_filter(EnvFilter::from_default_env())
+        .finish();
+
+    tracing::subscriber::set_global_default(subscriber).expect("Failed to set global subscriber");
     let args = Args::parse();
     run(args).context("error running bench:")?;
     Ok(())
@@ -115,7 +120,7 @@ const CSV_PROOF_SIZE: &str = "proof size (KB)";
 
 fn run(args: Args) -> anyhow::Result<()> {
     info!("[+] Reading onnx model");
-    let model = load_mlp::<Element>(&args.onnx).context("loading model:")?;
+    let model = load_model::<Element>(&args.onnx)?;
     model.describe();
     info!("[+] Reading input/output from pytorch");
     let (inputs, given_outputs) =
@@ -124,7 +129,7 @@ fn run(args: Args) -> anyhow::Result<()> {
     // Generate context once and measure the time
     info!("[+] Generating context for proving");
     let now = time::Instant::now();
-    let ctx = Context::<F>::generate(&model).expect("unable to generate context");
+    let ctx = Context::<F>::generate(&model, None).expect("unable to generate context");
     let setup_time = now.elapsed().as_millis();
     info!("STEP: {} took {}ms", CSV_SETUP, setup_time);
 
@@ -141,8 +146,7 @@ fn run(args: Args) -> anyhow::Result<()> {
         // Store the setup time in the bencher (without re-running setup)
         bencher.set(CSV_SETUP, setup_time);
 
-        let input_tensor = Tensor::<Element>::new(vec![input.len()], input);
-        let input_tensor = model.prepare_input(input_tensor);
+        let input_tensor = model.load_input_flat(input);
 
         info!("[+] Running inference");
         let trace = bencher.r(CSV_INFERENCE, || model.run(input_tensor.clone()));
@@ -181,8 +185,9 @@ fn run(args: Args) -> anyhow::Result<()> {
 }
 
 fn compare<A: PartialOrd, B: PartialOrd>(given_output: &[A], computed_output: &[B]) -> usize {
-    let a_max = argmax(given_output);
-    let b_max = argmax(computed_output);
+    let compare_size = std::cmp::min(given_output.len(), computed_output.len());
+    let a_max = argmax(&given_output[..compare_size]);
+    let b_max = argmax(&computed_output[..compare_size]);
     info!("Accuracy: {}", if a_max == b_max { 1 } else { 0 });
     if a_max == b_max { 1 } else { 0 }
 }
