@@ -1278,6 +1278,14 @@ where
         }
     }
 
+    // Pads a matrix `M` to `M'` so that matrix-vector multiplication with a flattened FFT-padded convolution output `X'`
+    /// matches the result of multiplying `M` with the original convolution output `X`.
+    ///
+    /// The real convolution output `X` has dimensions `(C, H, W)`. However, when using FFT-based convolution,
+    /// the output `X'` is padded to dimensions `(C', H', W')`, where `C'`, `H'`, and `W'` are the next power of 2
+    /// greater than or equal to `C`, `H`, and `W`, respectively.
+    /// Given a matrix `M` designed to multiply with the flattened `X`, this function pads `M` into `M'` such that
+    /// `M * X == M' * X'`, ensuring the result remains consistent despite the padding in `X'`.
     pub fn pad_matrix_to_ignore_garbage(
         &self,
         conv_shape_og: &[usize],
