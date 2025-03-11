@@ -269,7 +269,11 @@ impl ModelType {
         if is_cnn.is_ok() {
             return Ok(ModelType::CNN);
         }
-        bail!("Model is not a valid MLP or CNN architecture: not mlp: {} and not cnn: {}", is_mlp.unwrap_err(), is_cnn.unwrap_err())
+        bail!(
+            "Model is not a valid MLP or CNN architecture: not mlp: {} and not cnn: {}",
+            is_mlp.unwrap_err(),
+            is_cnn.unwrap_err()
+        )
     }
 }
 
@@ -307,6 +311,8 @@ pub fn load_model<Q: Quantizer<Element>>(filepath: &str) -> Result<Model> {
         assert!(input_shape.len() == 1);
     }
 
+    let mut ignore_garbage_pad: Option<(Vec<usize>, Vec<usize>)> = None;
+    let mut input_shape_og = input_shape.clone();
     let mut input_shape_padded = input_shape
         .iter()
         .map(|i| i.next_power_of_two())
@@ -339,6 +345,7 @@ pub fn load_model<Q: Quantizer<Element>>(filepath: &str) -> Result<Model> {
                 let bias =
                     fetch_weight_bias_as_tensor::<Q>("bias", node, &initializers, global_max_abs)?;
                 ensure!(bias.dims().len() == 1, "bias is not a vector");
+                input_shape_og = vec![weight.dims()[0]];
                 let nrows = weight.dims()[0];
                 ensure!(
                     bias.get_data().len() == nrows,
@@ -367,7 +374,20 @@ pub fn load_model<Q: Quantizer<Element>>(filepath: &str) -> Result<Model> {
                 let ncols = new_cols.next_power_of_two();
                 let nrows = weight.nrows_2d().next_power_of_two();
                 // Pad to power of two dimensions
-                weight.reshape_to_fit_inplace_2d(vec![nrows, ncols]);
+
+                if let Some(ref conv_shapes) = ignore_garbage_pad.clone() {
+                    let conv_shape_og = conv_shapes.0.clone();
+                    let conv_shape_pad = conv_shapes.1.clone();
+                    weight = weight.pad_matrix_to_ignore_garbage(
+                        &conv_shape_og,
+                        &conv_shape_pad,
+                        &vec![nrows, ncols],
+                    );
+                    ignore_garbage_pad = None;
+                } else {
+                    weight.reshape_to_fit_inplace_2d(vec![nrows, ncols]);
+                }
+
                 let bias = bias.pad_1d(nrows);
                 input_shape_padded = vec![nrows];
 
@@ -389,6 +409,7 @@ pub fn load_model<Q: Quantizer<Element>>(filepath: &str) -> Result<Model> {
                 let mut bias =
                     fetch_weight_bias_as_tensor::<Q>("bias", node, &initializers, global_max_abs)?;
 
+                input_shape_og = conv2d_shape(&input_shape_og, &weight.dims());
                 let weight_shape = weight.dims();
                 // Perform basic sanity checks on the tensor dimensions
                 let shape_test = check_filter(&weight_shape);
@@ -441,6 +462,7 @@ pub fn load_model<Q: Quantizer<Element>>(filepath: &str) -> Result<Model> {
                     .collect_vec();
             }
             op if DOWNSAMPLING.contains(&op) => {
+                input_shape_og = maxpool2d_shape(&input_shape_og);
                 // Make sure that input shape is already padded and is well formed
                 assert!(input_shape_padded.iter().all(|d| d.is_power_of_two()));
 
@@ -450,6 +472,9 @@ pub fn load_model<Q: Quantizer<Element>>(filepath: &str) -> Result<Model> {
                 input_shape_padded = maxpool2d_shape(&input_shape_padded);
             }
             op if RESHAPE.contains(&op) => {
+                ignore_garbage_pad = Some((input_shape_og.clone(), input_shape_padded.clone()));
+
+                input_shape_og = vec![input_shape_og.iter().product()];
                 assert!(input_shape_padded.iter().all(|d| d.is_power_of_two()));
                 input_shape_padded = vec![input_shape_padded.iter().product()];
                 // TODO: Pad dense layer to remove junk/garbage FFT values from Conv
@@ -457,10 +482,11 @@ pub fn load_model<Q: Quantizer<Element>>(filepath: &str) -> Result<Model> {
             _ => bail!("Unsupported operation"),
         };
         debug!(
-            "{}. {}'s output shape: {:?}",
+            "{}. {}'s output shape: {:?}. {:?}",
             i + 1,
             node.op_type.as_str(),
-            input_shape_padded
+            input_shape_padded,
+            input_shape_og
         );
     }
 
