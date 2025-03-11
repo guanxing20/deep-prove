@@ -1277,6 +1277,40 @@ where
             input_shape: vec![0],
         }
     }
+
+    pub fn pad_matrix_to_ignore_garbage(
+        &self,
+        conv_shape_og: &[usize],
+        conv_shape_pad: &[usize],
+        mat_shp_pad: &[usize],
+    ) -> Self {
+        assert!(
+            conv_shape_og.len() == 3 && conv_shape_pad.len() == 3,
+            "Expects conv2d shape output to be "
+        );
+        assert!(mat_shp_pad.len() == 2 && self.shape.len() == 2);
+
+        let mut new_data = vec![T::default(); mat_shp_pad.iter().product()];
+        let mat_shp_og = self.dims();
+        for row in 0..mat_shp_og[0] {
+            for channel in 0..conv_shape_og[0] {
+                for h_in in 0..conv_shape_og[1] {
+                    for w_in in 0..conv_shape_og[2] {
+                        let old_loc = channel * conv_shape_og[1] * conv_shape_og[2]
+                            + h_in * conv_shape_og[2]
+                            + w_in
+                            + row * mat_shp_og[1];
+                        let new_loc = channel * conv_shape_pad[1] * conv_shape_pad[2]
+                            + h_in * conv_shape_pad[2]
+                            + w_in
+                            + row * mat_shp_pad[1];
+                        new_data[new_loc] = self.data[old_loc]
+                    }
+                }
+            }
+        }
+        Tensor::new(mat_shp_pad.to_vec(), new_data)
+    }
 }
 
 impl<T> fmt::Display for Tensor<T>
@@ -1771,5 +1805,36 @@ mod test {
 
         let result = input.conv2d(&weights, &bias, 1);
         assert_eq!(result, expected, "Conv2D (Element) failed.");
+    }
+
+    #[test]
+    fn test_tensor_pad_matrix_to_ignore_garbage() {
+        let old_shape = vec![2usize, 3, 3];
+        let orows = 10usize;
+        let ocols = old_shape.iter().product::<usize>();
+
+        let new_shape = vec![3usize, 4, 4];
+        let nrows = 12usize;
+        let ncols = new_shape.iter().product::<usize>();
+
+        let og_t = Tensor::random(old_shape.clone());
+        let og_flat_t = og_t.flatten(); // This is equivalent to conv2d output (flattened)
+
+        let mut pad_t = og_t.clone();
+        pad_t.pad_to_shape(new_shape.clone());
+        let pad_flat_t = pad_t.flatten();
+
+        let og_mat = Tensor::random(vec![orows, ocols]); // This is equivalent to the first dense matrix
+        let og_result = og_mat.matvec(&og_flat_t);
+
+        let pad_mat =
+            og_mat.pad_matrix_to_ignore_garbage(&old_shape, &new_shape, &vec![nrows, ncols]);
+        let pad_result = pad_mat.matvec(&pad_flat_t);
+
+        assert_eq!(
+            og_result.get_data()[..orows],
+            pad_result.get_data()[..orows],
+            "Unable to get rid of garbage values from conv fft."
+        );
     }
 }
