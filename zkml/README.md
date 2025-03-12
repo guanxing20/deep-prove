@@ -19,22 +19,22 @@ This is a research driven project and the codebase is improving on a fast pace. 
 
 **Features**:
 
-[x] Prove inference of Dense layers
-[x] Prove inference of ReLU
-[x] Prove inference of MaxPool
-[x] Prove inference of Convolution
-[ ] Add support for more layers types (BatchNorm, Dropout, etc)
+- [x] Prove inference of Dense layers
+- [x] Prove inference of ReLU
+- [x] Prove inference of MaxPool
+- [x] Prove inference of Convolution
+- [ ] Add support for more layers types (BatchNorm, Dropout, etc)
 
 **Accuracy**:
-[x] Layer-wise requantization (a single scaling factor per layer)
-[ ] Allowing BIT_LEN to grow without loosing performance (lookup related)
-[ ] Add supports for row-wise quantization for each layer to provide better accuracy
+- [x] Layer-wise requantization (a single scaling factor per layer)
+- [ ] Allowing BIT_LEN to grow without loosing performance (lookup related)
+- [ ] Add supports for row-wise quantization for each layer to provide better accuracy
 
 **Performance**:
-[ ] Better lookup usage with more small tables 
-[ ] Implement simpler GKR for logup - no need to have a full generic GKR
-[ ] Improved parallelism for logup, gkr, sumchecks
-[ ] GPU support
+- [ ] Better lookup usage with more small tables
+- [ ] Implement simpler GKR for logup - no need to have a full generic GKR
+- [ ] Improved parallelism for logup, gkr, sumchecks
+- [ ] GPU support
 
 ## Benchmark
 
