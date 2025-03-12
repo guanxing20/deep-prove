@@ -5,13 +5,11 @@ Iris data classification
 ```bash
 cd scripts/MLP
 time python mlp.py
-# This generates model-mlp.onnx
 ```
 
 ### MLP
-LeNet MNIST classification
+LeNet cifar10 classification
 ```bash
 cd scripts/CNN
-time python lenet-mnist.py
-# This generates network-lenet.onnx
+time python cifar-cnn.py
 ```
