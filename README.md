@@ -21,7 +21,7 @@ Dense 4M: This runs a multiple dense layers for a total of 4 million parameters.
 
 ## 📜 Licensing
 
-- **zkml folder**: Licensed under the Lagrange [LICENSE](https://github.com/Lagrange-Labs/deep-prove/blob/master/zkml/LICENSE), unless otherwise specified.
+- **zkml folder**: Licensed under the [Lagrange License](https://github.com/Lagrange-Labs/deep-prove/blob/master/zkml/LICENSE), unless otherwise specified.
 - **Rest of the Code**: Licensed under Apache 2.0 + MIT, as per the original repository.
 
 ## 🌟 Use Cases
