@@ -21,7 +21,7 @@ Dense 4M: This runs a multiple dense layers for a total of 4 million parameters.
 
 ## 📜 Licensing
 
-- **zkml folder**: Licensed under a special Lagrange license.
+- **zkml folder**: Licensed under a special Lagrange license, unless otherwise specified.
 - **Rest of the Code**: Licensed under Apache + MIT, as per the original repository.
 
 ## 🌟 Use Cases
