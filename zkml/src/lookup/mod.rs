@@ -34,6 +34,7 @@ use transcript::Transcript;
 
 pub mod gkr_circuits;
 pub mod logup;
+pub mod logup_gkr;
 pub mod utils;
 
 pub use logup::LogUp;
