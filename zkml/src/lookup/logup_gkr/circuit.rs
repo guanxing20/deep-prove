@@ -4,13 +4,9 @@ use std::sync::Arc;
 
 use ark_std::Zero;
 use ff_ext::ExtensionField;
-use gkr::izip_parallizable;
+
 use itertools::izip;
-use multilinear_extensions::{
-    mle::{DenseMultilinearExtension, MultilinearExtension},
-    util::ceil_log2,
-    virtual_poly::{ArcMultilinearExtension, VirtualPolynomial},
-};
+use multilinear_extensions::{mle::DenseMultilinearExtension, util::ceil_log2};
 
 use super::structs::Fraction;
 
@@ -67,6 +63,7 @@ impl<E: ExtensionField> LogUpLayer<E> {
                 numerator,
                 denominator,
             } => {
+                // Split the numerator and denominator at the halfway point and sum the fractions
                 let (num1, num2) = numerator.split_at(half_layer_size);
                 let (denom1, denom2) = denominator.split_at(half_layer_size);
                 let (next_numerator, next_denominator): (Vec<E>, Vec<E>) =
@@ -81,6 +78,7 @@ impl<E: ExtensionField> LogUpLayer<E> {
                 })
             }
             LogUpLayer::InitialLookup { denominator } => {
+                // In this case we only need to split the denominator polynomial in half as the numerators are all -1
                 let (denom1, denom2) = denominator.split_at(half_layer_size);
                 let (next_numerator, next_denominator): (Vec<E>, Vec<E>) = izip!(denom1, denom2)
                     .map(|(d1, d2)| {
@@ -128,6 +126,9 @@ impl<E: ExtensionField> LogUpLayer<E> {
         }
     }
 
+    /// Gets the Densemultlinear extensions for this [`LogUpLayer`] in the order
+    /// numerator low part, numerator high part, denominator low part, denominator high part.
+    /// In the initial lookup case it is just the two denominator MLEs.
     pub fn get_mles(&self) -> Vec<Arc<DenseMultilinearExtension<E>>> {
         let num_vars = self.num_vars();
         let half_layer_size = 1 << num_vars;

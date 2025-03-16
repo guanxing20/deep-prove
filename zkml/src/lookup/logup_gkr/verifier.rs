@@ -5,9 +5,12 @@ use multilinear_extensions::virtual_poly::VPAuxInfo;
 use sumcheck::structs::IOPVerifierState;
 use transcript::Transcript;
 
-use crate::{Claim, commit::identity_eval};
+use crate::commit::identity_eval;
 
-use super::structs::LogUpProof;
+use super::{
+    error::LogUpError,
+    structs::{LogUpProof, LogUpVerifierClaim, ProofType},
+};
 
 pub fn verify_logup_proof<E: ExtensionField, T: Transcript<E>>(
     proof: &LogUpProof<E>,
@@ -15,7 +18,7 @@ pub fn verify_logup_proof<E: ExtensionField, T: Transcript<E>>(
     constant_challenge: E,
     column_separation_challenge: E,
     transcript: &mut T,
-) -> Vec<Claim<E>> {
+) -> Result<LogUpVerifierClaim<E>, LogUpError> {
     // Append the number of instances along with their output evals to the transcript and then squeeze our first alpha and lambda
     transcript.append_field_element(&E::BaseField::from(num_instances as u64));
     proof.append_to_transcript(transcript);
@@ -95,7 +98,12 @@ pub fn verify_logup_proof<E: ExtensionField, T: Transcript<E>>(
                     )
                 },
             );
-            assert_eq!(sumcheck_claim, sumcheck_subclaim.expected_evaluation);
+            if sumcheck_claim != sumcheck_subclaim.expected_evaluation {
+                return Err(LogUpError::VerifierError(format!(
+                    "Calculated sumcheck claim: {:?} does not equal this rounds sumcheck output claim: {:?} at round: {}",
+                    sumcheck_claim, sumcheck_subclaim.expected_evaluation, i
+                )));
+            }
             next_claim
         } else {
             let (next_claim, _, sumcheck_claim, _) = round_evaluations.chunks(2).fold(
@@ -113,7 +121,12 @@ pub fn verify_logup_proof<E: ExtensionField, T: Transcript<E>>(
                     )
                 },
             );
-            assert_eq!(sumcheck_claim, sumcheck_subclaim.expected_evaluation);
+            if sumcheck_claim != sumcheck_subclaim.expected_evaluation {
+                return Err(LogUpError::VerifierError(format!(
+                    "Calculated sumcheck claim: {:?} does not equal this rounds sumcheck output claim: {:?} at round: {}",
+                    sumcheck_claim, sumcheck_subclaim.expected_evaluation, i
+                )));
+            }
             next_claim
         };
 
@@ -128,13 +141,61 @@ pub fn verify_logup_proof<E: ExtensionField, T: Transcript<E>>(
         sumcheck_point.push(batching_challenge);
     }
 
-    let claims_per_instance = proof.output_claims().len() / num_instances;
+    let calculated_eval = calculate_final_eval(
+        proof,
+        constant_challenge,
+        column_separation_challenge,
+        alpha,
+        lambda,
+        num_instances,
+    );
 
-    let calculated_eval = proof
-        .output_claims()
-        .chunks(claims_per_instance)
-        .fold((E::ZERO, E::ONE), |(acc, alpha_comb), chunk| {
-            let chunk_eval = chunk
+    if calculated_eval != current_claim {
+        return Err(LogUpError::VerifierError(format!(
+            "Calculated final value: {:?} does not match final sumcheck output: {:?}",
+            calculated_eval, current_claim
+        )));
+    }
+
+    Ok(LogUpVerifierClaim::<E>::new(
+        proof.output_claims().to_vec(),
+        numerators,
+        denominators,
+    ))
+}
+
+fn calculate_final_eval<E: ExtensionField>(
+    proof: &LogUpProof<E>,
+    constant_challenge: E,
+    column_separation_challenge: E,
+    alpha: E,
+    lambda: E,
+    num_instances: usize,
+) -> E {
+    match proof.proof_type() {
+        ProofType::Lookup => {
+            let claims_per_instance = proof.output_claims().len() / num_instances;
+
+            proof
+                .output_claims()
+                .chunks(claims_per_instance)
+                .fold((E::ZERO, E::ONE), |(acc, alpha_comb), chunk| {
+                    let chunk_eval = chunk
+                        .iter()
+                        .fold((constant_challenge, E::ONE), |(acc, csc_comb), cl| {
+                            (
+                                acc + cl.eval * csc_comb,
+                                csc_comb * column_separation_challenge,
+                            )
+                        })
+                        .0;
+                    (acc + chunk_eval * alpha_comb, alpha_comb * alpha)
+                })
+                .0
+        }
+        ProofType::Table => {
+            // The first output claim is the multiplicity poly which is the numerator
+            let columns_eval = proof.output_claims()[1..]
                 .iter()
                 .fold((constant_challenge, E::ONE), |(acc, csc_comb), cl| {
                     (
@@ -143,10 +204,8 @@ pub fn verify_logup_proof<E: ExtensionField, T: Transcript<E>>(
                     )
                 })
                 .0;
-            (acc + chunk_eval * alpha_comb, alpha_comb * alpha)
-        })
-        .0;
 
-    assert_eq!(calculated_eval, current_claim);
-    proof.output_claims().to_vec()
+            proof.output_claims()[0].eval + lambda * columns_eval
+        }
+    }
 }

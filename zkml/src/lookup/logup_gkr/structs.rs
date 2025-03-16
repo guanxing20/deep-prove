@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use sumcheck::structs::IOPProof;
 use transcript::Transcript;
 
-use super::circuit::LogUpCircuit;
+use super::{circuit::LogUpCircuit, error::LogUpError};
 use crate::Claim;
 use rayon::prelude::*;
 
@@ -123,81 +123,81 @@ impl<F: ExtensionField> Fraction<F> {
         numerator: F::ONE,
         denominator: F::ONE,
     };
-
+    /// Checks whether this is the zero element.
     pub fn is_zero(&self) -> bool {
         (self.numerator == F::ZERO) && (self.denominator != F::ZERO)
     }
 }
 
 #[derive(Clone, Debug)]
-/// Struct that represents a lookup variant input to the LogUp GKR protocol
-pub struct LookupInput<E: ExtensionField> {
-    column_evals: Vec<Vec<E::BaseField>>,
-    constant_challenge: E,
-    column_separation_challenge: E,
-    num_columns_per_instance: usize,
-}
-
-impl<E: ExtensionField> LookupInput<E> {
-    /// Creates a new instance of [`LookupInput`]
-    pub fn new(
+/// Enum defining inputs to LogUp proofs.
+/// We split lookup inputs and table inputs as different optimisations can be made in each case. Additionally it allows us to only do work proportional to the table size in the table proving case
+/// which is useful when multiple different model layers use the same table.
+pub enum LogUpInput<E: ExtensionField> {
+    /// Lookup variant can have multiple instances in one [`LogUpInput::Lookup`], `columns_per_instance` is used to work out how many batches we need to prove.
+    Lookup {
         column_evals: Vec<Vec<E::BaseField>>,
         constant_challenge: E,
         column_separation_challenge: E,
-        num_columns_per_instance: usize,
-    ) -> LookupInput<E> {
-        LookupInput {
-            column_evals,
-            constant_challenge,
-            column_separation_challenge,
-            num_columns_per_instance,
-        }
-    }
-
-    /// Produces the [`LogUpCircuit`]s from this instance
-    pub fn make_circuits(&self) -> Vec<LogUpCircuit<E>> {
-        self.column_evals
-            .par_chunks(self.num_columns_per_instance)
-            .map(|column_evals| {
-                LogUpCircuit::<E>::new_lookup_circuit(
-                    column_evals,
-                    self.constant_challenge,
-                    self.column_separation_challenge,
-                )
-            })
-            .collect()
-    }
-
-    /// Get the base mles
-    pub fn base_mles(&self) -> Vec<DenseMultilinearExtension<E>> {
-        self.column_evals
-            .iter()
-            .map(|evaluations| {
-                let num_vars = evaluations.len().ilog2() as usize;
-                DenseMultilinearExtension::<E>::from_evaluations_slice(num_vars, evaluations)
-            })
-            .collect()
-    }
-}
-
-#[derive(Clone, Debug)]
-/// Struct that represents a table variant input to the LogUp GKR protocol
-pub struct TableInput<E: ExtensionField> {
-    column_evals: Vec<Vec<E::BaseField>>,
-    multiplicities: Vec<E::BaseField>,
-    constant_challenge: E,
-    column_separation_challenge: E,
-}
-
-impl<E: ExtensionField> TableInput<E> {
-    /// Create a new [`TableInput`]
-    pub fn new(
+        columns_per_instance: usize,
+    },
+    /// Input for a Table proof.
+    Table {
         column_evals: Vec<Vec<E::BaseField>>,
         multiplicities: Vec<E::BaseField>,
         constant_challenge: E,
         column_separation_challenge: E,
-    ) -> TableInput<E> {
-        TableInput {
+    },
+}
+
+impl<E: ExtensionField> LogUpInput<E> {
+    pub fn new_lookup(
+        column_evals: Vec<Vec<E::BaseField>>,
+        constant_challenge: E,
+        column_separation_challenge: E,
+        columns_per_instance: usize,
+    ) -> Result<LogUpInput<E>, LogUpError> {
+        if column_evals.is_empty() {
+            return Err(LogUpError::ParamterError(
+                "No column evals were provided for Lookup input".to_string(),
+            ));
+        }
+
+        // Unwrap is safe
+        let first_evals_len = column_evals.first().unwrap().len();
+
+        if !first_evals_len.is_power_of_two() {
+            return Err(LogUpError::PolynomialError(format!(
+                "Need a power of two number of evaluations got: {}",
+                first_evals_len
+            )));
+        }
+
+        column_evals.iter().skip(1).try_for_each(|evals| {
+            if evals.len() != first_evals_len {
+                Err(LogUpError::ParamterError(
+                    "All sets of evaluations should be the same length".to_string(),
+                ))
+            } else {
+                Ok(())
+            }
+        })?;
+
+        Ok(LogUpInput::Lookup {
+            column_evals,
+            constant_challenge,
+            column_separation_challenge,
+            columns_per_instance,
+        })
+    }
+
+    pub fn new_table(
+        column_evals: Vec<Vec<E::BaseField>>,
+        multiplicities: Vec<E::BaseField>,
+        constant_challenge: E,
+        column_separation_challenge: E,
+    ) -> LogUpInput<E> {
+        LogUpInput::Table {
             column_evals,
             multiplicities,
             constant_challenge,
@@ -205,26 +205,67 @@ impl<E: ExtensionField> TableInput<E> {
         }
     }
 
-    /// Produces the [`LogUpCircuit`]s from this instance
-    pub fn make_circuit(&self) -> LogUpCircuit<E> {
-        LogUpCircuit::<E>::new_table_circuit(
-            &self.column_evals,
-            &self.multiplicities,
-            self.constant_challenge,
-            self.column_separation_challenge,
-        )
+    pub fn make_circuits(&self) -> Vec<LogUpCircuit<E>> {
+        match self {
+            LogUpInput::Lookup {
+                column_evals,
+                constant_challenge,
+                column_separation_challenge,
+                columns_per_instance,
+            } => column_evals
+                .par_chunks(*columns_per_instance)
+                .map(|column_evals| {
+                    LogUpCircuit::<E>::new_lookup_circuit(
+                        column_evals,
+                        *constant_challenge,
+                        *column_separation_challenge,
+                    )
+                })
+                .collect(),
+            LogUpInput::Table {
+                column_evals,
+                multiplicities,
+                constant_challenge,
+                column_separation_challenge,
+            } => {
+                vec![LogUpCircuit::<E>::new_table_circuit(
+                    column_evals,
+                    multiplicities,
+                    *constant_challenge,
+                    *column_separation_challenge,
+                )]
+            }
+        }
     }
 
-    /// Returns the underlying MLEs in the order `multiplicities`, `columns`
     pub fn base_mles(&self) -> Vec<DenseMultilinearExtension<E>> {
-        std::iter::once(&self.multiplicities)
-            .chain(self.column_evals.iter())
-            .map(|evaluations| {
-                let num_vars = evaluations.len().ilog2() as usize;
-                DenseMultilinearExtension::<E>::from_evaluations_slice(num_vars, evaluations)
-            })
-            .collect()
+        match self {
+            LogUpInput::Lookup { column_evals, .. } => column_evals
+                .iter()
+                .map(|evaluations| {
+                    let num_vars = evaluations.len().ilog2() as usize;
+                    DenseMultilinearExtension::<E>::from_evaluations_slice(num_vars, evaluations)
+                })
+                .collect(),
+            LogUpInput::Table {
+                column_evals,
+                multiplicities,
+                ..
+            } => std::iter::once(multiplicities)
+                .chain(column_evals.iter())
+                .map(|evaluations| {
+                    let num_vars = evaluations.len().ilog2() as usize;
+                    DenseMultilinearExtension::<E>::from_evaluations_slice(num_vars, evaluations)
+                })
+                .collect(),
+        }
     }
+}
+
+#[derive(Clone, Debug, Copy)]
+pub enum ProofType {
+    Lookup,
+    Table,
 }
 
 #[derive(Clone, Debug)]
@@ -233,6 +274,7 @@ pub struct LogUpProof<E: ExtensionField> {
     pub round_evaluations: Vec<Vec<E>>,
     pub output_claims: Vec<Claim<E>>,
     pub circuit_outputs: Vec<Vec<E>>,
+    pub proof_type: ProofType,
 }
 
 impl<E: ExtensionField> LogUpProof<E> {
@@ -266,5 +308,42 @@ impl<E: ExtensionField> LogUpProof<E> {
 
     pub fn output_claims(&self) -> &[Claim<E>] {
         &self.output_claims
+    }
+
+    pub fn proof_type(&self) -> ProofType {
+        self.proof_type
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct LogUpVerifierClaim<E: ExtensionField> {
+    claims: Vec<Claim<E>>,
+    numerators: Vec<E>,
+    denominators: Vec<E>,
+}
+
+impl<E: ExtensionField> LogUpVerifierClaim<E> {
+    pub fn new(
+        claims: Vec<Claim<E>>,
+        numerators: Vec<E>,
+        denominators: Vec<E>,
+    ) -> LogUpVerifierClaim<E> {
+        LogUpVerifierClaim {
+            claims,
+            numerators,
+            denominators,
+        }
+    }
+
+    pub fn claims(&self) -> &[Claim<E>] {
+        &self.claims
+    }
+
+    pub fn numerators(&self) -> &[E] {
+        &self.numerators
+    }
+
+    pub fn denominators(&self) -> &[E] {
+        &self.denominators
     }
 }

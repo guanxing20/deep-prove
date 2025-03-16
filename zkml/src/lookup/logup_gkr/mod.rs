@@ -1,7 +1,8 @@
-mod circuit;
-mod prover;
-mod structs;
-mod verifier;
+pub mod circuit;
+pub mod error;
+pub mod prover;
+pub mod structs;
+pub mod verifier;
 
 #[cfg(test)]
 mod tests {
@@ -14,7 +15,7 @@ mod tests {
     use crate::{
         default_transcript,
         lookup::logup_gkr::{
-            prover::batch_prove_lookups, structs::LookupInput, verifier::verify_logup_proof,
+            prover::batch_prove, structs::LogUpInput, verifier::verify_logup_proof,
         },
         quantization::Fieldizer,
         testing::random_vector,
@@ -44,16 +45,17 @@ mod tests {
             let column_separation_challenge = GoldilocksExt2::random(&mut rng);
 
             let column_evals = vec![column.clone(), column_2.clone()];
-            let lookup_input = LookupInput::<GoldilocksExt2>::new(
+            let lookup_input = LogUpInput::<GoldilocksExt2>::new_lookup(
                 column_evals.clone(),
                 constant_challenge,
                 column_separation_challenge,
                 1,
-            );
+            )
+            .unwrap();
 
             let mut prover_transcript = default_transcript::<GoldilocksExt2>();
             let now = std::time::Instant::now();
-            let proof = batch_prove_lookups(&lookup_input, &mut prover_transcript);
+            let proof = batch_prove(&lookup_input, &mut prover_transcript).unwrap();
             println!("Elapsed time proving: {:?}", now.elapsed());
 
             let mut verifier_transcript = default_transcript::<GoldilocksExt2>();
@@ -63,9 +65,11 @@ mod tests {
                 constant_challenge,
                 column_separation_challenge,
                 &mut verifier_transcript,
-            );
+            )
+            .unwrap();
 
             claims
+                .claims()
                 .iter()
                 .zip(column_evals.into_iter())
                 .for_each(|(claim, evaluations)| {

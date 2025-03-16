@@ -13,16 +13,19 @@ use transcript::Transcript;
 
 use crate::{Claim, commit::compute_betas_eval, lookup::logup_gkr::circuit::LogUpLayer};
 
-use super::structs::{LogUpProof, LookupInput, TableInput};
+use super::{
+    error::LogUpError,
+    structs::{LogUpInput, LogUpProof, ProofType},
+};
 
 /// Function to batch prove a collection of [`LookupInput`]s
 /// TODO: add support to batch in claims about the output of this in the final step of the GKR circuit.
-pub fn batch_prove_lookups<E: ExtensionField, T: Transcript<E>>(
-    lookup_input: &LookupInput<E>,
+pub fn batch_prove<E: ExtensionField, T: Transcript<E>>(
+    input: &LogUpInput<E>,
     transcript: &mut T,
-) -> LogUpProof<E> {
+) -> Result<LogUpProof<E>, LogUpError> {
     // Work out how many instances we are dealing with
-    let circuits = lookup_input.make_circuits();
+    let circuits = input.make_circuits();
     let num_instances = circuits.len();
 
     // Work out the total number of layers and the number of layers per instance.
@@ -83,21 +86,23 @@ pub fn batch_prove_lookups<E: ExtensionField, T: Transcript<E>>(
         // Append the current claim to the transcript
         transcript.append_field_element_ext(&current_claim);
 
-        // Compute the eq_evals if we aren't in the first round
+        // Compute the eq_evals
         let eq_poly: ArcMultilinearExtension<E> =
             Arc::new(compute_betas_eval(&sumcheck_point).into_mle());
 
-        // Then we progress through the `current_claims` adding to the virtual polynomial if we have something to prove
+        // Then add all the terms to the sumcheck virtual polynomial
         let mut vp = VirtualPolynomial::<E>::new(current_layer_vars);
 
         let alpha_powers = std::iter::successors(Some(E::ONE), |prev| Some(*prev * alpha))
             .take(layer_iters.len())
             .collect::<Vec<E>>();
 
-        izip!(layer_iters.iter_mut(), alpha_powers).for_each(|(iter, a)| {
-            let layer = iter.next().unwrap();
+        izip!(layer_iters.iter_mut(), alpha_powers).try_for_each(|(iter, a)| {
+            let layer = iter.next().ok_or(LogUpError::ProvingError(
+                "One of the circuits was not the same size as the others".to_string(),
+            ))?;
             let mles = layer.get_mles();
-            if let LogUpLayer::Generic { .. } = layer {
+            if let LogUpLayer::Generic { .. } | LogUpLayer::InitialTable { .. } = layer {
                 vp.add_mle_list(vec![eq_poly.clone(), mles[0].clone(), mles[3].clone()], a);
                 vp.add_mle_list(vec![eq_poly.clone(), mles[1].clone(), mles[2].clone()], a);
                 vp.add_mle_list(
@@ -105,6 +110,7 @@ pub fn batch_prove_lookups<E: ExtensionField, T: Transcript<E>>(
                     a * lambda,
                 );
             } else {
+                // Here we are in the initial lookup case so we have no numerator polynomials (all the numerator values are -1)
                 vp.add_mle_list(vec![eq_poly.clone(), mles[1].clone()], -a);
                 vp.add_mle_list(vec![eq_poly.clone(), mles[0].clone()], -a);
                 vp.add_mle_list(
@@ -112,7 +118,8 @@ pub fn batch_prove_lookups<E: ExtensionField, T: Transcript<E>>(
                     a * lambda,
                 );
             }
-        });
+            Result::<(), LogUpError>::Ok(())
+        })?;
 
         // Run the sumcheck for this round
         #[allow(deprecated)]
@@ -137,6 +144,7 @@ pub fn batch_prove_lookups<E: ExtensionField, T: Transcript<E>>(
         // Append the sumcheck proof to the list of proofs
         sumcheck_proofs.push(proof);
 
+        // This step works out the initial claim for the next round of the protocol
         current_claim = if current_layer_vars != total_layers {
             evals
                 .chunks(4)
@@ -151,6 +159,50 @@ pub fn batch_prove_lookups<E: ExtensionField, T: Transcript<E>>(
                 })
                 .0
         } else {
+            final_round_claim(input, evals, batching_challenge, alpha, lambda)
+        };
+        // Append the claimed evaluations from the end of this round to the proof.
+        round_evaluations.push(evals.to_vec());
+    }
+
+    // We take the final sumcheck point and produce a list of claims about all the columns looked up/ in the table and
+    // also the multiplicity polynomial in the table case. These will be used by the verifier to check the final sumcheck proofs claim.
+    // Then each of these claims should be verified either by another layer proof or via commitment opening proof.
+    let output_claims = input
+        .base_mles()
+        .iter()
+        .map(|mle| Claim::<E> {
+            point: sumcheck_point.clone(),
+            eval: mle.evaluate(&sumcheck_point),
+        })
+        .collect::<Vec<Claim<E>>>();
+
+    // The proof type
+    let proof_type = match input {
+        LogUpInput::Lookup { .. } => ProofType::Lookup,
+        LogUpInput::Table { .. } => ProofType::Table,
+    };
+
+    Ok(LogUpProof::<E> {
+        sumcheck_proofs,
+        round_evaluations,
+        output_claims,
+        circuit_outputs,
+        proof_type,
+    })
+}
+
+/// Function to compute the final round claim depending on whether this is a table proof or a lookup proof.
+fn final_round_claim<E: ExtensionField>(
+    input: &LogUpInput<E>,
+    evals: &[E],
+    batching_challenge: E,
+    alpha: E,
+    lambda: E,
+) -> E {
+    match input {
+        LogUpInput::Lookup { .. } => {
+            // In this case there is only one polynomial per instance, the denominator, so we batch together its low and high parts
             evals
                 .chunks(2)
                 .fold((E::ZERO, E::ONE), |(acc, alpha_comb), e| {
@@ -160,138 +212,21 @@ pub fn batch_prove_lookups<E: ExtensionField, T: Transcript<E>>(
                     )
                 })
                 .0
-        };
-
-        round_evaluations.push(evals.to_vec());
-    }
-
-    let output_claims = lookup_input
-        .base_mles()
-        .iter()
-        .map(|mle| Claim::<E> {
-            point: sumcheck_point.clone(),
-            eval: mle.evaluate(&sumcheck_point),
-        })
-        .collect::<Vec<Claim<E>>>();
-
-    LogUpProof::<E> {
-        sumcheck_proofs,
-        round_evaluations,
-        output_claims,
-        circuit_outputs,
-    }
-}
-
-/// Function to batch prove a collection of [`LogUpCircuit`]s
-pub fn prove_table<E: ExtensionField, T: Transcript<E>>(
-    table_input: &TableInput<E>,
-    transcript: &mut T,
-) -> LogUpProof<E> {
-    // Create the circuit
-    let circuit = table_input.make_circuit();
-
-    // Work out the total number of layers and the number of layers per instance.
-    let total_layers = circuit.num_vars();
-    let circuit_outputs = circuit.outputs();
-
-    // When proving we want to work from the top down so we convert each of the circuits into an iterator over its layers in reverse order.
-    // We also skip the first layer after reversing as this is just the output claims.
-    let mut layer_iter = circuit.layers().into_iter().rev().skip(1);
-
-    // Append the number of instances along with their output evals to the transcript and then squeeze our first alpha and lambda
-
-    transcript.append_field_element_exts(&circuit_outputs);
-
-    let batching_challenge = transcript
-        .get_and_append_challenge(b"inital_batching")
-        .elements;
-
-    let mut lambda = transcript
-        .get_and_append_challenge(b"initial_lambda")
-        .elements;
-
-    let mut current_claim = batching_challenge * (circuit_outputs[1] - circuit_outputs[0])
-        + circuit_outputs[0]
-        + lambda
-            * (batching_challenge * (circuit_outputs[3] - circuit_outputs[2]) + circuit_outputs[2]);
-
-    // The initial sumcheck point is just the batching challenge
-    let mut sumcheck_point: Vec<E> = vec![batching_challenge];
-
-    let mut sumcheck_proofs: Vec<IOPProof<E>> = vec![];
-
-    let mut round_evaluations: Vec<Vec<E>> = vec![];
-
-    for current_layer_vars in 2..total_layers {
-        // Append the current claim to the transcript
-        transcript.append_field_element_ext(&current_claim);
-
-        // Compute the eq_evals if we aren't in the first round
-        let eq_poly: ArcMultilinearExtension<E> =
-            Arc::new(compute_betas_eval(&sumcheck_point).into_mle());
-
-        // Then we progress through the `current_claims` adding to the virtual polynomial if we have something to prove
-        let mut vp = VirtualPolynomial::<E>::new(current_layer_vars);
-
-        let layer = layer_iter.next().unwrap();
-        let mles = layer.get_mles();
-
-        vp.add_mle_list(
-            vec![eq_poly.clone(), mles[0].clone(), mles[3].clone()],
-            E::ONE,
-        );
-        vp.add_mle_list(
-            vec![eq_poly.clone(), mles[1].clone(), mles[2].clone()],
-            E::ONE,
-        );
-        vp.add_mle_list(
-            vec![eq_poly.clone(), mles[2].clone(), mles[3].clone()],
-            lambda,
-        );
-
-        // Run the sumcheck for this round
-        #[allow(deprecated)]
-        let (proof, state) = IOPProverState::<E>::prove_parallel(vp, transcript);
-
-        // Update the sumcheck proof
-        sumcheck_point = proof.point.clone();
-
-        // The first one is always the eq_poly eval
-        let evals = &state.get_mle_final_evaluations()[1..];
-
-        // Squeeze the challenges to combine everything into a single sumcheck
-        let batching_challenge = transcript
-            .get_and_append_challenge(b"logup_batching")
-            .elements;
-
-        lambda = transcript
-            .get_and_append_challenge(b"logup_lambda")
-            .elements;
-        // Append the batching challenge to the proof point
-        sumcheck_point.push(batching_challenge);
-        // Append the sumcheck proof to the list of proofs
-        sumcheck_proofs.push(proof);
-
-        current_claim = batching_challenge * (evals[2] - evals[0])
-            + evals[0]
-            + lambda * (batching_challenge * (evals[1] - evals[2]) + evals[2]);
-
-        round_evaluations.push(evals.to_vec());
-    }
-
-    let output_claims = table_input
-        .base_mles()
-        .iter()
-        .map(|mle| Claim::<E> {
-            point: sumcheck_point.clone(),
-            eval: mle.evaluate(&sumcheck_point),
-        })
-        .collect::<Vec<Claim<E>>>();
-
-    LogUpProof::<E> {
-        sumcheck_proofs,
-        round_evaluations,
-        output_claims,
-        circuit_outputs: vec![circuit_outputs],
+        }
+        LogUpInput::Table { .. } => {
+            // Here we have two polynomials, the numerator and denominator, so we batch their respective low and high parts together
+            evals
+                .chunks(4)
+                .fold((E::ZERO, E::ONE), |(acc, alpha_comb), e| {
+                    (
+                        acc + alpha_comb
+                            * (batching_challenge * (e[2] - e[0])
+                                + e[0]
+                                + lambda * (batching_challenge * (e[1] - e[3]) + e[3])),
+                        alpha_comb * alpha,
+                    )
+                })
+                .0
+        }
     }
 }
