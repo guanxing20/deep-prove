@@ -274,7 +274,15 @@ where
 
     // 2. Verify the sumcheck proof
     let poly_aux = VPAuxInfo::<E>::from_mle_list_dimensions(&[vec![info.num_vars; 5]]);
-    let subclaim = IOPVerifierState::<E>::verify(E::ZERO, &proof.sumcheck, &poly_aux, t);
+    let batching_challenge = t.get_and_append_challenge(b"batch_pooling").elements;
+    let initial_value = verifier_claims
+        .claims()
+        .iter()
+        .fold((E::ZERO, batching_challenge), |(acc, comb), claim| {
+            (acc + claim.eval * comb, comb * batching_challenge)
+        })
+        .0;
+    let subclaim = IOPVerifierState::<E>::verify(initial_value, &proof.sumcheck, &poly_aux, t);
 
     // Run the same poly verifier for the output claims
     let sp_ctx = same_poly::Context::<E>::new(info.num_vars);
@@ -287,16 +295,12 @@ where
         .iter()
         .try_for_each(|claim| sp_verifier.add_claim(claim.clone()))?;
 
-    let [input_proof, output_proof] = &proof.io_accumulation;
+    let output_proof = &proof.io_accumulation;
 
     let commit_claim = sp_verifier.verify(output_proof, t)?;
 
     // Add the result of the same poly verifier to the commitment verifier.
     witness_verifier.add_claim(info.poly_id, commit_claim)?;
-
-    // Now we do the same poly verifiaction claims for the input poly
-    let sp_ctx = same_poly::Context::<E>::new(info.num_vars + 2);
-    let mut sp_verifier = same_poly::Verifier::<E>::new(&sp_ctx);
 
     // Challenegs used to batch input poly claims together and link them with zerocheck and lookup verification output
     let [r1, r2] = [t.get_and_append_challenge(b"input_batching").elements; 2];
@@ -322,50 +326,31 @@ where
     ]
     .concat();
 
-    let logup_point = &verifier_claims.claims()[0].point;
-    let lookup_point = [
-        &[r1],
-        &logup_point[..proof.variable_gap],
-        &[r2],
-        &logup_point[proof.variable_gap..],
-    ]
-    .concat();
+    let zerocheck_input_eval = izip!(proof.zerocheck_evals.iter(), eval_multiplicands.iter())
+        .fold(E::ZERO, |zerocheck_acc, (&ze, &me)| {
+            zerocheck_acc + (output_claims[0].eval - ze) * me
+        });
 
-    let (zerocheck_input_eval, lookup_input_eval) = izip!(
-        proof.zerocheck_evals.iter(),
-        verifier_claims.claims().iter(),
-        eval_multiplicands.iter()
-    )
-    .fold(
-        (E::ZERO, E::ZERO),
-        |(zerocheck_acc, lookup_acc), (&ze, le, &me)| {
-            (
-                zerocheck_acc + (output_claims[0].eval - ze) * me,
-                lookup_acc + (output_claims[1].eval - le.eval) * me,
-            )
-        },
-    );
-
-    sp_verifier.add_claim(Claim {
+    let out_claim = Claim {
         point: zerocheck_point,
         eval: zerocheck_input_eval,
-    })?;
-    sp_verifier.add_claim(Claim {
-        point: lookup_point,
-        eval: lookup_input_eval,
-    })?;
-
-    // Run the same poly verifier, the output claim from this is what we pass to the next step of verification.
-    let out_claim = sp_verifier.verify(input_proof, t)?;
+    };
 
     // Now we check consistency between the lookup/sumcheck proof claims and the claims passed to the same poly verifiers.
-    let beta_eval = identity_eval(&output_claims[0].point, &output_claims[1].point);
+    let beta_eval = identity_eval(&output_claims[0].point, &verifier_claims.claims()[0].point);
 
     let computed_zerocheck_claim = proof
         .zerocheck_evals
         .iter()
         .chain(std::iter::once(&beta_eval))
-        .product::<E>();
+        .product::<E>()
+        + proof
+            .zerocheck_evals
+            .iter()
+            .fold((E::ZERO, batching_challenge), |(acc, comb), v| {
+                (acc + *v * beta_eval * comb, comb * batching_challenge)
+            })
+            .0;
 
     ensure!(
         computed_zerocheck_claim == subclaim.expected_evaluation,

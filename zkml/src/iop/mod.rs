@@ -138,7 +138,7 @@ where
     /// The lookup proof showing that the diff is always in the correct range
     lookup: LogUpProof<E>,
     /// proof for the accumulation of the claim from the zerocheck + claim from lookup for the same poly for both input and output
-    io_accumulation: [same_poly::Proof<E>; 2],
+    io_accumulation: same_poly::Proof<E>,
     /// The claims that are accumulated for the output of this step
     output_claims: Vec<Claim<E>>,
     /// The output evaluations of the diff polys produced by the zerocheck

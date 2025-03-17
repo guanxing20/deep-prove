@@ -293,12 +293,30 @@ where
         let lookup_point = &logup_proof.output_claims()[0].point;
 
         // Comput the identity poly
+        let batch_challenge = self
+            .transcript
+            .get_and_append_challenge(b"batch_pooling")
+            .elements;
+
         let beta_eval = compute_betas_eval(&lookup_point);
         let beta_poly: ArcDenseMultilinearExtension<E> =
             DenseMultilinearExtension::<E>::from_evaluations_ext_vec(info.num_vars, beta_eval)
                 .into();
+        let mut challenge_combiner = batch_challenge;
+        let lookup_parts = diff_polys
+            .iter()
+            .map(|diff| {
+                let out = (vec![diff.clone(), beta_poly.clone()], challenge_combiner);
+                challenge_combiner *= batch_challenge;
+                out
+            })
+            .collect::<Vec<(Vec<_>, E)>>();
+
         diff_polys.push(beta_poly);
         vp.add_mle_list(diff_polys, E::ONE);
+        lookup_parts
+            .into_iter()
+            .for_each(|(prod, coeff)| vp.add_mle_list(prod, coeff));
 
         #[allow(deprecated)]
         let (proof, sumcheck_state) = IOPProverState::<E>::prove_parallel(vp, self.transcript);
@@ -315,8 +333,6 @@ where
         let zerocheck_point = &proof.point;
         let output_zerocheck_eval = mles[0].evaluate(zerocheck_point);
 
-        let output_lookup_eval = mles[0].evaluate(lookup_point);
-
         // Accumulate claims about the output polynomial in each of the protocols we ran together with the final claim from the previous proof.
         let mut output_claims = Vec::<Claim<E>>::new();
         let same_poly_ctx = same_poly::Context::<E>::new(last_claim.point.len());
@@ -329,15 +345,6 @@ where
         same_poly_prover.add_claim(zerocheck_claim.clone())?;
         output_claims.push(zerocheck_claim);
 
-        let lookup_claim = Claim {
-            point: lookup_point.clone(),
-            eval: output_lookup_eval,
-        };
-
-        same_poly_prover.add_claim(lookup_claim.clone())?;
-
-        output_claims.push(lookup_claim);
-
         // This is the proof for the output poly
         let claim_acc_proof = same_poly_prover.prove(&same_poly_ctx, self.transcript)?;
 
@@ -349,12 +356,6 @@ where
         // Now we must do the samething accumulating evals for the input poly as we fix variables on the input poly.
         // The point length is 2 longer because for now we only support MaxPool2D.
 
-        let same_poly_ctx = same_poly::Context::<E>::new(last_claim.point.len() + 2);
-        let input_mle = DenseMultilinearExtension::<E>::from_evaluations_ext_slice(
-            last_claim.point.len() + 2,
-            input.get_data(),
-        );
-        let mut same_poly_prover = same_poly::Prover::<E>::new(input_mle.clone());
         let padded_input_shape = input.dims();
         let padded_input_row_length_log = ceil_log2(padded_input_shape[2]);
         // We can batch all of the claims for the input poly with 00, 10, 01, 11 fixed into one with random challenges
@@ -375,16 +376,13 @@ where
             r1 * one_minus_r2,
             r1 * r2,
         ];
-        let (zc_in_claim, lu_in_claim) = izip!(
+
+        let zc_in_claim = izip!(
             multiplicands.iter(),
             sumcheck_state.get_mle_final_evaluations().iter(),
-            logup_proof.output_claims().iter()
         )
-        .fold((E::ZERO, E::ZERO), |(zc_acc, lu_acc), (m, zc, lu)| {
-            (
-                zc_acc + *m * (output_zerocheck_eval - *zc),
-                lu_acc + *m * (output_lookup_eval - lu.eval),
-            )
+        .fold(E::ZERO, |zc_acc, (m, zc)| {
+            zc_acc + *m * (output_zerocheck_eval - *zc)
         });
 
         let point_1 = [
@@ -395,42 +393,19 @@ where
         ]
         .concat();
 
-        let zerocheck_claim = Claim {
+        let next_claim = Claim {
             point: point_1,
             eval: zc_in_claim,
         };
 
-        same_poly_prover.add_claim(zerocheck_claim.clone())?;
-
-        let point_2 = [
-            &[r1],
-            &lookup_point[..padded_input_row_length_log - 1],
-            &[r2],
-            &lookup_point[padded_input_row_length_log - 1..],
-        ]
-        .concat();
-
-        let lookup_claim = Claim {
-            point: point_2,
-            eval: lu_in_claim,
-        };
-
-        same_poly_prover.add_claim(lookup_claim)?;
-
-        // This is the proof for the input_poly
-        let input_claim_acc_proof = same_poly_prover.prove(&same_poly_ctx, self.transcript)?;
-
-        let next_claim = input_claim_acc_proof.extract_claim();
-
         // We don't need the last eval of the the sumcheck state as it is the beta poly
-        let zc_evals_len = sumcheck_state.get_mle_final_evaluations().len();
-        let zerocheck_evals =
-            sumcheck_state.get_mle_final_evaluations()[..zc_evals_len - 1].to_vec();
+
+        let zerocheck_evals = sumcheck_state.get_mle_final_evaluations()[..4].to_vec();
         // Push the step proof to the list
         self.proofs.push(StepProof::Pooling(PoolingProof {
             sumcheck: proof,
             lookup: logup_proof,
-            io_accumulation: [input_claim_acc_proof, claim_acc_proof],
+            io_accumulation: claim_acc_proof,
             output_claims,
             zerocheck_evals,
             variable_gap: padded_input_row_length_log - 1,
