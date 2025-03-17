@@ -189,9 +189,7 @@ where
             .lookup
             .iter()
             .map(|table_type| {
-                let challenge = transcript
-                    .get_and_append_challenge(b"table_challenge")
-                    .elements;
+                let challenge = table_type.generate_challenge(transcript);
 
                 (table_type.name(), challenge)
             })
@@ -213,10 +211,7 @@ where
 mod test {
     use goldilocks::GoldilocksExt2;
 
-    use crate::{
-        default_transcript, init_test_logging, lookup::LogUp, model::Model,
-        quantization::TensorFielder,
-    };
+    use crate::{default_transcript, init_test_logging, model::Model, quantization::TensorFielder};
 
     use super::{
         Context,
@@ -236,10 +231,10 @@ mod test {
         let ctx = Context::<F>::generate(&model, None).expect("unable to generate context");
         let io = IO::new(input.to_fields(), output.clone().to_fields());
         let mut prover_transcript = default_transcript();
-        let prover = Prover::<_, _, LogUp>::new(&ctx, &mut prover_transcript);
+        let prover = Prover::<_, _>::new(&ctx, &mut prover_transcript);
         let proof = prover.prove(trace).expect("unable to generate proof");
         let mut verifier_transcript = default_transcript();
-        verify::<_, _, LogUp>(ctx, proof, io, &mut verifier_transcript).expect("invalid proof");
+        verify::<_, _>(ctx, proof, io, &mut verifier_transcript).expect("invalid proof");
     }
 
     #[test]
@@ -253,9 +248,9 @@ mod test {
             Context::<F>::generate(&model, Some(input.dims())).expect("unable to generate context");
         let io = IO::new(input.to_fields(), output.clone().to_fields());
         let mut prover_transcript = default_transcript();
-        let prover = Prover::<_, _, LogUp>::new(&ctx, &mut prover_transcript);
+        let prover = Prover::<_, _>::new(&ctx, &mut prover_transcript);
         let proof = prover.prove(trace).expect("unable to generate proof");
         let mut verifier_transcript = default_transcript();
-        verify::<_, _, LogUp>(ctx, proof, io, &mut verifier_transcript).expect("invalid proof");
+        verify::<_, _>(ctx, proof, io, &mut verifier_transcript).expect("invalid proof");
     }
 }

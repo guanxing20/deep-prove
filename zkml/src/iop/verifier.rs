@@ -2,7 +2,7 @@ use crate::{
     Claim, VectorTranscript,
     commit::{self, identity_eval, precommit, same_poly},
     iop::{ChallengeStorage, StepProof, context::StepInfo},
-    lookup::{LookupProtocol, context::TableType, logup_gkr::verifier::verify_logup_proof},
+    lookup::{context::TableType, logup_gkr::verifier::verify_logup_proof},
     quantization,
     tensor::{Tensor, get_root_of_unity},
 };
@@ -41,7 +41,7 @@ impl<E> IO<E> {
 }
 
 /// Verifies an inference proof given a context, a proof and the input / output of the model.
-pub fn verify<E: ExtensionField, T: Transcript<E>, L: LookupProtocol<E>>(
+pub fn verify<E: ExtensionField, T: Transcript<E>>(
     ctx: Context<E>,
     proof: Proof<E>,
     io: IO<E>,
@@ -129,7 +129,7 @@ where
                         proof_and_step.1.variant_name(),
                         TableType::Relu.name()
                     ))?;
-                verify_activation::<_, _, L>(
+                verify_activation::<_, _>(
                     output_claim,
                     &proof,
                     info,
@@ -150,7 +150,7 @@ where
                         proof_and_step.1.variant_name(),
                         TableType::Range.name()
                     ))?;
-                verify_requant::<_, _, L>(
+                verify_requant::<_, _>(
                     output_claim,
                     &proof,
                     info,
@@ -169,7 +169,7 @@ where
                         TableType::Range.name()
                     ))?;
 
-                verify_pooling::<_, _, L>(
+                verify_pooling::<_, _>(
                     output_claim,
                     proof,
                     info,
@@ -204,7 +204,7 @@ where
                     table_type.name()
                 ))?;
 
-            verify_table::<_, _, L>(
+            verify_table::<_, _>(
                 table_proof,
                 *table_type,
                 table_poly_id,
@@ -250,7 +250,7 @@ where
     Ok(())
 }
 
-fn verify_pooling<E: ExtensionField, T: Transcript<E>, L: LookupProtocol<E>>(
+fn verify_pooling<E: ExtensionField, T: Transcript<E>>(
     last_claim: Claim<E>,
     proof: &PoolingProof<E>,
     info: &PoolingInfo,
@@ -360,7 +360,7 @@ where
     Ok(out_claim)
 }
 
-fn verify_activation<E: ExtensionField, T: Transcript<E>, L: LookupProtocol<E>>(
+fn verify_activation<E: ExtensionField, T: Transcript<E>>(
     last_claim: Claim<E>,
     proof: &ActivationProof<E>,
     info: &ActivationInfo,
@@ -398,7 +398,7 @@ where
     Ok(verifier_claims.claims()[0].clone())
 }
 
-fn verify_requant<E: ExtensionField, T: Transcript<E>, L: LookupProtocol<E>>(
+fn verify_requant<E: ExtensionField, T: Transcript<E>>(
     last_claim: Claim<E>,
     proof: &RequantProof<E>,
     info: &RequantInfo,
@@ -722,7 +722,7 @@ where
     })
 }
 
-fn verify_table<E: ExtensionField, T: Transcript<E>, L: LookupProtocol<E>>(
+fn verify_table<E: ExtensionField, T: Transcript<E>>(
     proof: &TableProof<E>,
     table_type: TableType,
     poly_id: usize,

@@ -49,8 +49,8 @@ impl TableType {
                 (comb, vec![col_one, col_two])
             }
             TableType::Range => {
-                let (element_out, field): (Vec<Element>, Vec<E::BaseField>) = (0
-                    ..1 << *quantization::BIT_LEN)
+                let (element_out, field): (Vec<Element>, Vec<E::BaseField>) = (0..1
+                    << *quantization::BIT_LEN)
                     .map(|i| {
                         let i_field: E = i.to_field();
                         (i, i_field.as_bases()[0])
@@ -68,30 +68,60 @@ impl TableType {
         }
     }
 
-    pub fn evaluate_table_columns<E: ExtensionField>(&self, point: &[E]) -> Result<Vec<E>, LogUpError> {
+    pub fn evaluate_table_columns<E: ExtensionField>(
+        &self,
+        point: &[E],
+    ) -> Result<Vec<E>, LogUpError> {
         match self {
             TableType::Range => {
                 if point.len() != *quantization::BIT_LEN {
-                    return Err(LogUpError::VerifierError(format!("Point was not the correct size to produce a range table evaluation, point size: {}, expected: {}", point.len(), *quantization::BIT_LEN)));
+                    return Err(LogUpError::VerifierError(format!(
+                        "Point was not the correct size to produce a range table evaluation, point size: {}, expected: {}",
+                        point.len(),
+                        *quantization::BIT_LEN
+                    )));
                 }
 
-                Ok(vec![point.iter().enumerate().fold(E::ZERO, |acc, (index, p)| {
-                    acc + *p * E::from(1u64 << index)
-                })])
-            }, 
+                Ok(vec![
+                    point
+                        .iter()
+                        .enumerate()
+                        .fold(E::ZERO, |acc, (index, p)| acc + *p * E::from(1u64 << index)),
+                ])
+            }
             TableType::Relu => {
                 if point.len() != *quantization::BIT_LEN {
-                    return Err(LogUpError::VerifierError(format!("Point was not the correct size to produce a relu table evaluation, point size: {}, expected: {}", point.len(), *quantization::BIT_LEN)));
+                    return Err(LogUpError::VerifierError(format!(
+                        "Point was not the correct size to produce a relu table evaluation, point size: {}, expected: {}",
+                        point.len(),
+                        *quantization::BIT_LEN
+                    )));
                 }
 
-                let first_column = point.iter().enumerate().fold(E::ZERO, |acc, (index, p)| {
-                    acc + *p * E::from(1u64 << index)
-                }) - E::from(1u64 << (*quantization::BIT_LEN - 1));
+                let first_column = point
+                    .iter()
+                    .enumerate()
+                    .fold(E::ZERO, |acc, (index, p)| acc + *p * E::from(1u64 << index))
+                    - E::from(1u64 << (*quantization::BIT_LEN - 1));
 
-                let second_column = point.iter().enumerate().take(point.len() - 1).fold(E::ZERO, |acc, (index, p)| {
-                    acc + *p * E::from(1u64 << index) * point[point.len() - 1]
-                });
+                let second_column = point
+                    .iter()
+                    .enumerate()
+                    .take(point.len() - 1)
+                    .fold(E::ZERO, |acc, (index, p)| {
+                        acc + *p * E::from(1u64 << index) * point[point.len() - 1]
+                    });
                 Ok(vec![first_column, second_column])
+            }
+        }
+    }
+
+    pub fn generate_challenge<E: ExtensionField, T: Transcript<E>>(&self, transcript: &mut T) -> E {
+        match self {
+            TableType::Relu => transcript.get_and_append_challenge(b"Relu").elements,
+            TableType::Range => {
+                // Theres only one column for a range check so we don't need to generate a challenge
+                E::ONE
             }
         }
     }
@@ -236,7 +266,7 @@ where
 
         let (multiplicities, mults_ext)  = table_column.iter().map(|table_val| {
             if let Some(lookup_count) = table_lookup_data.get(table_val) {
-                (E::BaseField::from(*lookup_count), E::from(*lookup_count)) 
+                (E::BaseField::from(*lookup_count), E::from(*lookup_count))
             } else {
                 (E::BaseField::ZERO, E::ZERO)
             }
@@ -313,9 +343,7 @@ fn initialise_from_table_set<E: ExtensionField, T: Transcript<E>>(
     let challenge_map = set
         .iter()
         .map(|table_type| {
-            let challenge = transcript
-                .get_and_append_challenge(b"table_challenge")
-                .elements;
+            let challenge = table_type.generate_challenge(transcript);
 
             (table_type.name(), challenge)
         })

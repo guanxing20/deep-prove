@@ -10,7 +10,6 @@ use crate::{
     dense,
     iop::{ActivationProof, ConvProof, DenseProof, PoolingProof},
     lookup::{
-        LookupProtocol,
         context::generate_lookup_witnesses,
         logup_gkr::{prover::batch_prove, structs::LogUpInput},
     },
@@ -27,32 +26,14 @@ use multilinear_extensions::{
     virtual_poly::{ArcMultilinearExtension, VirtualPolynomial},
 };
 use serde::{Serialize, de::DeserializeOwned};
-use std::marker::PhantomData;
+
 use sumcheck::structs::{IOPProverState, IOPVerifierState};
 use timed::timed_instrument;
 use tracing::{debug, instrument, trace, warn};
 use transcript::Transcript;
 
-pub fn compute_betas<E: ExtensionField>(r: Vec<E>) -> Vec<E> {
-    let mut beta = vec![E::ZERO; 1 << r.len()];
-    beta[0] = E::ONE;
-    for i in 0..r.len() {
-        let mut beta_temp = vec![E::ZERO; 1 << i];
-        for j in 0..(1 << i) {
-            beta_temp[j] = beta[j];
-        }
-        for j in 0..(1 << i) {
-            let num = j << 1;
-            let temp = r[r.len() - 1 - i] * beta_temp[j];
-            beta[num] = beta_temp[j] - temp;
-            beta[num + 1] = temp;
-        }
-    }
-    return beta;
-}
-
 /// Prover generates a series of sumcheck proofs to prove the inference of a model
-pub struct Prover<'a, E: ExtensionField, T: Transcript<E>, L: LookupProtocol<E>>
+pub struct Prover<'a, E: ExtensionField, T: Transcript<E>>
 where
     E::BaseField: Serialize + DeserializeOwned,
     E: Serialize + DeserializeOwned,
@@ -76,16 +57,14 @@ where
     table_witness: Vec<LogUpInput<E>>,
     /// Stores all the challenges for the different lookup/table types
     challenge_storage: ChallengeStorage<E>,
-    _phantom: PhantomData<L>,
 }
 
-impl<'a, E, T, L> Prover<'a, E, T, L>
+impl<'a, E, T> Prover<'a, E, T>
 where
     T: Transcript<E>,
     E: ExtensionField,
     E::BaseField: Serialize + DeserializeOwned,
     E: Serialize + DeserializeOwned,
-    L: LookupProtocol<E>,
 {
     pub fn new(ctx: &'a Context<E>, transcript: &'a mut T) -> Self {
         Self {
@@ -100,7 +79,6 @@ where
             lookup_witness: Vec::default(),
             table_witness: Vec::default(),
             challenge_storage: ChallengeStorage::default(),
-            _phantom: PhantomData,
         }
     }
     //#[instrument(name="prove step",skip_all,fields(step = step.layer.describe()),level = "debug")]
@@ -169,7 +147,6 @@ where
         match step {
             StepInfo::Activation(info) => {
                 // Activation proofs have two columns, input and output
-
                 let input_claim = logup_proof.output_claims()[0].clone();
                 let output_claim = logup_proof.output_claims()[1].clone();
 
@@ -433,7 +410,7 @@ where
 
         for l in (0..(r1.len() - 1)).rev() {
             let mut phi = vec![E::ZERO; f_middle[l].len()];
-            let beta = compute_betas(r2[0..(r2.len() - 1)].to_vec().clone());
+            let beta = compute_betas_eval(&r2[0..(r2.len() - 1)]);
 
             for i in 0..(phi.len()) {
                 if !is_fft && l == f_middle.len() - 1 {
@@ -593,14 +570,6 @@ where
 
         f_m.fix_high_variables_in_place(&r2);
 
-        let beta = compute_betas(r2);
-        let mut m_red = vec![E::ZERO; x[0].len()];
-        for i in 0..x.len() {
-            for j in 0..x[i].len() {
-                m_red[j] += x[i][j] * beta[i];
-            }
-        }
-
         // Construct the virtual polynomial and run the sumcheck prover
 
         let f_red = w_red.into_mle();
@@ -611,11 +580,11 @@ where
         let (proof, state) = IOPProverState::<E>::prove_parallel(vp, self.transcript);
 
         let claims = state.get_mle_final_evaluations();
-
+        let out_point = proof.point.clone();
         (
-            proof.clone(),
+            proof,
             claims,
-            self.delegate_matrix_evaluation(&mut f_middle, r1.clone(), proof.point.clone(), false),
+            self.delegate_matrix_evaluation(&mut f_middle, r1.clone(), out_point, false),
         )
     }
 
@@ -673,10 +642,11 @@ where
 
         let claims = state.get_mle_final_evaluations();
 
+        let out_point = proof.point.clone();
         (
-            proof.clone(),
+            proof,
             claims,
-            self.delegate_matrix_evaluation(&mut f_middle, r1.clone(), proof.point.clone(), true),
+            self.delegate_matrix_evaluation(&mut f_middle, r1.clone(), out_point, true),
         )
         // return Proof;
     }
@@ -800,52 +770,34 @@ where
             eval1 == eval2
         });
 
-        let r1: Vec<E> = r_ifft[(proving_data.output[0].len().ilog2() as usize)..].to_vec();
-        let r2: Vec<E> = r_ifft[..(proving_data.output[0].len().ilog2() as usize)].to_vec();
-        let beta1 = compute_betas(r1.clone());
-        let beta2 = compute_betas(r2.clone());
+        let r1 = &r_ifft[(proving_data.output[0].len().ilog2() as usize)..];
+        let r2 = &r_ifft[..(proving_data.output[0].len().ilog2() as usize)];
+
+        let beta2 = compute_betas_eval(r2);
         // Given beta1,beta2 observe that :
         // \sum_{i \in [k_w]} beta1[i]prod[i] = \sum_{i \in [k_w]}sum_{j \in [k_x]} x[j] o w[i][j] =
         // = sum_{j \in [k_x]}x[j]o(\sum_{i \in [k_w]}(beta[i]*w[i][j])). We let w_reduced[j] = \sum_{i \in [k_w]}(beta[i]*w[i][j])
         // We have  \sum_{i \in [k_w]} beta1[i]prod[i] = sum_{j \in [k_x]} x[j]o w_{reduced[j]}.
         // So here we compute w_reduced
 
-        let k_w = filter.kw();
-        let k_x = filter.kx();
-        let n_w = 2 * filter.nw() * filter.nw();
-        let mut w_red = vec![E::ZERO; n_w * k_x];
-        for i in 0..k_w {
-            for j in 0..k_x {
-                for k in 0..n_w {
-                    if filter.filter.data[i * k_x * n_w + j * n_w + k] < 0 {
-                        w_red[j * n_w + k] -= beta1[i]
-                            * E::from((-filter.filter.data[i * k_x * n_w + j * n_w + k]) as u64);
-                    } else {
-                        w_red[j * n_w + k] += beta1[i]
-                            * E::from((filter.filter.data[i * k_x * n_w + j * n_w + k]) as u64);
-                    }
-                }
-            }
-        }
-        let mut beta_acc = vec![E::ZERO; w_red.len()];
-        let mut ctr = 0;
-        for _ in 0..k_x {
-            for j in 0..beta2.len() {
-                beta_acc[ctr] = beta2[j];
-                ctr += 1;
-            }
-        }
+        let beta_acc = vec![beta2.clone(); filter.kx()].concat();
 
         // After computing w_reduced, observe that y = \sum_{k \in [n_x^2]} sum_{j \in [k_x]} beta2[k]*x[j][k]*w_reduced[j][k]
         // This is a cubic sumcheck where v1 = [x[0][0],...,x[k_x][n_x^2]], v2 = [w_reduced[0][0],...,w_reduced[k_x][n_x^2]]
         // and v3 = [beta2,..(k_x times)..,beta2]. So, first initialzie v3 and then invoke the cubic sumceck.
 
-        let f1 = w_red.into_mle();
+        // We need to fix the high variables in place for the filter at r1.
+        let f1 = filter
+            .filter
+            .evals_flat::<E>()
+            .into_mle()
+            .fix_high_variables(r1);
+
         let f2 = proving_data
             .input_fft
-            .clone()
-            .into_iter()
+            .iter()
             .flatten()
+            .copied()
             .collect::<Vec<_>>()
             .into_mle();
         let f3 = beta_acc.into_mle();
@@ -859,7 +811,7 @@ where
         let (hadamard_proof, state) = IOPProverState::<E>::prove_parallel(vp, self.transcript);
         let hadamard_claims = state.get_mle_final_evaluations();
 
-        let point = [hadamard_proof.point.clone(), r1.clone()].concat();
+        let point = [hadamard_proof.point.as_slice(), r1].concat();
         // let eval = hadamard_claims[0];
         self.commit_prover
             .add_claim(info.poly_id, Claim::new(point, hadamard_claims[0]))
