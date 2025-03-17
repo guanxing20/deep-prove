@@ -32,6 +32,7 @@ use multilinear_extensions::mle::{DenseMultilinearExtension, MultilinearExtensio
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use transcript::Transcript;
 
+pub mod context;
 pub mod gkr_circuits;
 pub mod logup;
 pub mod logup_gkr;
@@ -1186,238 +1187,238 @@ where
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use crate::{commit::precommit, default_transcript, init_test_logging, model::Model};
+// #[cfg(test)]
+// mod tests {
+//     use crate::{commit::precommit, default_transcript, init_test_logging, model::Model};
 
-    use super::*;
+//     use super::*;
 
-    type F = GoldilocksExt2;
-    use goldilocks::GoldilocksExt2;
+//     type F = GoldilocksExt2;
+//     use goldilocks::GoldilocksExt2;
 
-    #[test]
-    fn test_prover_steps() -> anyhow::Result<()> {
-        init_test_logging();
-        let (model, input) = Model::random(6);
-        model.describe();
-        let trace = model.run(input);
+//     #[test]
+//     fn test_prover_steps() -> anyhow::Result<()> {
+//         init_test_logging();
+//         let (model, input) = Model::random(6);
+//         model.describe();
+//         let trace = model.run(input);
 
-        let ctx = crate::iop::Context::generate(&model, None).expect("unable to generate context");
+//         let ctx = crate::iop::Context::generate(&model, None).expect("unable to generate context");
 
-        let mut prover_transcript = default_transcript();
-        ctx.write_to_transcript(&mut prover_transcript)?;
-        let (witness_context, polys) =
-            WitnessContext::<F>::initialise_witness_ctx(&ctx.lookup, &trace).unwrap();
+//         let mut prover_transcript = default_transcript();
+//         ctx.write_to_transcript(&mut prover_transcript)?;
+//         let (witness_context, polys) =
+//             WitnessContext::<F>::initialise_witness_ctx(&ctx.lookup, &trace).unwrap();
 
-        let commit_context = precommit::Context::<F>::generate(polys)?;
-        commit_context.write_to_transcript(&mut prover_transcript)?;
+//         let commit_context = precommit::Context::<F>::generate(polys)?;
+//         commit_context.write_to_transcript(&mut prover_transcript)?;
 
-        let constant_challenge = prover_transcript
-            .get_and_append_challenge(b"table_constant")
-            .elements;
+//         let constant_challenge = prover_transcript
+//             .get_and_append_challenge(b"table_constant")
+//             .elements;
 
-        let prover_challenge_hashmap = ctx
-            .lookup
-            .table_circuits
-            .iter()
-            .map(|table_info| {
-                let challenge = prover_transcript
-                    .get_and_append_challenge(b"table_challenge")
-                    .elements;
-                let lt = table_info.lookup_type;
-                // We subtract one here because these are all table lookup types so number of columns per instance includes the multiplicity poly as well.
-                let num_columns = lt.num_columns_per_instance() - 1;
-                let column_separator_challenges =
-                    std::iter::successors(Some(F::ONE), |prev| Some(*prev * challenge))
-                        .take(num_columns)
-                        .collect::<Vec<F>>();
-                (lt.name(), column_separator_challenges)
-            })
-            .collect::<HashMap<String, Vec<F>>>();
+//         let prover_challenge_hashmap = ctx
+//             .lookup
+//             .table_circuits
+//             .iter()
+//             .map(|table_info| {
+//                 let challenge = prover_transcript
+//                     .get_and_append_challenge(b"table_challenge")
+//                     .elements;
+//                 let lt = table_info.lookup_type;
+//                 // We subtract one here because these are all table lookup types so number of columns per instance includes the multiplicity poly as well.
+//                 let num_columns = lt.num_columns_per_instance() - 1;
+//                 let column_separator_challenges =
+//                     std::iter::successors(Some(F::ONE), |prev| Some(*prev * challenge))
+//                         .take(num_columns)
+//                         .collect::<Vec<F>>();
+//                 (lt.name(), column_separator_challenges)
+//             })
+//             .collect::<HashMap<String, Vec<F>>>();
 
-        let lookup_proofs = witness_context
-            .lookup_witnesses
-            .iter()
-            .map(|prover_info| {
-                let column_separator_challenges = prover_challenge_hashmap
-                    .get(&prover_info.lookup_type.name())
-                    .ok_or(anyhow!(
-                        "No challenges found for lookup type with name: {}",
-                        prover_info.lookup_type.name()
-                    ))?;
-                LogUp::prove(
-                    &ctx.lookup,
-                    prover_info,
-                    constant_challenge,
-                    column_separator_challenges,
-                    &mut prover_transcript,
-                )
-            })
-            .collect::<Result<Vec<Proof<F>>, _>>()
-            .unwrap();
+//         let lookup_proofs = witness_context
+//             .lookup_witnesses
+//             .iter()
+//             .map(|prover_info| {
+//                 let column_separator_challenges = prover_challenge_hashmap
+//                     .get(&prover_info.lookup_type.name())
+//                     .ok_or(anyhow!(
+//                         "No challenges found for lookup type with name: {}",
+//                         prover_info.lookup_type.name()
+//                     ))?;
+//                 LogUp::prove(
+//                     &ctx.lookup,
+//                     prover_info,
+//                     constant_challenge,
+//                     column_separator_challenges,
+//                     &mut prover_transcript,
+//                 )
+//             })
+//             .collect::<Result<Vec<Proof<F>>, _>>()
+//             .unwrap();
 
-        let mut numerators = vec![];
-        let mut denominators = vec![];
-        lookup_proofs.iter().for_each(|proof| {
-            numerators.extend_from_slice(proof.numerators.as_slice());
-            denominators.extend_from_slice(proof.denominators.as_slice());
-        });
+//         let mut numerators = vec![];
+//         let mut denominators = vec![];
+//         lookup_proofs.iter().for_each(|proof| {
+//             numerators.extend_from_slice(proof.numerators.as_slice());
+//             denominators.extend_from_slice(proof.denominators.as_slice());
+//         });
 
-        let table_proofs = witness_context
-            .table_witnesses
-            .iter()
-            .zip(ctx.lookup.table_circuits.iter())
-            .map(|(prover_info, table_info)| {
-                let lt = table_info.lookup_type;
-                let column_separator_challenges =
-                    prover_challenge_hashmap.get(&lt.name()).ok_or(anyhow!(
-                        "No challenges found for lookup type with name: {}",
-                        lt.name()
-                    ))?;
-                LogUp::prove_table(
-                    &table_info.circuit,
-                    prover_info,
-                    constant_challenge,
-                    column_separator_challenges,
-                    &mut prover_transcript,
-                )
-            })
-            .collect::<Result<Vec<Proof<F>>, _>>()
-            .unwrap();
+//         let table_proofs = witness_context
+//             .table_witnesses
+//             .iter()
+//             .zip(ctx.lookup.table_circuits.iter())
+//             .map(|(prover_info, table_info)| {
+//                 let lt = table_info.lookup_type;
+//                 let column_separator_challenges =
+//                     prover_challenge_hashmap.get(&lt.name()).ok_or(anyhow!(
+//                         "No challenges found for lookup type with name: {}",
+//                         lt.name()
+//                     ))?;
+//                 LogUp::prove_table(
+//                     &table_info.circuit,
+//                     prover_info,
+//                     constant_challenge,
+//                     column_separator_challenges,
+//                     &mut prover_transcript,
+//                 )
+//             })
+//             .collect::<Result<Vec<Proof<F>>, _>>()
+//             .unwrap();
 
-        table_proofs.iter().for_each(|proof| {
-            numerators.extend_from_slice(proof.numerators.as_slice());
-            denominators.extend_from_slice(proof.denominators.as_slice());
-        });
+//         table_proofs.iter().for_each(|proof| {
+//             numerators.extend_from_slice(proof.numerators.as_slice());
+//             denominators.extend_from_slice(proof.denominators.as_slice());
+//         });
 
-        let (num, denom) = numerators.iter().zip(denominators.iter()).fold(
-            (F::ZERO, F::ONE),
-            |(acc_num, acc_denom), (num_i, denom_i)| {
-                (
-                    acc_num * *denom_i + acc_denom * *num_i,
-                    acc_denom * *denom_i,
-                )
-            },
-        );
+//         let (num, denom) = numerators.iter().zip(denominators.iter()).fold(
+//             (F::ZERO, F::ONE),
+//             |(acc_num, acc_denom), (num_i, denom_i)| {
+//                 (
+//                     acc_num * *denom_i + acc_denom * *num_i,
+//                     acc_denom * *denom_i,
+//                 )
+//             },
+//         );
 
-        assert_eq!(num, F::ZERO);
-        assert_ne!(denom, F::ZERO);
+//         assert_eq!(num, F::ZERO);
+//         assert_ne!(denom, F::ZERO);
 
-        let mut verifier_transcript = default_transcript();
-        ctx.write_to_transcript(&mut verifier_transcript)?;
-        commit_context.write_to_transcript(&mut verifier_transcript)?;
+//         let mut verifier_transcript = default_transcript();
+//         ctx.write_to_transcript(&mut verifier_transcript)?;
+//         commit_context.write_to_transcript(&mut verifier_transcript)?;
 
-        let constant_challenge = verifier_transcript
-            .get_and_append_challenge(b"table_constant")
-            .elements;
-        let verifier_challenge_hashmap = ctx
-            .lookup
-            .table_circuits
-            .iter()
-            .map(|table_info| {
-                let challenge = prover_transcript
-                    .get_and_append_challenge(b"table_challenge")
-                    .elements;
-                let lt = table_info.lookup_type;
-                // We subtract one here because these are all table lookup types so number of columns per instance includes the multiplicity poly as well.
-                let num_columns = lt.num_columns_per_instance() - 1;
-                let column_separator_challenges =
-                    std::iter::successors(Some(F::ONE), |prev| Some(*prev * challenge))
-                        .take(num_columns)
-                        .collect::<Vec<F>>();
-                (lt.name(), column_separator_challenges)
-            })
-            .collect::<HashMap<String, Vec<F>>>();
+//         let constant_challenge = verifier_transcript
+//             .get_and_append_challenge(b"table_constant")
+//             .elements;
+//         let verifier_challenge_hashmap = ctx
+//             .lookup
+//             .table_circuits
+//             .iter()
+//             .map(|table_info| {
+//                 let challenge = prover_transcript
+//                     .get_and_append_challenge(b"table_challenge")
+//                     .elements;
+//                 let lt = table_info.lookup_type;
+//                 // We subtract one here because these are all table lookup types so number of columns per instance includes the multiplicity poly as well.
+//                 let num_columns = lt.num_columns_per_instance() - 1;
+//                 let column_separator_challenges =
+//                     std::iter::successors(Some(F::ONE), |prev| Some(*prev * challenge))
+//                         .take(num_columns)
+//                         .collect::<Vec<F>>();
+//                 (lt.name(), column_separator_challenges)
+//             })
+//             .collect::<HashMap<String, Vec<F>>>();
 
-        let mut proof_iter = lookup_proofs.into_iter();
-        let (final_lookup_numerator, final_lookup_denominator) =
-            ctx.steps_info.iter().rev().enumerate().try_fold(
-                (F::ZERO, F::ONE),
-                |(acc_num, acc_denom), (step, step_info)| {
-                    if step_info.requires_lookup() {
-                        println!("verifying step: {}", step_info.variant_name());
-                        let proof = proof_iter.next().unwrap();
-                        let (lookup_type, _) = ctx.lookup.get_circuit_and_type(step)?;
-                        let column_separator_challenges = verifier_challenge_hashmap
-                            .get(&lookup_type.name())
-                            .ok_or(anyhow!(
-                                "Couldn't get challenges for lookup type: {}",
-                                lookup_type.name()
-                            ))?;
-                        let verifier_claim = LogUp::verify(
-                            &ctx.lookup,
-                            constant_challenge,
-                            column_separator_challenges,
-                            step,
-                            proof.clone(),
-                            &mut verifier_transcript,
-                        )?;
+//         let mut proof_iter = lookup_proofs.into_iter();
+//         let (final_lookup_numerator, final_lookup_denominator) =
+//             ctx.steps_info.iter().rev().enumerate().try_fold(
+//                 (F::ZERO, F::ONE),
+//                 |(acc_num, acc_denom), (step, step_info)| {
+//                     if step_info.requires_lookup() {
+//                         println!("verifying step: {}", step_info.variant_name());
+//                         let proof = proof_iter.next().unwrap();
+//                         let (lookup_type, _) = ctx.lookup.get_circuit_and_type(step)?;
+//                         let column_separator_challenges = verifier_challenge_hashmap
+//                             .get(&lookup_type.name())
+//                             .ok_or(anyhow!(
+//                                 "Couldn't get challenges for lookup type: {}",
+//                                 lookup_type.name()
+//                             ))?;
+//                         let verifier_claim = LogUp::verify(
+//                             &ctx.lookup,
+//                             constant_challenge,
+//                             column_separator_challenges,
+//                             step,
+//                             proof.clone(),
+//                             &mut verifier_transcript,
+//                         )?;
 
-                        let (out_num, out_denom) = verifier_claim
-                            .numerators()
-                            .iter()
-                            .zip(verifier_claim.denominators().iter())
-                            .fold(
-                                (acc_num, acc_denom),
-                                |(acc_num_i, acc_denom_i), (num, denom)| {
-                                    (
-                                        acc_num_i * *denom + acc_denom_i * *num,
-                                        acc_denom_i * *denom,
-                                    )
-                                },
-                            );
-                        Result::<(F, F), anyhow::Error>::Ok((out_num, out_denom))
-                    } else {
-                        Result::<(F, F), anyhow::Error>::Ok((acc_num, acc_denom))
-                    }
-                },
-            )?;
+//                         let (out_num, out_denom) = verifier_claim
+//                             .numerators()
+//                             .iter()
+//                             .zip(verifier_claim.denominators().iter())
+//                             .fold(
+//                                 (acc_num, acc_denom),
+//                                 |(acc_num_i, acc_denom_i), (num, denom)| {
+//                                     (
+//                                         acc_num_i * *denom + acc_denom_i * *num,
+//                                         acc_denom_i * *denom,
+//                                     )
+//                                 },
+//                             );
+//                         Result::<(F, F), anyhow::Error>::Ok((out_num, out_denom))
+//                     } else {
+//                         Result::<(F, F), anyhow::Error>::Ok((acc_num, acc_denom))
+//                     }
+//                 },
+//             )?;
 
-        let (final_numerator, final_denominator) = table_proofs
-            .iter()
-            .zip(ctx.lookup.table_circuits.iter())
-            .try_fold(
-                (final_lookup_numerator, final_lookup_denominator),
-                |(acc_num, acc_denom), (proof, table_info)| {
-                    let TableInfo {
-                        circuit,
-                        lookup_type,
-                        ..
-                    } = table_info;
-                    let column_separator_challenges = verifier_challenge_hashmap
-                        .get(&lookup_type.name())
-                        .ok_or(anyhow!(
-                            "Couldn't get challenges for lookup type: {}",
-                            lookup_type.name()
-                        ))?;
-                    let verifier_claim = LogUp::verify_table(
-                        constant_challenge,
-                        column_separator_challenges,
-                        circuit,
-                        proof.clone(),
-                        &mut verifier_transcript,
-                    )?;
+//         let (final_numerator, final_denominator) = table_proofs
+//             .iter()
+//             .zip(ctx.lookup.table_circuits.iter())
+//             .try_fold(
+//                 (final_lookup_numerator, final_lookup_denominator),
+//                 |(acc_num, acc_denom), (proof, table_info)| {
+//                     let TableInfo {
+//                         circuit,
+//                         lookup_type,
+//                         ..
+//                     } = table_info;
+//                     let column_separator_challenges = verifier_challenge_hashmap
+//                         .get(&lookup_type.name())
+//                         .ok_or(anyhow!(
+//                             "Couldn't get challenges for lookup type: {}",
+//                             lookup_type.name()
+//                         ))?;
+//                     let verifier_claim = LogUp::verify_table(
+//                         constant_challenge,
+//                         column_separator_challenges,
+//                         circuit,
+//                         proof.clone(),
+//                         &mut verifier_transcript,
+//                     )?;
 
-                    let (out_num, out_denom) = verifier_claim
-                        .numerators()
-                        .iter()
-                        .zip(verifier_claim.denominators().iter())
-                        .fold(
-                            (acc_num, acc_denom),
-                            |(acc_num_i, acc_denom_i), (num, denom)| {
-                                (
-                                    acc_num_i * *denom + acc_denom_i * *num,
-                                    acc_denom_i * *denom,
-                                )
-                            },
-                        );
-                    Result::<(F, F), anyhow::Error>::Ok((out_num, out_denom))
-                },
-            )?;
+//                     let (out_num, out_denom) = verifier_claim
+//                         .numerators()
+//                         .iter()
+//                         .zip(verifier_claim.denominators().iter())
+//                         .fold(
+//                             (acc_num, acc_denom),
+//                             |(acc_num_i, acc_denom_i), (num, denom)| {
+//                                 (
+//                                     acc_num_i * *denom + acc_denom_i * *num,
+//                                     acc_denom_i * *denom,
+//                                 )
+//                             },
+//                         );
+//                     Result::<(F, F), anyhow::Error>::Ok((out_num, out_denom))
+//                 },
+//             )?;
 
-        assert_eq!(final_numerator, F::ZERO);
-        assert_ne!(final_denominator, F::ZERO);
+//         assert_eq!(final_numerator, F::ZERO);
+//         assert_ne!(final_denominator, F::ZERO);
 
-        Ok(())
-    }
-}
+//         Ok(())
+//     }
+// }

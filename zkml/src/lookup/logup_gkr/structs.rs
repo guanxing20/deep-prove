@@ -44,7 +44,7 @@ impl<F> Fraction<F> {
 impl<F: ExtensionField, T: Borrow<Fraction<F>>> AddAssign<T> for Fraction<F> {
     fn add_assign(&mut self, rhs: T) {
         let rhs: &Fraction<F> = rhs.borrow();
-        let numerator = self.numerator * rhs.denominator + self.denominator * rhs.numerator;
+        let numerator = (self.numerator * rhs.denominator) + (self.denominator * rhs.numerator);
         let denominator = self.denominator * rhs.denominator;
         *self = Fraction {
             numerator,
@@ -196,12 +196,54 @@ impl<E: ExtensionField> LogUpInput<E> {
         multiplicities: Vec<E::BaseField>,
         constant_challenge: E,
         column_separation_challenge: E,
-    ) -> LogUpInput<E> {
-        LogUpInput::Table {
+    ) -> Result<LogUpInput<E>, LogUpError> {
+        if column_evals.is_empty() {
+            return Err(LogUpError::ParamterError(
+                "No column evals were provided for Lookup input".to_string(),
+            ));
+        }
+
+        // Unwrap is safe
+        let first_evals_len = column_evals.first().unwrap().len();
+
+        if !first_evals_len.is_power_of_two() {
+            return Err(LogUpError::PolynomialError(format!(
+                "Need a power of two number of evaluations got: {}",
+                first_evals_len
+            )));
+        }
+
+        column_evals.iter().skip(1).try_for_each(|evals| {
+            if evals.len() != first_evals_len {
+                Err(LogUpError::ParamterError(
+                    "All sets of evaluations should be the same length".to_string(),
+                ))
+            } else {
+                Ok(())
+            }
+        })?;
+
+        if multiplicities.len() != first_evals_len {
+            return Err(LogUpError::PolynomialError(format!(
+                "Multiplicities length was not equal to column evaluations length, multiplicities: {}, columns: {}",
+                multiplicities.len(),
+                first_evals_len
+            )));
+        }
+
+        Ok(LogUpInput::Table {
             column_evals,
             multiplicities,
             constant_challenge,
             column_separation_challenge,
+        })
+    }
+
+    pub fn column_evals(&self) -> &[Vec<E::BaseField>] {
+        match self {
+            LogUpInput::Lookup { column_evals, .. } | LogUpInput::Table { column_evals, .. } => {
+                column_evals
+            }
         }
     }
 
@@ -262,13 +304,13 @@ impl<E: ExtensionField> LogUpInput<E> {
     }
 }
 
-#[derive(Clone, Debug, Copy)]
+#[derive(Clone, Debug, Copy, Serialize, Deserialize)]
 pub enum ProofType {
     Lookup,
     Table,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LogUpProof<E: ExtensionField> {
     pub sumcheck_proofs: Vec<IOPProof<E>>,
     pub round_evaluations: Vec<Vec<E>>,
@@ -289,7 +331,7 @@ impl<E: ExtensionField> LogUpProof<E> {
             .iter()
             .map(|evals| {
                 (
-                    evals[0] * evals[2] + evals[1] * evals[3],
+                    evals[0] * evals[3] + evals[1] * evals[2],
                     evals[2] * evals[3],
                 )
             })

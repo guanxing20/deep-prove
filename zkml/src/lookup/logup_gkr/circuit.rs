@@ -1,9 +1,9 @@
 //! File containing code for generating the LogUp GKR circuit
 
-use std::sync::Arc;
-
 use ark_std::Zero;
 use ff_ext::ExtensionField;
+
+use std::sync::Arc;
 
 use itertools::izip;
 use multilinear_extensions::{mle::DenseMultilinearExtension, util::ceil_log2};
@@ -66,12 +66,14 @@ impl<E: ExtensionField> LogUpLayer<E> {
                 // Split the numerator and denominator at the halfway point and sum the fractions
                 let (num1, num2) = numerator.split_at(half_layer_size);
                 let (denom1, denom2) = denominator.split_at(half_layer_size);
+
                 let (next_numerator, next_denominator): (Vec<E>, Vec<E>) =
                     izip!(num1, denom1, num2, denom2)
                         .map(|(n1, d1, n2, d2)| {
                             (Fraction::<E>::new(*n1, *d1) + Fraction::<E>::new(*n2, *d2)).as_tuple()
                         })
                         .unzip();
+
                 Some(LogUpLayer::Generic {
                     numerator: next_numerator,
                     denominator: next_denominator,
@@ -80,12 +82,15 @@ impl<E: ExtensionField> LogUpLayer<E> {
             LogUpLayer::InitialLookup { denominator } => {
                 // In this case we only need to split the denominator polynomial in half as the numerators are all -1
                 let (denom1, denom2) = denominator.split_at(half_layer_size);
-                let (next_numerator, next_denominator): (Vec<E>, Vec<E>) = izip!(denom1, denom2)
+                let (next_numerator, next_denominator): (Vec<E>, Vec<E>) = denom1
+                    .iter()
+                    .zip(denom2.iter())
                     .map(|(d1, d2)| {
                         (Fraction::<E>::new(-E::ONE, *d1) + Fraction::<E>::new(-E::ONE, *d2))
                             .as_tuple()
                     })
                     .unzip();
+
                 Some(LogUpLayer::Generic {
                     numerator: next_numerator,
                     denominator: next_denominator,

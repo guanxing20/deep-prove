@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use ff_ext::ExtensionField;
-use itertools::izip;
+
 use multilinear_extensions::{
     mle::{IntoMLE, MultilinearExtension},
     virtual_poly::{ArcMultilinearExtension, VirtualPolynomial},
@@ -93,31 +93,35 @@ pub fn batch_prove<E: ExtensionField, T: Transcript<E>>(
         // Then add all the terms to the sumcheck virtual polynomial
         let mut vp = VirtualPolynomial::<E>::new(current_layer_vars);
 
-        let alpha_powers = std::iter::successors(Some(E::ONE), |prev| Some(*prev * alpha))
-            .take(layer_iters.len())
-            .collect::<Vec<E>>();
-
-        izip!(layer_iters.iter_mut(), alpha_powers).try_for_each(|(iter, a)| {
+        let mut current_alpha = E::ONE;
+        layer_iters.iter_mut().try_for_each(|iter| {
             let layer = iter.next().ok_or(LogUpError::ProvingError(
                 "One of the circuits was not the same size as the others".to_string(),
             ))?;
             let mles = layer.get_mles();
             if let LogUpLayer::Generic { .. } | LogUpLayer::InitialTable { .. } = layer {
-                vp.add_mle_list(vec![eq_poly.clone(), mles[0].clone(), mles[3].clone()], a);
-                vp.add_mle_list(vec![eq_poly.clone(), mles[1].clone(), mles[2].clone()], a);
+                vp.add_mle_list(
+                    vec![eq_poly.clone(), mles[0].clone(), mles[3].clone()],
+                    current_alpha,
+                );
+                vp.add_mle_list(
+                    vec![eq_poly.clone(), mles[1].clone(), mles[2].clone()],
+                    current_alpha,
+                );
                 vp.add_mle_list(
                     vec![eq_poly.clone(), mles[2].clone(), mles[3].clone()],
-                    a * lambda,
+                    current_alpha * lambda,
                 );
             } else {
                 // Here we are in the initial lookup case so we have no numerator polynomials (all the numerator values are -1)
-                vp.add_mle_list(vec![eq_poly.clone(), mles[1].clone()], -a);
-                vp.add_mle_list(vec![eq_poly.clone(), mles[0].clone()], -a);
+                vp.add_mle_list(vec![eq_poly.clone(), mles[1].clone()], -current_alpha);
+                vp.add_mle_list(vec![eq_poly.clone(), mles[0].clone()], -current_alpha);
                 vp.add_mle_list(
                     vec![eq_poly.clone(), mles[0].clone(), mles[1].clone()],
-                    a * lambda,
+                    current_alpha * lambda,
                 );
             }
+            current_alpha *= alpha;
             Result::<(), LogUpError>::Ok(())
         })?;
 

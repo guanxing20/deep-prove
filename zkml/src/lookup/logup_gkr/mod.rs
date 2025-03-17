@@ -10,12 +10,15 @@ mod tests {
     use ff::Field;
     use ff_ext::ExtensionField;
     use goldilocks::{Goldilocks, GoldilocksExt2};
+    use itertools::izip;
     use multilinear_extensions::mle::{DenseMultilinearExtension, MultilinearExtension};
 
     use crate::{
         default_transcript,
         lookup::logup_gkr::{
-            prover::batch_prove, structs::LogUpInput, verifier::verify_logup_proof,
+            prover::batch_prove,
+            structs::{Fraction, LogUpInput},
+            verifier::verify_logup_proof,
         },
         quantization::Fieldizer,
         testing::random_vector,
@@ -67,6 +70,28 @@ mod tests {
                 &mut verifier_transcript,
             )
             .unwrap();
+
+            let fractions = column_evals
+                .iter()
+                .map(|col| {
+                    col.iter()
+                        .map(|val| {
+                            Fraction::<GoldilocksExt2>::new(
+                                -GoldilocksExt2::ONE,
+                                constant_challenge + GoldilocksExt2::from(*val),
+                            )
+                        })
+                        .sum::<Fraction<GoldilocksExt2>>()
+                })
+                .collect::<Vec<Fraction<GoldilocksExt2>>>();
+
+            izip!(claims.numerators(), claims.denominators(), fractions).for_each(
+                |(claim_num, claim_denom, frac)| {
+                    let (expected_num, expected_denom) = frac.as_tuple();
+                    assert_eq!(*claim_num, expected_num);
+                    assert_eq!(*claim_denom, expected_denom);
+                },
+            );
 
             claims
                 .claims()

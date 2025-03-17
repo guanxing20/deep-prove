@@ -1,4 +1,8 @@
-use crate::{Element, quantization::TensorFielder, tensor::Tensor};
+use crate::{
+    Element,
+    quantization::{IntoElement, TensorFielder},
+    tensor::Tensor,
+};
 use ff_ext::ExtensionField;
 use gkr::util::ceil_log2;
 use itertools::Itertools;
@@ -16,6 +20,34 @@ impl Pooling {
     pub fn op(&self, input: &Tensor<Element>) -> Tensor<Element> {
         match self {
             Pooling::Maxpool2D(maxpool2d) => maxpool2d.op(input),
+        }
+    }
+
+    pub fn gen_lookup_witness<E: ExtensionField>(
+        &self,
+        input: &Tensor<Element>,
+    ) -> (Vec<Element>, Vec<Vec<E::BaseField>>) {
+        match self {
+            Pooling::Maxpool2D(maxpool2d) => {
+                let field_vecs = maxpool2d.compute_polys::<E>(input);
+                let mut merged_lookups = vec![];
+                let diff_polys = field_vecs[1..]
+                    .iter()
+                    .map(|vector| {
+                        field_vecs[0]
+                            .iter()
+                            .zip(vector.iter())
+                            .map(|(&a, &b)| {
+                                let diff = a - b;
+                                merged_lookups.push(E::from(diff).into_element());
+                                diff
+                            })
+                            .collect::<Vec<E::BaseField>>()
+                    })
+                    .collect::<Vec<Vec<E::BaseField>>>();
+
+                (merged_lookups, diff_polys)
+            }
         }
     }
 }
