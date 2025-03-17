@@ -232,7 +232,6 @@ where
             })
     }
 
-
     #[timed::timed_instrument(level = "debug")]
     fn prove_pooling(
         &mut self,
@@ -253,7 +252,6 @@ where
 
         let logup_proof = batch_prove(&prover_info, self.transcript)?;
 
-        let max_pool_polys = info.poolinfo.compute_polys_field::<E>(input, output);
         // These are the polys that get passed to the zero check make sure their product is zero at every evaluation point
         let mut diff_polys = prover_info
             .column_evals()
@@ -299,16 +297,11 @@ where
         let (proof, sumcheck_state) = IOPProverState::<E>::prove_parallel(vp, self.transcript);
 
         // We need to prove that the output of this step is the input to following activation function
-        let mles = max_pool_polys
-            .iter()
-            .map(|evals| {
-                DenseMultilinearExtension::<E>::from_evaluations_slice(info.num_vars, evals)
-            })
-            .collect::<Vec<DenseMultilinearExtension<E>>>();
-        let mut same_poly_prover = same_poly::Prover::<E>::new(mles[0].clone());
+        let output_mle = output.get_data().to_vec().into_mle();
+        let mut same_poly_prover = same_poly::Prover::<E>::new(output_mle.clone());
 
         let zerocheck_point = &proof.point;
-        let output_zerocheck_eval = mles[0].evaluate(zerocheck_point);
+        let output_zerocheck_eval = output_mle.evaluate(zerocheck_point);
 
         // Accumulate claims about the output polynomial in each of the protocols we ran together with the final claim from the previous proof.
         let mut output_claims = Vec::<Claim<E>>::new();
@@ -655,6 +648,7 @@ where
     // and a 4D filter matrix W of dimension k_w * k_x * n_w * n_w. The output is a 3D matrix Y of dimension k_w * n_x * n_x
     // We want to batch prove the following: Y[i] = iFFT(sum_{j \in [n_x]}(FFT(X[j]) o FFT(W[i][j])).
 
+    #[instrument(name = "Prover::prove_convolution_step", skip_all, level = "debug")]
     #[timed::timed_instrument(level = "debug")]
     fn prove_convolution_step(
         &mut self,
