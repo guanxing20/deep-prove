@@ -825,7 +825,7 @@ pub(crate) mod test {
         );
     }
 
-    use crate::{Context, IO, Prover, lookup, verify};
+    use crate::{Context, IO, Prover, verify};
     use transcript::BasicTranscript;
 
     #[test]
@@ -845,13 +845,13 @@ pub(crate) mod test {
         let ctx =
             Context::<GoldilocksExt2>::generate(&model, None).expect("Unable to generate context");
         let output = trace.final_output().clone();
-        let prover: Prover<'_, GoldilocksExt2, BasicTranscript<GoldilocksExt2>, lookup::LogUp> =
+        let prover: Prover<'_, GoldilocksExt2, BasicTranscript<GoldilocksExt2>> =
             Prover::new(&ctx, &mut tr);
         let proof = prover.prove(trace).expect("unable to generate proof");
         let mut verifier_transcript: BasicTranscript<GoldilocksExt2> =
             BasicTranscript::new(b"m2vec");
         let io = IO::new(input.to_fields(), output.to_fields());
-        verify::<_, _, lookup::LogUp>(ctx, proof, io, &mut verifier_transcript).unwrap();
+        verify::<_, _>(ctx, proof, io, &mut verifier_transcript).unwrap();
     }
 
     #[test]
@@ -889,13 +889,13 @@ pub(crate) mod test {
             .expect("Unable to generate context");
         let output = trace.final_output().clone();
 
-        let prover: Prover<'_, GoldilocksExt2, BasicTranscript<GoldilocksExt2>, lookup::LogUp> =
+        let prover: Prover<'_, GoldilocksExt2, BasicTranscript<GoldilocksExt2>> =
             Prover::new(&ctx, &mut tr);
         let proof = prover.prove(trace).expect("unable to generate proof");
         let mut verifier_transcript: BasicTranscript<GoldilocksExt2> =
             BasicTranscript::new(b"m2vec");
         let io = IO::new(input.to_fields(), output.to_fields());
-        verify::<_, _, lookup::LogUp>(ctx, proof, io, &mut verifier_transcript).unwrap();
+        verify::<_, _>(ctx, proof, io, &mut verifier_transcript).unwrap();
     }
 
     #[test]
@@ -939,18 +939,13 @@ pub(crate) mod test {
                         let ctx = Context::<GoldilocksExt2>::generate(&model, Some(input.dims()))
                             .expect("Unable to generate context");
                         let output = trace.final_output().clone();
-                        let prover: Prover<
-                            '_,
-                            GoldilocksExt2,
-                            BasicTranscript<GoldilocksExt2>,
-                            lookup::LogUp,
-                        > = Prover::new(&ctx, &mut tr);
+                        let prover: Prover<'_, GoldilocksExt2, BasicTranscript<GoldilocksExt2>> =
+                            Prover::new(&ctx, &mut tr);
                         let proof = prover.prove(trace).expect("unable to generate proof");
                         let mut verifier_transcript: BasicTranscript<GoldilocksExt2> =
                             BasicTranscript::new(b"m2vec");
                         let io = IO::new(input.to_fields(), output.to_fields());
-                        verify::<_, _, lookup::LogUp>(ctx, proof, io, &mut verifier_transcript)
-                            .unwrap();
+                        verify::<_, _>(ctx, proof, io, &mut verifier_transcript).unwrap();
                     }
                 }
             }

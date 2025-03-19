@@ -768,7 +768,7 @@ mod tests {
 
     use super::*;
 
-    use crate::{Context, IO, Prover, lookup, quantization::TensorFielder, verify};
+    use crate::{Context, IO, Prover, quantization::TensorFielder, verify};
     use goldilocks::GoldilocksExt2;
     use transcript::BasicTranscript;
 
@@ -837,7 +837,6 @@ mod tests {
 
     #[test]
     fn test_load_cnn() {
-        // let filepath = "assets/scripts/CNN/lenet-mnist-01.onnx";
         let filepath = "assets/scripts/CNN/cnn-cifar-01.onnx";
         ModelType::CNN.validate(filepath).unwrap();
         let result = load_model::<Element>(&filepath);
@@ -855,12 +854,12 @@ mod tests {
             .expect("Unable to generate context");
         let output = trace.final_output().clone();
 
-        let prover: Prover<'_, GoldilocksExt2, BasicTranscript<GoldilocksExt2>, lookup::LogUp> =
+        let prover: Prover<'_, GoldilocksExt2, BasicTranscript<GoldilocksExt2>> =
             Prover::new(&ctx, &mut tr);
         let proof = prover.prove(trace).expect("unable to generate proof");
         let mut verifier_transcript: BasicTranscript<GoldilocksExt2> =
             BasicTranscript::new(b"m2vec");
         let io = IO::new(input.to_fields(), output.to_fields());
-        verify::<_, _, lookup::LogUp>(ctx, proof, io, &mut verifier_transcript).unwrap();
+        verify::<_, _>(ctx, proof, io, &mut verifier_transcript).unwrap();
     }
 }
