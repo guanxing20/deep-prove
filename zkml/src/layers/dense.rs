@@ -55,7 +55,7 @@ pub struct DenseProof<E: ExtensionField> {
 
 impl Dense {
     pub fn new(matrix: Tensor<Element>, bias: Tensor<Element>) -> Self {
-        assert_eq!(matrix.nrows_2d(), bias.dims()[0]);
+        assert_eq!(matrix.nrows_2d(), bias.get_shape()[0]);
         Self { matrix, bias }
     }
     pub fn ncols(&self) -> usize {
@@ -66,7 +66,7 @@ impl Dense {
     }
 
     pub fn op(&self, input: &Tensor<Element>) -> Tensor<Element> {
-        if input.dims().len() != 1 {
+        if input.get_shape().len() != 1 {
             let flat_input = input.flatten();
             self.matrix.matvec(&flat_input).add(&self.bias)
         } else {
@@ -75,7 +75,7 @@ impl Dense {
     }
 
     pub fn pad_next_power_of_two(self) -> Self {
-        let matrix = self.matrix.pad_next_power_of_two_2d();
+        let matrix = self.matrix.pad_next_power_of_two();
         let bias = self.bias.pad_1d(matrix.nrows_2d());
         Self::new(matrix, bias)
     }
@@ -376,7 +376,7 @@ mod test {
         fn test_dense_pad_next_power_of_two() {
             // Create a Dense layer with non-power-of-two dimensions
             let matrix =
-                Tensor::<Element>::from_coeffs_2d(vec![vec![1, 2, 3], vec![4, 5, 6], vec![
+                Tensor::<Element>::matix_from_coeffs(vec![vec![1, 2, 3], vec![4, 5, 6], vec![
                     7, 8, 9,
                 ]])
                 .unwrap();
@@ -389,12 +389,12 @@ mod test {
             let padded = dense.pad_next_power_of_two();
 
             // Check padded dimensions are powers of two
-            let padded_dims = padded.matrix.dims();
+            let padded_dims = padded.matrix.get_shape();
             assert_eq!(padded_dims[0], 4); // Next power of 2 after 3
             assert_eq!(padded_dims[1], 4); // Next power of 2 after 3
 
             // Check bias is padded
-            let bias_dims = padded.bias.dims();
+            let bias_dims = padded.bias.get_shape();
             assert_eq!(bias_dims[0], 4); // Next power of 2 after 3
 
             // Check original values are preserved
@@ -419,7 +419,7 @@ mod test {
         #[test]
         fn test_dense_pad_already_power_of_two() {
             // Create a Dense layer with power-of-two dimensions
-            let matrix = Tensor::<Element>::from_coeffs_2d(vec![
+            let matrix = Tensor::<Element>::matix_from_coeffs(vec![
                 vec![1, 2, 3, 4],
                 vec![5, 6, 7, 8],
                 vec![9, 10, 11, 12],
@@ -435,12 +435,12 @@ mod test {
             let padded = dense.clone().pad_next_power_of_two();
 
             // Check dimensions remain the same
-            let padded_dims = padded.matrix.dims();
+            let padded_dims = padded.matrix.get_shape();
             assert_eq!(padded_dims[0], 4);
             assert_eq!(padded_dims[1], 4);
 
             // Check bias dimensions remain the same
-            let bias_dims = padded.bias.dims();
+            let bias_dims = padded.bias.get_shape();
             assert_eq!(bias_dims[0], 4);
 
             // Check values are preserved
@@ -456,11 +456,12 @@ mod test {
         #[test]
         fn test_dense_pad_mixed_dimensions() {
             // Create a Dense layer with one power-of-two dimension and one non-power-of-two
-            let matrix =
-                Tensor::<Element>::from_coeffs_2d(vec![vec![1, 2, 3, 4], vec![5, 6, 7, 8], vec![
-                    9, 10, 11, 12,
-                ]])
-                .unwrap();
+            let matrix = Tensor::<Element>::matix_from_coeffs(vec![
+                vec![1, 2, 3, 4],
+                vec![5, 6, 7, 8],
+                vec![9, 10, 11, 12],
+            ])
+            .unwrap();
 
             let bias = Tensor::<Element>::new(vec![3], vec![20, 21, 22]);
 
@@ -470,12 +471,12 @@ mod test {
             let padded = dense.pad_next_power_of_two();
 
             // Check dimensions are padded correctly
-            let padded_dims = padded.matrix.dims();
+            let padded_dims = padded.matrix.get_shape();
             assert_eq!(padded_dims[0], 4); // Next power of 2 after 3
             assert_eq!(padded_dims[1], 4); // Already a power of 2
 
             // Check bias is padded
-            let bias_dims = padded.bias.dims();
+            let bias_dims = padded.bias.get_shape();
             assert_eq!(bias_dims[0], 4); // Next power of 2 after 3
 
             // Check original values are preserved and padding is zeros
@@ -504,7 +505,7 @@ mod test {
 
             // Create a Dense layer
             let matrix =
-                Tensor::<Element>::from_coeffs_2d(vec![vec![1, 2, 3], vec![4, 5, 6]]).unwrap();
+                Tensor::<Element>::matix_from_coeffs(vec![vec![1, 2, 3], vec![4, 5, 6]]).unwrap();
 
             let bias = Tensor::<Element>::new(vec![2], vec![10, 11]);
 
