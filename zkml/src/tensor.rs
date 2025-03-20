@@ -32,8 +32,7 @@ pub fn check_tensor_consistency(real_tensor: Tensor<Element>, padded_tensor: Ten
     for i in 0..real_tensor.shape[0] {
         for j in 0..real_tensor.shape[1] {
             for k in 0..real_tensor.shape[1] {
-                // TODO0: test if real_tensor.shape[2] works here
-                // if(real_tensor.data[i*real_tensor.shape[1]*real_tensor.shape[1]+j*real_tensor.shape[1]+k] > 0){
+                // TODO: test if real_tensor.shape[2] works here
                 assert!(
                     real_tensor.data[i * real_tensor.shape[1] * real_tensor.shape[1]
                         + j * real_tensor.shape[1]
@@ -41,12 +40,7 @@ pub fn check_tensor_consistency(real_tensor: Tensor<Element>, padded_tensor: Ten
                         == padded_tensor.data[i * n_x * n_x + j * n_x + k],
                     "Error in tensor consistency"
                 );
-                //}else{
-                //   assert!(-E::from(-real_tensor.data[i*real_tensor.shape[1]*real_tensor.shape[1]+j*real_tensor.shape[1]+k] as u64) == E::from(padded_tensor.data[i*n_x*n_x + j*n_x + k] as u64) ,"Error in tensor consistency");
-                //}
             }
-
-            // assert!(real_tensor.data[i*real_tensor.shape[1]*real_tensor.shape[1]+j ] == padded_tensor.data[i*n_x*n_x + j],"Error in tensor consistency");
         }
     }
 }
@@ -1161,35 +1155,6 @@ where
         let out_w = (w_size - k_w) / stride + 1;
         let out_shape = vec![n_size, k_n, out_h, out_w];
 
-        // let mut output = vec![T::default(); n_size * k_n * out_h * out_w];
-        // for n in 0..n_size {
-        //     for o in 0..k_n {
-        //         for oh in 0..out_h {
-        //             for ow in 0..out_w {
-        //                 let mut sum = T::default();
-
-        //                 // Convolution
-        //                 for c in 0..c_size {
-        //                     for kh in 0..k_h {
-        //                         for kw in 0..k_w {
-        //                             let h = oh * stride + kh;
-        //                             let w = ow * stride + kw;
-        //                             sum = sum + self.get(n, c, h, w) * kernels.get(o, c, kh, kw);
-        //                         }
-        //                     }
-        //                 }
-
-        //                 // Add bias for this output channel (o)
-        //                 sum = sum + bias.data[o];
-
-        //                 let output_index =
-        //                     n * (k_n * out_h * out_w) + o * (out_h * out_w) + oh * out_w + ow;
-        //                 output[output_index] = sum;
-        //             }
-        //         }
-        //     }
-        // }
-
         // Compute output in parallel
         let output: Vec<T> = (0..n_size * k_n * out_h * out_w)
             .into_par_iter()
@@ -1512,39 +1477,26 @@ mod test {
         for i in 0..3 {
             for j in 2..5 {
                 for l in 0..4 {
-                    for n in 1..(j-1){
-                        let n_w = 1<<n;
-                        let k_w = 1<<l;
-                        let n_x = 1<<j;
-                        let k_x = 1<<i;
-                        let rand_vec = random_vector(n_w*n_w*k_x*k_w);
-                        let filter_1 = Tensor::new_conv(vec![k_w,k_x,n_w,n_w], vec![k_x,n_x,n_x], rand_vec.iter().map(|&x| x as Element).collect());
-                        let filter_2 = Tensor::new(vec![k_w,k_x,n_w,n_w], rand_vec.iter().map(|&x| x as Element).collect());
-                        let big_x = Tensor::new(vec![k_x,n_x,n_x],vec![3;n_x*n_x*k_x]);//random_vector(n_x*n_x*k_x));
-                        let (out_2,_) = filter_1.fft_conv::<GoldilocksExt2>(&big_x);
+                    for n in 1..(j - 1) {
+                        let n_w = 1 << n;
+                        let k_w = 1 << l;
+                        let n_x = 1 << j;
+                        let k_x = 1 << i;
+                        let rand_vec = random_vector(n_w * n_w * k_x * k_w);
+                        let filter_1 = Tensor::new_conv(
+                            vec![k_w, k_x, n_w, n_w],
+                            vec![k_x, n_x, n_x],
+                            rand_vec.iter().map(|&x| x as Element).collect(),
+                        );
+                        let filter_2 = Tensor::new(
+                            vec![k_w, k_x, n_w, n_w],
+                            rand_vec.iter().map(|&x| x as Element).collect(),
+                        );
+                        let big_x = Tensor::new(vec![k_x, n_x, n_x], vec![3; n_x * n_x * k_x]); //random_vector(n_x*n_x*k_x));
+                        let (out_2, _) = filter_1.fft_conv::<GoldilocksExt2>(&big_x);
                         let out_1 = filter_2.cnn_naive_convolution(&big_x);
 
-                        // println!("Shapes:");
-                        // println!("\t filter1: {:?}", filter_1.dims());
-                        // println!("\t big_x: {:?}", big_x.dims());
-                        // println!("\t out_2: {:?}", out_2.dims());
-                        // println!("\t filter2: {:?}", filter_2.dims());
-                        // println!("\t out_1: {:?}", out_1.dims());
-
-                        check_tensor_consistency(out_1,out_2);
-                        /*
-
-                        let mut Filter2 = Tensor::new(vec![k_w,k_x,n_w,n_w], F);
-                        let mut X = Tensor::new(vec![k_x,n_x,n_x],vec![3;n_x*n_x*k_x]);//random_vector(n_x*n_x*k_x));
-                        let Out1 = Filter2.cnn_naive_convolution(&X.clone());
-                        let mut data: Vec<Element> = vec![0;k_x*n_x*n_x];
-                        //for k in 0..data.len(){
-                        //    data[k] = E::to_canonical_u64_vec(&X.data[k])[0] as Element;
-                        //}
-                        let mut X2 = Tensor::new(vec![k_x,n_x,n_x],data);
-                        let Out2 = Filter.fft_conv(&X2);
-                        check_tensor_consistency(Out1,Out2);     */
-
+                        check_tensor_consistency(out_1, out_2);
                     }
                 }
             }
