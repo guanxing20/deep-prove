@@ -255,7 +255,7 @@ impl Tensor<Element> {
             })
             .collect::<Vec<_>>();
         Self {
-            data: w, // Note that field elements are back into Element
+            data: w_fft, // Note that field elements are back into Element
             shape: vec![shape[0], shape[1], n_w, n_w], // nw is the padded version of the input
             input_shape,
         }
@@ -299,7 +299,6 @@ impl Tensor<Element> {
     /// Convolution algorithm using FFTs.
     /// When invoking this algorithm the prover generates all witness/intermediate evaluations
     /// needed to generate a convolution proof
-    ///
     pub fn fft_conv<F: ExtensionField>(
         &self,
         x: &Tensor<Element>,
