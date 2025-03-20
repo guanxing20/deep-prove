@@ -23,13 +23,16 @@ use crate::{
     to_bit_sequence_le,
 };
 
-// Function testing the consistency between the actual convolution implementation and
-// the FFT one. Used for debugging purposes.
+/// Function testing the consistency between the actual convolution implementation and
+/// the FFT one. Used for debugging purposes.
+/// real_tensor is std conv2d (kw, nx-nw+1, nx-nw+1)
+/// padded_tensor is results from fft conv (kw, nx, nx)
 pub fn check_tensor_consistency(real_tensor: Tensor<Element>, padded_tensor: Tensor<Element>) {
     let n_x = padded_tensor.shape[1];
     for i in 0..real_tensor.shape[0] {
         for j in 0..real_tensor.shape[1] {
             for k in 0..real_tensor.shape[1] {
+                // TODO0: test if real_tensor.shape[2] works here
                 // if(real_tensor.data[i*real_tensor.shape[1]*real_tensor.shape[1]+j*real_tensor.shape[1]+k] > 0){
                 assert!(
                     real_tensor.data[i * real_tensor.shape[1] * real_tensor.shape[1]
@@ -63,7 +66,10 @@ pub fn get_root_of_unity<E: ExtensionField>(n: usize) -> E {
 
     return rou;
 }
-// Properly pad a filter
+/// Properly pad a filter
+/// We use this function so that filter is amenable to FFT based conv2d
+/// Usually vec and n are powers of 2
+/// Output: [[F[0][0],…,F[0][n_w],0,…,0],[F[1][0],…,F[1][n_w],0,…,0],…]
 pub fn index_w<E: ExtensionField>(
     w: &[Element],
     n_real: usize,
@@ -80,9 +86,10 @@ pub fn index_w<E: ExtensionField>(
         }
     })
 }
-// let u = [u[1],...,u[n*n]]
-// output vec = [u[n*n-1],u[n*n-2],...,u[n*n-n],....,u[0]]
-// Note that y_eval =  f_vec(r) = f_u(1-r)
+/// let u = [u[0],...,u[(n*n)-1]]
+/// output vec = [u[n*n-1],u[n*n-2],...,u[n*n-n],....,u[0]]
+/// Just reverse the input vector
+/// Note that y_eval =  f_vec(r) = f_u(1-r)
 pub fn index_u<E: ExtensionField>(u: Vec<E>, n: usize) -> Vec<E> {
     let mut vec = vec![E::ZERO; u.len() / 2];
     let len = n * n;
@@ -91,8 +98,9 @@ pub fn index_u<E: ExtensionField>(u: Vec<E>, n: usize) -> Vec<E> {
     });
     return vec;
 }
-// let x: [x[0][0],...,x[0][n],x[1][0],...,x[n][n]]
-// output vec = [x[n][n], x[n][n-1],...,x[n][0],x[n-1]x[n],...,x[0][0]]
+// let x: [x[0][0],...,x[0][n],x[1][0],...,x[n-1][n-1]]
+// output vec = [x[n-1][n-1], x[n-1][n-2],...,x[n-1][0],x[n-1]x[n-1],...,x[0][0]]
+// Just reverse it while converting into a field
 // Note that y_eval = f_vec(r) = f_x(1-r)
 pub fn index_x<E: ExtensionField>(x: Vec<Element>, vec: &mut Vec<E>, n: usize) {
     let len = n * n;
@@ -100,9 +108,8 @@ pub fn index_x<E: ExtensionField>(x: Vec<Element>, vec: &mut Vec<E>, n: usize) {
         *val = x[len - 1 - i].to_field();
     });
 }
-// FFT implementation,
-// flag: false -> FFT
-// flag: true -> iFFT
+/// flag: false -> FFT
+/// flag: true -> iFFT
 pub fn fft<E: ExtensionField + Send + Sync>(v: &mut Vec<E>, flag: bool) {
     let n = v.len();
     let logn = ark_std::log2(n) as u32;
@@ -165,16 +172,17 @@ pub fn fft<E: ExtensionField + Send + Sync>(v: &mut Vec<E>, flag: bool) {
     }
 }
 
+/// Contains witness information and all intermediate evals to compute conv proof
 pub struct ConvData<E>
 where
     E: Clone + ExtensionField,
 {
     // real_input: For debugging purposes
-    pub real_input: Vec<E>,
-    pub input: Vec<Vec<E>>,
-    pub input_fft: Vec<Vec<E>>,
-    pub prod: Vec<Vec<E>>,
-    pub output: Vec<Vec<E>>,
+    pub real_input: Vec<E>, // Actual data before applying FFT and it is already padded with zeros.
+    pub input: Vec<Vec<E>>, // This is the result of applying index_x to real_input
+    pub input_fft: Vec<Vec<E>>, // FFT(input)
+    pub prod: Vec<Vec<E>>,  // FFT(input) * FFT(weights)
+    pub output: Vec<Vec<E>>, // iFFT(FFT(input) * FFT(weights)) ==> conv
 }
 
 impl<E> ConvData<E>
@@ -247,17 +255,22 @@ impl Tensor<Element> {
             })
             .collect::<Vec<_>>();
         Self {
-            data: w_fft,
-            shape: vec![shape[0], shape[1], n_w, n_w],
+            data: w, // Note that field elements are back into Element
+            shape: vec![shape[0], shape[1], n_w, n_w], // nw is the padded version of the input
             input_shape,
         }
     }
+    /// Recall that weights are not plain text to the "snark". Rather it is FFT(weights).
+    /// Aka there is no need to compute the FFT(input) "in-circuit".
+    /// It is okay to assume the inputs to the prover is already the FFT version and the prover can commit to the FFT values.
+    /// This function computes iFFT of the weights so that we can compute the scaling factors used.
     pub fn get_real_weights<F: ExtensionField>(&self) -> Vec<Vec<Vec<Element>>> {
         let mut w_fft =
             vec![
                 vec![vec![F::ZERO; 2 * self.nw() * self.nw()]; self.kx().next_power_of_two()];
                 self.kw().next_power_of_two()
             ];
+        // TODO: use par_iter
         let mut ctr = 0;
         for i in 0..w_fft.len() {
             for j in 0..w_fft[i].len() {
@@ -283,25 +296,29 @@ impl Tensor<Element> {
         }
         real_weights
     }
-    // Convolution algorithm using FFTs.
-    // When invoking this algorithm the prover generates all withness/intermidiate evaluations
-    // needed to generate a convolution proof
+    /// Convolution algorithm using FFTs.
+    /// When invoking this algorithm the prover generates all witness/intermediate evaluations
+    /// needed to generate a convolution proof
+    ///
     pub fn fft_conv<F: ExtensionField>(
         &self,
         x: &Tensor<Element>,
     ) -> (Tensor<Element>, ConvData<F>) {
+        // input to field elements
         let n_x = x.shape[1].next_power_of_two();
         let mut real_input = vec![F::ZERO; x.data.len()];
         real_input.par_iter_mut().enumerate().for_each(|(i, val)| {
             *val = x.data[i].to_field();
         });
 
+        // weights to field elements
         let mut x_vec = vec![vec![F::ZERO; n_x * n_x]; x.shape[0].next_power_of_two()];
         let mut w_fft = vec![F::ZERO; self.data.len()];
         w_fft.par_iter_mut().enumerate().for_each(|(i, val)| {
             *val = self.data[i].to_field();
         });
 
+        // input_x(input)
         for i in 0..x_vec.len() {
             index_x(
                 x.data[i * n_x * n_x..(i + 1) * n_x * n_x].to_vec(),
