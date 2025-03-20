@@ -981,7 +981,8 @@ where
 
 impl<T> Tensor<T>
 where
-    T: PartialOrd + Ord + Clone + Debug,
+    T: PartialOrd + Ord + Debug,
+    T: Copy + Clone + Send + Sync,
     T: std::default::Default,
 {
     pub fn maxpool2d(&self, kernel_size: usize, stride: usize) -> Tensor<T> {
@@ -1003,31 +1004,30 @@ where
         let out_w = (w - kernel_size) / stride + 1;
 
         let outer_dims: usize = self.shape[..dims - 2].iter().product();
-        let mut output = vec![T::default(); outer_dims * out_h * out_w];
+        let output: Vec<T> = (0..outer_dims * out_h * out_w)
+            .into_par_iter()
+            .map(|flat_idx| {
+                let n = flat_idx / (out_h * out_w);
+                let i = (flat_idx / out_w) % out_h;
+                let j = flat_idx % out_w;
 
-        for n in 0..outer_dims {
-            let matrix_idx = n * (h * w);
-            for i in 0..out_h {
-                for j in 0..out_w {
-                    let src_idx = matrix_idx + (i * stride) * w + (j * stride);
-                    let mut max_val = self.data[src_idx].clone();
+                let matrix_idx = n * (h * w);
+                let src_idx = matrix_idx + (i * stride) * w + (j * stride);
+                let mut max_val = self.data[src_idx].clone();
 
-                    for ki in 0..kernel_size {
-                        for kj in 0..kernel_size {
-                            let src_idx = matrix_idx + (i * stride + ki) * w + (j * stride + kj);
-                            let value = self.data[src_idx].clone();
-
-                            if value > max_val {
-                                max_val = value;
-                            }
+                for ki in 0..kernel_size {
+                    for kj in 0..kernel_size {
+                        let src_idx = matrix_idx + (i * stride + ki) * w + (j * stride + kj);
+                        let value = self.data[src_idx].clone();
+                        if value > max_val {
+                            max_val = value;
                         }
                     }
-
-                    let out_idx = n * out_h * out_w + i * out_w + j;
-                    output[out_idx] = max_val;
                 }
-            }
-        }
+
+                max_val
+            })
+            .collect();
 
         let mut new_shape = self.shape.clone();
         new_shape[dims - 2] = out_h;
