@@ -482,11 +482,6 @@ impl<T> Tensor<T> {
     pub fn get_data(&self) -> &[T] {
         &self.data
     }
-    /// TODO: Delete
-    pub fn update_input_shape(&mut self, input: &[usize]) {
-        // TODO: Need to assert the input_shape with self.shape
-        self.input_shape = input.to_vec();
-    }
 }
 
 impl<T> Tensor<T>
