@@ -80,27 +80,12 @@ pub fn index_w<E: ExtensionField>(
         }
     })
 }
-/// let u = [u[0],...,u[(n*n)-1]]
-/// output vec = [u[n*n-1],u[n*n-2],...,u[n*n-n],....,u[0]]
-/// Just reverse the input vector
-/// Note that y_eval =  f_vec(r) = f_u(1-r)
-pub fn index_u<E: ExtensionField>(u: Vec<E>, n: usize) -> Vec<E> {
-    let mut vec = vec![E::ZERO; u.len() / 2];
+// let u = [u[1],...,u[n*n]]
+// output vec = [u[n*n-1],u[n*n-2],...,u[n*n-n],....,u[0]]
+// Note that y_eval =  f_vec(r) = f_u(1-r)
+pub fn index_u<E: ExtensionField>(u: &[E], n: usize) -> impl Iterator<Item = E> + use<'_, E> {
     let len = n * n;
-    vec.par_iter_mut().enumerate().for_each(|(i, val)| {
-        *val = u[len - 1 - i];
-    });
-    return vec;
-}
-// let x: [x[0][0],...,x[0][n],x[1][0],...,x[n-1][n-1]]
-// output vec = [x[n-1][n-1], x[n-1][n-2],...,x[n-1][0],x[n-1]x[n-1],...,x[0][0]]
-// Just reverse it while converting into a field
-// Note that y_eval = f_vec(r) = f_x(1-r)
-pub fn index_x<E: ExtensionField>(x: Vec<Element>, vec: &mut Vec<E>, n: usize) {
-    let len = n * n;
-    vec.par_iter_mut().enumerate().for_each(|(i, val)| {
-        *val = x[len - 1 - i].to_field();
-    });
+    (0..u.len() / 2).into_iter().map(move |i| u[len - 1 - i])
 }
 /// flag: false -> FFT
 /// flag: true -> iFFT
@@ -166,7 +151,7 @@ pub fn fft<E: ExtensionField + Send + Sync>(v: &mut Vec<E>, flag: bool) {
     }
 }
 
-/// Contains witness information and all intermediate evals to compute conv proof
+#[derive(Debug, Default, Clone)]
 pub struct ConvData<E>
 where
     E: Clone + ExtensionField,
@@ -196,20 +181,6 @@ where
             input_fft,
             prod,
             output,
-        }
-    }
-}
-impl<E> Clone for ConvData<E>
-where
-    E: ExtensionField + Clone,
-{
-    fn clone(&self) -> Self {
-        ConvData {
-            real_input: self.real_input.clone(),
-            input: self.input.clone(),
-            input_fft: self.input_fft.clone(),
-            prod: self.prod.clone(),
-            output: self.output.clone(),
         }
     }
 }
@@ -299,65 +270,63 @@ impl Tensor<Element> {
     ) -> (Tensor<Element>, ConvData<F>) {
         // input to field elements
         let n_x = x.shape[1].next_power_of_two();
-        let mut real_input = vec![F::ZERO; x.data.len()];
-        real_input.par_iter_mut().enumerate().for_each(|(i, val)| {
-            *val = x.data[i].to_field();
-        });
-
-        // weights to field elements
-        let mut x_vec = vec![vec![F::ZERO; n_x * n_x]; x.shape[0].next_power_of_two()];
-        let mut w_fft = vec![F::ZERO; self.data.len()];
-        w_fft.par_iter_mut().enumerate().for_each(|(i, val)| {
-            *val = self.data[i].to_field();
-        });
-
-        // input_x(input)
-        for i in 0..x_vec.len() {
-            index_x(
-                x.data[i * n_x * n_x..(i + 1) * n_x * n_x].to_vec(),
-                &mut x_vec[i],
-                n_x,
-            );
-        }
-
-        let input = x_vec.clone();
-        let n = 2 * x_vec[0].len();
-        for i in 0..x_vec.len() {
-            x_vec[i].resize(n, F::ZERO);
-            fft(&mut x_vec[i], false);
-        }
-
-        let input_fft = x_vec.clone();
-
-        // proving_data.x_fft = x_vec;
-        let mut out = vec![vec![F::ZERO; x_vec[0].len()]; self.shape[0]];
-        for i in 0..out.len() {
-            for j in 0..x_vec.len() {
-                for k in 0..out[i].len() {
-                    out[i][k] += x_vec[j][k] * w_fft[i * n * x_vec.len() + j * n + k];
-                }
-            }
-        }
-        let prod = out.clone();
-        // proving_data.prod = out;
-        for i in 0..out.len() {
-            fft(&mut out[i], true);
-        }
+        let real_input = x.data.par_iter().map(|e| e.to_field()).collect::<Vec<_>>();
+        let w_fft: Vec<F> = self
+            .data
+            .par_iter()
+            .map(|e| e.to_field())
+            .collect::<Vec<_>>();
+        let new_n = 2 * n_x * n_x;
+        let (x_vec, input): (Vec<Vec<F>>, Vec<Vec<F>>) = real_input
+            .par_iter()
+            .chunks(n_x * n_x)
+            .map(|chunk| {
+                let xx_input = chunk.into_iter().cloned().rev().collect::<Vec<_>>();
+                let mut xx_fft = xx_input
+                    .iter()
+                    .cloned()
+                    .chain(std::iter::repeat(F::ZERO))
+                    .take(new_n)
+                    .collect::<Vec<_>>();
+                fft(&mut xx_fft, false);
+                (xx_fft, xx_input)
+            })
+            .unzip();
+        let dim1 = x_vec.len();
+        let dim2 = x_vec[0].len();
+        let (out, prod): (Vec<_>, Vec<_>) = (0..self.shape[0])
+            .into_par_iter()
+            .map(|i| {
+                let mut outi = (0..dim2)
+                    .into_iter()
+                    .map(|k| {
+                        (0..dim1)
+                            .into_iter()
+                            .map(|j| x_vec[j][k] * w_fft[i * new_n * x_vec.len() + j * new_n + k])
+                            .sum::<F>()
+                    })
+                    .collect::<Vec<_>>();
+                // TODO: remove requirement to keep the product value intact
+                let prodi = outi.clone();
+                fft(&mut outi, true);
+                (outi, prodi)
+            })
+            .unzip();
+        // TODO: remove the requirement to keep the output value intact
         let output = out.clone();
-        for i in 0..out.len() {
-            out[i] = index_u(out[i].clone(), n_x);
-        }
-        let mut out_element: Vec<Element> = vec![0; out.len() * out[0].len()];
-        for i in 0..out.len() {
-            for j in 0..out[i].len() {
-                let val = out[i][j].into_element();
-                out_element[i * out[i].len() + j] = val;
-            }
-        }
+        let out_element = out
+            .into_par_iter()
+            .map(|e| {
+                index_u(e.as_slice(), n_x)
+                    .map(|e| e.into_element())
+                    .collect::<Vec<_>>()
+            })
+            .flatten()
+            .collect::<Vec<_>>();
 
         return (
             Tensor::new(vec![self.shape[0], n_x, n_x], out_element),
-            ConvData::new(real_input, input, input_fft, prod, output),
+            ConvData::new(real_input, input, x_vec, prod, output),
         );
     }
     pub fn kx(&self) -> usize {
