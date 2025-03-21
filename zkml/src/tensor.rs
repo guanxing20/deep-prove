@@ -1203,25 +1203,35 @@ where
         );
         assert!(mat_shp_pad.len() == 2 && self.shape.len() == 2);
 
-        let mut new_data = vec![T::default(); mat_shp_pad.iter().product()];
         let mat_shp_og = self.get_shape();
-        for row in 0..mat_shp_og[0] {
-            for channel in 0..conv_shape_og[0] {
-                for h_in in 0..conv_shape_og[1] {
-                    for w_in in 0..conv_shape_og[2] {
-                        let old_loc = channel * conv_shape_og[1] * conv_shape_og[2]
-                            + h_in * conv_shape_og[2]
-                            + w_in
-                            + row * mat_shp_og[1];
-                        let new_loc = channel * conv_shape_pad[1] * conv_shape_pad[2]
-                            + h_in * conv_shape_pad[2]
-                            + w_in
-                            + row * mat_shp_pad[1];
-                        new_data[new_loc] = self.data[old_loc]
-                    }
+
+        let new_data: Vec<T> = (0..mat_shp_pad[0] * mat_shp_pad[1])
+            .into_par_iter()
+            .map(|new_loc| {
+                // Decompose new_loc into (row, channel, h_in, w_in) for the padded output space
+                let row = new_loc / mat_shp_pad[1];
+                let channel =
+                    (new_loc / (conv_shape_pad[1] * conv_shape_pad[2])) % conv_shape_pad[0];
+                let h_in = (new_loc / conv_shape_pad[2]) % conv_shape_pad[1];
+                let w_in = new_loc % conv_shape_pad[2];
+
+                // Check if this position corresponds to an original data location
+                if row < mat_shp_og[0]
+                    && channel < conv_shape_og[0]
+                    && h_in < conv_shape_og[1]
+                    && w_in < conv_shape_og[2]
+                {
+                    let old_loc = channel * conv_shape_og[1] * conv_shape_og[2]
+                        + h_in * conv_shape_og[2]
+                        + w_in
+                        + row * mat_shp_og[1];
+                    self.data[old_loc].clone()
+                } else {
+                    T::default() // Default value for non-mapped positions
                 }
-            }
-        }
+            })
+            .collect();
+
         Tensor::new(mat_shp_pad.to_vec(), new_data)
     }
 }
