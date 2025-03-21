@@ -1062,28 +1062,24 @@ where
             MAXPOOL2D_KERNEL_SIZE
         );
 
-        let mut padded_maxpool_data = vec![T::default(); self.shape.iter().product()];
-
         let outer_dims: usize = self.shape[..dims - 2].iter().product();
         let maxpool_h = (h - kernel_size) / stride + 1;
         let maxpool_w = (w - kernel_size) / stride + 1;
 
-        for n in 0..outer_dims {
-            let matrix_idx = n * (h * w);
-            for i in 0..maxpool_h {
-                for j in 0..maxpool_w {
-                    let maxpool_idx = n * maxpool_h * maxpool_w + i * maxpool_w + j;
-                    let maxpool_value = maxpool_result.data[maxpool_idx].clone();
+        let padded_maxpool_data: Vec<T> = (0..outer_dims * h * w)
+            .into_par_iter()
+            .map(|out_idx| {
+                let n = out_idx / (h * w);
+                let i_full = (out_idx / w) % h;
+                let j_full = out_idx % w;
 
-                    for ki in 0..kernel_size {
-                        for kj in 0..kernel_size {
-                            let out_idx = matrix_idx + (i * stride + ki) * w + (j * stride + kj);
-                            padded_maxpool_data[out_idx] = maxpool_value.clone();
-                        }
-                    }
-                }
-            }
-        }
+                let i = i_full / stride;
+                let j = j_full / stride;
+
+                let maxpool_idx = n * maxpool_h * maxpool_w + i * maxpool_w + j;
+                maxpool_result.data[maxpool_idx].clone()
+            })
+            .collect();
 
         let padded_maxpool_tensor = Tensor {
             data: padded_maxpool_data,
