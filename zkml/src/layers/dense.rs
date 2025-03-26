@@ -104,10 +104,10 @@ impl Dense {
                     .fold((0, 0), |(min, max), (wmin, wmax)| (min + wmin, max + wmax));
                 // add the bias rescaled to the same scale as the model 
                 let bias_weight = &self.bias.get_data()[i] * model_1;
-                //let total_range = (row_range.0 + bias_weight, row_range.1 + bias_weight);
-                let total_range = (row_range.0 , row_range.1 );
-                //(total_range.0,total_range.1)
-                (total_range.0,total_range.0+10)
+                let total_range = (row_range.0 + bias_weight, row_range.1 + bias_weight);
+                //let total_range = (row_range.0 , row_range.1 );
+                (total_range.0,total_range.1)
+                //(total_range.0,total_range.0+10)
             })
             .unzip();
 
