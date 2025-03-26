@@ -1,4 +1,5 @@
 //! Module that takes care of (re)quantizing
+use std::ops::{Add, Div, Mul, Sub};
 use derive_more::From;
 use ff_ext::ExtensionField;
 use goldilocks::SmallField;
@@ -24,15 +25,35 @@ pub static MAX: Lazy<Element> = Lazy::new(|| (1 << (*BIT_LEN - 1)) - 1);
 pub static ZERO: Lazy<Element> = Lazy::new(|| 0);
 pub static RANGE_BITLEN: Lazy<Element> = Lazy::new(|| (*MAX - *ZERO).ilog2() as Element);
 
-#[derive(Debug,Clone, From)]
-pub struct ScalingFactor(f32);
+/// Each scaling factor is of the form 2^k / 2^BIT_LEN. THis struct stores k.
+#[derive(Debug,Clone, From,Copy)]
+pub struct ScalingFactor(pub(crate) usize);
+impl ScalingFactor  {
+   /// Derives the right shift to apply to values to requantize them
+   /// S_i = (a_i - b_i) / 2^Q = 2^k_i / 2^Q
+   /// So S1 * S2 / S3 = 2^k1 * 2^k2 * 2^Q / [2^k3 * 2^Q * 2^Q]
+   ///                 = 2^(k1 + k2 - k3 - Q)
+   ///                 = 2^{-n} where n = k3 + Q - k1 - k2
+   /// n is the number of bits to shift right
+   pub fn shift(&self,s2: Self, s3: Self) -> usize {
+        let twoq = (1 << *BIT_LEN) as f32;
+        let fulls1 = self.0 as f32 / twoq;
+        let fulls2 = s2.0 as f32 / twoq;
+        let fulls3 = s3.0 as f32 / twoq;
+        let full = fulls1 * fulls2 / fulls3;
+        assert!(full >= 0.0 && full <= 1.0, "Full is not in the range [0, 1]. This should not happen.");
+        println!("SHIFT DENSE s1={:?}, s2={:?},s3={:?} => shift={}", self,s2,s3, self.0 as i32 + s2.0 as i32 - s3.0  as i32 - *BIT_LEN as i32);
+        let exp = self.0 as i32 + s2.0 as i32 - s3.0  as i32 - *BIT_LEN as i32;
+        assert!(exp <= 0, "Shift exp {} is positive. This should not happen. (full={})", exp, full);
+        exp.abs() as usize
+   } 
+}
 
 impl Default for ScalingFactor {
     fn default() -> Self {
-        // even tho we are requantizing starting from Element, we only want to requantize for QuantInteger
-        // the reason we have these two types is to handle overflow
-        // (a -b) / 2^Q
-        Self((1.0 - (-1.0)) / (1 << *BIT_LEN) as f32)
+        // (a -b) / 2^Q : for scaling factor we only keep the numerator since denumerator is always the same.
+        // in this case: max = 1, min = -1, (a-b) = 2, so k = 1
+        Self(1)
     }
 }
 
@@ -48,11 +69,11 @@ impl Quantizer<Element> for Element {
             *e >= -1.0 && *e <= 1.0,
             "Input value must be between -1.0 and 1.0"
         );
-        let scale = ScalingFactor::default();
+        let scale = ScalingFactor::default().0 as f32/ (1 << *BIT_LEN) as f32;
         let zero_point = 0;
 
         // formula is q = round(r/S) + z
-        let scaled = (*e / scale.0).round() as Element + zero_point;
+        let scaled = (*e / scale).round() as Element + zero_point;
         scaled as Element
     }
 
@@ -233,5 +254,15 @@ mod tests {
                 val, roundtrip
             );
         }
+    }
+    use std::ops::{Mul,Add,Div};
+
+    #[test]
+    fn test_scaling_factor() {
+        let s1 :ScalingFactor= ScalingFactor::from(2);
+        let s2 :ScalingFactor= ScalingFactor::from(2);
+        let s3 = ScalingFactor::from(4);
+        let shift = s1.shift(s2, s3);
+        assert_eq!(shift, s3.0 + *BIT_LEN - s1.0 - s2.0);
     }
 }

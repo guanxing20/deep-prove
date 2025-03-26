@@ -285,7 +285,7 @@ pub fn load_model<Q: Quantizer<Element>>(filepath: &str) -> Result<Model> {
 
     // Get global weight ranges first
     let (global_min, global_max) = analyze_model_weight_ranges(filepath)?;
-    let global_max_abs = global_max - global_min;
+    let global_max_abs = ((global_max - global_min) as u32).next_power_of_two() as f32;
     debug!(
         "Using global weight range for quantization: [{}, {}], max_abs={}",
         global_min, global_max, global_max_abs

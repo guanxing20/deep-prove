@@ -91,7 +91,7 @@ mod test {
     type F = GoldilocksExt2;
 
     #[test]
-    fn test_prover_steps() {
+    fn test_prover_steps_generic() {
         init_test_logging();
         let (model, input) = Model::random(4);
         model.describe();

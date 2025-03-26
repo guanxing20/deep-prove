@@ -82,7 +82,7 @@ impl Dense {
         Self::new(matrix, bias)
     }
 
-    pub fn requant_info(&self, input_scaling_factor: ScalingFactor) -> (Requant,ScalingFactor){
+    pub fn requant_info(&self, input_scaling_factor: ScalingFactor) -> (Requant, ScalingFactor){
         let ncols = self.matrix.ncols_2d();
         let (mins,maxs) :(Vec<_>,Vec<_>)= self
             .matrix
@@ -118,11 +118,17 @@ impl Dense {
         let max_output_range = real_max_output_range;
         let shift = real_shift;
         println!("real_output_range: {}, max_output_range: {}, shift: {}", real_max_output_range.ilog2(), (full_max_output_range as u32).ilog2(), shift);
+        let s1 = input_scaling_factor;
+        let model_min = self.matrix.get_data().iter().enumerate().map(|(i,w)| w + self.bias.get_data()[i/ncols]).min().unwrap();
+        let model_max= self.matrix.get_data().iter().enumerate().map(|(i,w)| w + self.bias.get_data()[i/ncols]).max().unwrap();
+        let s2 = ScalingFactor::from(((model_max - model_min) as usize).next_power_of_two().ilog2() as usize);
+        let s3 = ScalingFactor::from(((global_max - global_min) as usize).next_power_of_two().ilog2() as usize);
+        let shift = s1.shift(s2, s3);
         (Requant {
             range: max_output_range as usize,
             right_shift: shift,
             after_range: 1 << *quantization::BIT_LEN,
-        },input_scaling_factor)
+        },s3)
     }
     pub fn prove_step<'b, E, T>(
         &self,
