@@ -24,10 +24,20 @@ pub static RANGE_BITLEN: Lazy<Element> = Lazy::new(|| (*MAX - *ZERO).ilog2() as 
 
 /// Each scaling factor is of the form 2^k / 2^BIT_LEN. THis struct stores k.
 #[derive(Debug, Clone, From, Copy)]
-pub struct ScalingFactor(pub(crate) f32);
+pub struct ScalingFactor {
+    min: f32,
+    max: f32,
+}
+
+
 impl ScalingFactor {
-    pub fn from_span(max: f32, min: f32) -> Self {
-        Self((max - min) / (1 << *BIT_LEN) as f32)
+    pub fn from_span(min: f32, max: f32) -> Self {
+        println!("New Scaling Factor: from_span: min={}, max={}", min, max);
+        Self { min, max }
+    }
+
+    fn scale(&self) -> f32 {
+        (self.max - self.min) / (1 << *BIT_LEN) as f32
     }
 
     /// Derives the right shift to apply to values to requantize them
@@ -37,17 +47,13 @@ impl ScalingFactor {
     ///                 = 2^{-n} where n = k3 + Q - k1 - k2
     /// n is the number of bits to shift right
     pub fn shift(&self, s2: Self, s3: Self) -> usize {
-        let full = self.0 * s2.0 / s3.0;
+        let full = self.scale() * s2.scale() / s3.scale();
         assert!(
             full >= 0.0 && full <= 1.0,
             "Full is not in the range [0, 1]. This should not happen."
         );
         let exp = (-full.log2()).ceil() as usize;
-        println!(
-            "SHIFT DENSE s1={:?}, s2={:?},s3={:?} => shift={}",
-            self, s2, s3, exp
-        );
-        exp
+                exp
     }
 
     /// Take a floating point number and quantize it to an BIT_LEN-bit integer
@@ -59,14 +65,16 @@ impl ScalingFactor {
         let zero_point = 0;
 
         // formula is q = round(r/S) + z
-        let scaled = (*value / self.0).round() as Element + zero_point;
+        //let scaled =((value.clamp(self.min,self.max) - self.min) / self.scale()).round() * self.scale() + self.min;
+        let scaled = (*value / self.scale()).round() as Element + zero_point;
+
         scaled as Element
     }
 }
 
 impl Default for ScalingFactor {
     fn default() -> Self {
-        Self((1.0 - (-1.0)) / (1 << *BIT_LEN) as f32)
+        Self::from_span(-1.0, 1.0)
     }
 }
 

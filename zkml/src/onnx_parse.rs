@@ -581,7 +581,7 @@ fn fetch_weight_and_bias(
     // choose the maximal span between the two so they both get the same scaling factor
     let min = min_weight.min(min_bias);
     let max = max_weight.max(max_bias);
-    let scaling = ScalingFactor::from_span(max, min);
+    let scaling = ScalingFactor::from_span(min, max);
     let weights = crate::Tensor::new(
         shape,
         data.iter().map(|x| scaling.quantize(x)).collect_vec(),

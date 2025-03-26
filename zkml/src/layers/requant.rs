@@ -109,6 +109,7 @@ impl Requant {
     pub fn apply(&self, e: &Element) -> Element {
         let max_bit = (self.range << 1) as i128;
         let tmp = e + max_bit;
+        assert!(tmp >= 0);
         let tmp = tmp >> self.right_shift;
         let res = tmp - (max_bit >> self.right_shift);
         assert!(res >= *quantization::MIN && res <= *quantization::MAX);

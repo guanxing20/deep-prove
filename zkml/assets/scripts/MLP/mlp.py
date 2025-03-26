@@ -196,42 +196,50 @@ for i, layer in enumerate(model.layers):
         print(f"Layer {i} bias vector dimensions: {bias_vector.size()}")
 
 def plot_weight_distribution(model):
-    """Plot the distribution of weights across all dense layers."""
-    # Collect all weights from dense layers
+    """Plot the distribution of weights and biases across all dense layers."""
+    # Collect all weights and biases from dense layers
     all_weights = []
+    all_biases = []
     layer_names = []
     
     for i, layer in enumerate(model.layers):
         if isinstance(layer, nn.Linear):
-            # Flatten weights and add to list
+            # Flatten weights and biases and add to lists
             weights = layer.weight.data.cpu().numpy().flatten()
+            biases = layer.bias.data.cpu().numpy().flatten()
             all_weights.append(weights)
+            all_biases.append(biases)
             layer_names.append(f"Layer {i}")
     
-    # Create subplots for each layer
-    fig, axes = plt.subplots(len(all_weights), 1, figsize=(12, 4*len(all_weights)))
+    # Create subplots for each layer (2 columns: weights and biases)
+    fig, axes = plt.subplots(len(all_weights), 2, figsize=(10, 3*len(all_weights)))
     if len(all_weights) == 1:
-        axes = [axes]
+        axes = axes.reshape(1, -1)
     
-    for ax, weights, name in zip(axes, all_weights, layer_names):
-        # Calculate min and max
-        w_min = np.min(weights)
-        w_max = np.max(weights)
+    for ax_row, weights, biases, name in zip(axes, all_weights, all_biases, layer_names):
+        # Plot weights
+        w_min, w_max = np.min(weights), np.max(weights)
+        w_range_pad = (w_max - w_min) * 0.05
+        w_x_min, w_x_max = w_min - w_range_pad, w_max + w_range_pad
         
-        # Add 5% padding to the range
-        range_pad = (w_max - w_min) * 0.05
-        x_min = w_min - range_pad
-        x_max = w_max + range_pad
+        ax_row[0].hist(weights, bins=50, density=False, alpha=0.7, label='Count', range=(w_x_min, w_x_max))
+        ax_row[0].set_title(f'Weights - {name}\nMin: {w_min:.3f}, Max: {w_max:.3f}')
+        ax_row[0].set_xlabel('Weight Value')
+        ax_row[0].set_ylabel('Count')
+        ax_row[0].set_xlim(w_x_min, w_x_max)
+        ax_row[0].grid(True)
         
-        # Plot histogram with dynamic range
-        ax.hist(weights, bins=50, density=False, alpha=0.7, label='Count', range=(x_min, x_max))
+        # Plot biases
+        b_min, b_max = np.min(biases), np.max(biases)
+        b_range_pad = (b_max - b_min) * 0.05
+        b_x_min, b_x_max = b_min - b_range_pad, b_max + b_range_pad
         
-        ax.set_title(f'Weight Distribution - {name}\nMin: {w_min:.3f}, Max: {w_max:.3f}')
-        ax.set_xlabel('Weight Value')
-        ax.set_ylabel('Count')
-        ax.set_xlim(x_min, x_max)  # Set dynamic x-axis limits
-        ax.legend(loc='upper right', bbox_to_anchor=(1.15, 1))  # Position legend outside the plot
-        ax.grid(True)
+        ax_row[1].hist(biases, bins=50, density=False, alpha=0.7, label='Count', range=(b_x_min, b_x_max))
+        ax_row[1].set_title(f'Biases - {name}\nMin: {b_min:.3f}, Max: {b_max:.3f}')
+        ax_row[1].set_xlabel('Bias Value')
+        ax_row[1].set_ylabel('Count')
+        ax_row[1].set_xlim(b_x_min, b_x_max)
+        ax_row[1].grid(True)
     
     plt.tight_layout()
     # Save the figure with extra space for legend

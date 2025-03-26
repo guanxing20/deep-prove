@@ -46,6 +46,7 @@ impl Model {
         self.layers.push(l);
         if let Some((requant, output_scaling_factor)) = requant {
             self.layers.push(requant);
+            println!("MODEL: output scaling factor added : {:?}", output_scaling_factor);
             self.last_input_scaling_factor = Some(output_scaling_factor);
         }
     }
@@ -299,7 +300,7 @@ pub(crate) mod test {
         dense::Dense,
         pooling::{MAXPOOL2D_KERNEL_SIZE, Maxpool2D, Pooling},
     };
-    use ark_std::rand::{Rng, thread_rng};
+    use ark_std::rand::{thread_rng, Rng, RngCore};
     use ff_ext::ExtensionField;
     use goldilocks::GoldilocksExt2;
     use itertools::Itertools;
@@ -326,10 +327,13 @@ pub(crate) mod test {
     const MOD_SELECTOR: usize = 2;
 
     impl Model {
-        /// Returns a random model with specified number of dense layers and a matching input.
         pub fn random(num_dense_layers: usize) -> (Self, Tensor<Element>) {
-            let mut model = Model::new();
             let mut rng = thread_rng();
+            Model::random_with_rng(num_dense_layers, &mut rng)
+        }
+        /// Returns a random model with specified number of dense layers and a matching input.
+        pub fn random_with_rng<R: RngCore> (num_dense_layers: usize,rng: &mut R) -> (Self, Tensor<Element>) {
+            let mut model = Model::new();
             let mut last_row = rng.gen_range(3..15);
             for selector in 0..num_dense_layers {
                 // if selector % MOD_SELECTOR == SELECTOR_DENSE {
@@ -720,7 +724,7 @@ pub(crate) mod test {
         let conv2 = Tensor::new(vec![1024], w2.clone());
 
         let mut model = Model::new();
-        model.add_layer::<F>(Layer::Dense(Dense::new(conv1, conv2)));
+        model.add_layer::<F>(Layer::Dense(Dense::new_with_scaling(conv1, conv2, ScalingFactor::default())));
         model.describe();
         let input = Tensor::new(vec![1024], random_vector_quant(1024));
         let trace: crate::model::InferenceTrace<'_, _, GoldilocksExt2> =

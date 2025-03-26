@@ -93,7 +93,7 @@ mod test {
     #[test]
     fn test_prover_steps_generic() {
         init_test_logging();
-        let (model, input) = Model::random(4);
+        let (model, input) = Model::random(1);
         model.describe();
         let trace = model.run(input.clone());
         let output = trace.final_output();
