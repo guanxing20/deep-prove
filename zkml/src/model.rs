@@ -3,10 +3,7 @@ use itertools::Itertools;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
 use crate::{
-    Element,
-    layers::{Layer, LayerOutput},
-    quantization::TensorFielder,
-    tensor::{ConvData, Tensor},
+    layers::{Layer, LayerOutput}, quantization::{ScalingFactor, TensorFielder}, tensor::{ConvData, Tensor}, Element
 };
 
 // The index of the step, starting from the input layer. (proving is done in the opposite flow)
@@ -19,6 +16,8 @@ pub struct Model {
     input_not_padded: Vec<usize>,
     padded_in_shape: Vec<usize>,
     layers: Vec<Layer>,
+    // only used during creation of the model - this is not useful when the model is created / deserialized etc
+    last_input_scaling_factor: Option<ScalingFactor>,
 }
 
 impl Model {
@@ -27,25 +26,19 @@ impl Model {
             input_not_padded: Vec::new(),
             padded_in_shape: Vec::new(),
             layers: Default::default(),
+            last_input_scaling_factor: None,
         }
     }
+    /// Adds a layer to the model. The model may add additional layers by itself, e.g. requantization
+    /// layers.
     pub fn add_layer<F: ExtensionField>(&mut self, l: Layer) {
-        let after_layer = match l {
-            Layer::Dense(ref dense) => {
-                // append a requantization layer after
-                // NOTE: since we requantize at each dense step currently, we assume
-                // default quantization inputs for matrix and vector
-                Some(Layer::Requant(dense.requant_info()))
-            }
-            Layer::Convolution(ref filter) => Some(Layer::Requant(filter.requant_info::<F>())),
-            // Layer::Traditional_Convolution(ref filter) => {
-            // Some(Layer::Requant(Requant::from_matrix_default(filter)))
-            // }
-            _ => None,
-        };
+        let f = self.last_input_scaling_factor.take().unwrap_or_default();
+        // do we need a requantization step after this layer or not
+        let requant = l.subsequent_requant_layer::<F>(f);
         self.layers.push(l);
-        if let Some(ll) = after_layer {
-            self.layers.push(ll);
+        if let Some((requant,output_scaling_factor)) = requant {
+            self.layers.push(requant);
+            self.last_input_scaling_factor = Some(output_scaling_factor);
         }
     }
 
@@ -314,6 +307,7 @@ pub(crate) mod test {
         tensor::Tensor,
         testing::{NextPowerOfTwo, random_bool_vector, random_vector},
     };
+    use crate::model::ScalingFactor;
 
     use super::Model;
 
@@ -555,7 +549,7 @@ pub(crate) mod test {
         let dense2 = Dense::random(vec![7, dense1.ncols()]).pad_next_power_of_two();
         let input = Tensor::random(vec![dense1.ncols()]);
         let output1 = dense1.op(&input);
-        let requant = dense1.requant_info();
+        let (requant, _) = dense1.requant_info(ScalingFactor::default());
         let requantized_output1 = requant.op(&output1);
         let final_output = dense2.op(&requantized_output1);
 

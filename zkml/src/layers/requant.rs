@@ -1,10 +1,5 @@
 use crate::{
-    Claim, Prover,
-    commit::same_poly,
-    iop::verifier::Verifier,
-    layers::LayerProof,
-    lookup::logup_gkr::{prover::batch_prove as logup_batch_prove, verifier::verify_logup_proof},
-    quantization,
+    commit::same_poly, iop::verifier::Verifier, layers::LayerProof, lookup::logup_gkr::{prover::batch_prove as logup_batch_prove, verifier::verify_logup_proof}, quantization::{self, ScalingFactor}, Claim, Prover
 };
 use anyhow::anyhow;
 use ff::Field;
@@ -34,6 +29,10 @@ pub struct Requant {
     // what is the shift that needs to be applied to requantize input number to the correct range of QuantInteger.
     pub right_shift: usize,
     // this is the range we expect the values to be in pre shift
+    // This is a magnitude: e.g. [-4;8] gives range = 12. 
+    // This is to make sure to offset the values to be positive integers before doing the shift
+    // That info is used to construct a lookup table for the requantization so the size of the lookup table
+    // is directly correlated to the range of the input data.
     pub range: usize,
     /// The range we want the values to be in post requantizing
     pub after_range: usize,

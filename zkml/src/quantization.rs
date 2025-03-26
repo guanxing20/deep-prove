@@ -4,6 +4,7 @@ use ff_ext::ExtensionField;
 use goldilocks::SmallField;
 use itertools::Itertools;
 use once_cell::sync::Lazy;
+use serde::Deserialize;
 use std::env;
 use tracing::debug;
 
@@ -26,6 +27,15 @@ pub static RANGE_BITLEN: Lazy<Element> = Lazy::new(|| (*MAX - *ZERO).ilog2() as 
 #[derive(Debug,Clone, From)]
 pub struct ScalingFactor(f32);
 
+impl Default for ScalingFactor {
+    fn default() -> Self {
+        // even tho we are requantizing starting from Element, we only want to requantize for QuantInteger
+        // the reason we have these two types is to handle overflow
+        // (a -b) / 2^Q
+        Self((1.0 - (-1.0)) / (1 << *BIT_LEN) as f32)
+    }
+}
+
 /// Trait used to quantize original floating point number to integer
 pub trait Quantizer<Output> {
     fn from_f32_unsafe(e: &f32) -> Output;
@@ -38,14 +48,11 @@ impl Quantizer<Element> for Element {
             *e >= -1.0 && *e <= 1.0,
             "Input value must be between -1.0 and 1.0"
         );
-        // even tho we are requantizing starting from Element, we only want to requantize for QuantInteger
-        // the reason we have these two types is to handle overflow
-        // (a -b) / 2^Q
-        let scale = (1.0 - (-1.0)) / (1 << *BIT_LEN) as f64;
+        let scale = ScalingFactor::default();
         let zero_point = 0;
 
         // formula is q = round(r/S) + z
-        let scaled = (*e as f64 / scale).round() as Element + zero_point;
+        let scaled = (*e / scale.0).round() as Element + zero_point;
         scaled as Element
     }
 
