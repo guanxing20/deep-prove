@@ -32,7 +32,6 @@ pub struct ScalingFactor {
 
 impl ScalingFactor {
     pub fn from_span(min: f32, max: f32) -> Self {
-        println!("New Scaling Factor: from_span: min={}, max={}", min, max);
         Self { min, max }
     }
 
