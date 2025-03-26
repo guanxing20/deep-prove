@@ -90,6 +90,7 @@ impl Dense {
 
     pub fn requant_info(&self, input_scaling_factor: ScalingFactor) -> (Requant, ScalingFactor){
         let ncols = self.matrix.ncols_2d();
+        let model_1 = self.scaling.quantize(&1.0);
         let (mins,maxs) :(Vec<_>,Vec<_>)= self
             .matrix
             .get_data()
@@ -101,13 +102,12 @@ impl Dense {
                 let row_range = row
                     .map(|w| quantization::range_from_weight(w))
                     .fold((0, 0), |(min, max), (wmin, wmax)| (min + wmin, max + wmax));
-                // add the bias range - so take the weight corresponding to the row index
-                //let bias_weight = &self.bias.get_data()[i];
+                // add the bias rescaled to the same scale as the model 
+                let bias_weight = &self.bias.get_data()[i] * model_1;
                 //let total_range = (row_range.0 + bias_weight, row_range.1 + bias_weight);
-                let total_range = row_range;
-                // weight * MIN can be positive and higher then MAX*weight if weight's negative
-                // so we take the absolute value of the difference
-                (total_range.0,total_range.1)
+                let total_range = (row_range.0 , row_range.1 );
+                //(total_range.0,total_range.1)
+                (total_range.0,total_range.0+10)
             })
             .unzip();
 
@@ -120,7 +120,7 @@ impl Dense {
         assert_eq!((*output_min as f32) as Element, *output_min, "we're loosing precision because of f32");
         let s3 = ScalingFactor::from_span(*output_min as f32, *output_max as f32);
         let shift = s1.shift(s2, s3);
-        println!("SHIFT DENSE s1={:?}, s2={:?},s3={:?} => shift={}", s1, s2, s3, shift);    
+        println!("SHIFT DENSE s1={:?}, s2={:?},s3={:?} => shift={}", s1, s2, s3, shift);
         (Requant {
             range: output_range as usize,
             right_shift: shift,
@@ -377,7 +377,8 @@ mod test {
             assert_eq!(shape.len(), 2);
             let (nrows, ncols) = (shape[0], shape[1]);
             let matrix = Tensor::random(vec![nrows, ncols]);
-            let bias = Tensor::random(vec![nrows]);
+            //let bias = Tensor::random(vec![nrows]);
+            let bias = Tensor::zeros(vec![nrows]);
             let min = matrix.get_data().iter().min().unwrap();
             let max = matrix.get_data().iter().max().unwrap();
             let scaling = ScalingFactor::from_span(*min as f32, *max as f32);

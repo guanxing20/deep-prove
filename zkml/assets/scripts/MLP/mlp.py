@@ -195,8 +195,8 @@ for i, layer in enumerate(model.layers):
         print(f"Layer {i} weight matrix dimensions: {weight_matrix.size()}")
         print(f"Layer {i} bias vector dimensions: {bias_vector.size()}")
 
-def plot_weight_distribution(model):
-    """Plot the distribution of weights and biases across all dense layers."""
+def plot_weight_distribution(model, test_X):
+    """Plot the distribution of weights, biases, and test inputs."""
     # Collect all weights and biases from dense layers
     all_weights = []
     all_biases = []
@@ -211,12 +211,45 @@ def plot_weight_distribution(model):
             all_biases.append(biases)
             layer_names.append(f"Layer {i}")
     
-    # Create subplots for each layer (2 columns: weights and biases)
-    fig, axes = plt.subplots(len(all_weights), 2, figsize=(10, 3*len(all_weights)))
-    if len(all_weights) == 1:
+    # Create subplots: one row for inputs, then one row per layer
+    num_layers = len(all_weights)
+    fig, axes = plt.subplots(num_layers + 1, 2, figsize=(10, 3*(num_layers + 1)))
+    if num_layers == 0:
         axes = axes.reshape(1, -1)
     
-    for ax_row, weights, biases, name in zip(axes, all_weights, all_biases, layer_names):
+    # Plot test input distributions
+    input_names = ['sepal length', 'sepal width', 'petal length', 'petal width']
+    for i in range(4):
+        input_data = test_X[:, i].numpy()
+        i_min, i_max = np.min(input_data), np.max(input_data)
+        i_range_pad = (i_max - i_min) * 0.05
+        i_x_min, i_x_max = i_min - i_range_pad, i_max + i_range_pad
+        
+        axes[0, 0].hist(input_data, bins=50, density=False, alpha=0.7, label=input_names[i], range=(i_x_min, i_x_max))
+    
+    axes[0, 0].set_title('Test Input Distribution\nAll Features')
+    axes[0, 0].set_xlabel('Input Value')
+    axes[0, 0].set_ylabel('Count')
+    axes[0, 0].legend()
+    axes[0, 0].grid(True)
+    
+    # Plot individual feature distributions
+    for i in range(4):
+        input_data = test_X[:, i].numpy()
+        i_min, i_max = np.min(input_data), np.max(input_data)
+        i_range_pad = (i_max - i_min) * 0.05
+        i_x_min, i_x_max = i_min - i_range_pad, i_max + i_range_pad
+        
+        axes[0, 1].hist(input_data, bins=50, density=False, alpha=0.7, label=input_names[i], range=(i_x_min, i_x_max))
+    
+    axes[0, 1].set_title('Test Input Distribution\nIndividual Features')
+    axes[0, 1].set_xlabel('Input Value')
+    axes[0, 1].set_ylabel('Count')
+    axes[0, 1].legend()
+    axes[0, 1].grid(True)
+    
+    # Plot weights and biases for each layer
+    for ax_row, weights, biases, name in zip(axes[1:], all_weights, all_biases, layer_names):
         # Plot weights
         w_min, w_max = np.min(weights), np.max(weights)
         w_range_pad = (w_max - w_min) * 0.05
@@ -252,5 +285,5 @@ def plot_weight_distribution(model):
 # After training loop, before ONNX export
 if args.distribution:
     print("Generating weight distribution plot...")
-    plot_weight_distribution(model)
+    plot_weight_distribution(model, test_X)
     print("Weight distribution plot saved as 'weight_distribution.png'")
