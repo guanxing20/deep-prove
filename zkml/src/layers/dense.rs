@@ -1,11 +1,10 @@
-use crate::quantization::ScalingFactor;
 use crate::{
     Claim, Prover,
     iop::{context::ContextAux, verifier::Verifier},
     layers::{LayerCtx, LayerProof, PolyID, requant::Requant},
     quantization,
+    quantization::ScalingFactor,
 };
-use crate::quantization::Quantizer;
 use anyhow::{Context, ensure};
 use ff_ext::ExtensionField;
 use itertools::Itertools;
@@ -30,6 +29,7 @@ pub(crate) const BIAS_POLY_ID: PolyID = 100_000;
 pub struct Dense {
     pub matrix: Tensor<Element>,
     pub bias: Tensor<Element>,
+    pub scaling: ScalingFactor,
 }
 
 /// Information stored in the context (setup phase) for this layer.
@@ -58,8 +58,26 @@ pub struct DenseProof<E: ExtensionField> {
 impl Dense {
     pub fn new(matrix: Tensor<Element>, bias: Tensor<Element>) -> Self {
         assert_eq!(matrix.nrows_2d(), bias.get_shape()[0]);
-        Self { matrix, bias }
+        Self {
+            matrix,
+            bias,
+            scaling: ScalingFactor::default(),
+        }
     }
+
+    pub fn new_with_scaling(
+        matrix: Tensor<Element>,
+        bias: Tensor<Element>,
+        scaling: ScalingFactor,
+    ) -> Self {
+        assert_eq!(matrix.nrows_2d(), bias.get_shape()[0]);
+        Self {
+            matrix,
+            bias,
+            scaling,
+        }
+    }
+
     pub fn ncols(&self) -> usize {
         self.matrix.ncols_2d()
     }
@@ -82,9 +100,9 @@ impl Dense {
         Self::new(matrix, bias)
     }
 
-    pub fn requant_info(&self, input_scaling_factor: ScalingFactor) -> (Requant, ScalingFactor){
+    pub fn requant_info(&self, input_scaling_factor: ScalingFactor) -> (Requant, ScalingFactor) {
         let ncols = self.matrix.ncols_2d();
-        let (mins,maxs) :(Vec<_>,Vec<_>)= self
+        let (mins, maxs): (Vec<_>, Vec<_>) = self
             .matrix
             .get_data()
             .iter()
@@ -96,39 +114,40 @@ impl Dense {
                     .map(|w| quantization::range_from_weight(w))
                     .fold((0, 0), |(min, max), (wmin, wmax)| (min + wmin, max + wmax));
                 // add the bias range - so take the weight corresponding to the row index
-                let quantized_one = Element::from_f32_unsafe(&1.0);
+                let quantized_one = self.scaling.quantize(&1.0);
                 let bias_weight = &self.bias.get_data()[i] * quantized_one;
                 let total_range = (row_range.0 + bias_weight, row_range.1 + bias_weight);
                 // weight * MIN can be positive and higher then MAX*weight if weight's negative
                 // so we take the absolute value of the difference
-                (total_range.0,total_range.1)
+                (total_range.0, total_range.1)
             })
             .unzip();
 
-        let global_min = mins.iter().min().unwrap();
-        let global_max = maxs.iter().max().unwrap();
-        let real_max_output_range = (global_max - global_min).unsigned_abs().next_power_of_two() as u32;
-        // range - shift = bit_len <=> shift = range - bit_len
-        let real_shift = real_max_output_range.ilog2() as usize - *quantization::BIT_LEN;
-        // * 2 because we want the full span, not only the positive half
-        let full_max_output_range = (1 << (*quantization::BIT_LEN * 2 + ncols.ilog2() as usize)) * 2;
-        // 14 + log(c) - shift = 7 // 8
-        // shift = 14 + log(c) - 7 // 8
-        let full_shift = (*quantization::BIT_LEN * 2 + ncols.ilog2() as usize) - *quantization::BIT_LEN/2;
-        let max_output_range = real_max_output_range;
-        let shift = real_shift;
-        println!("real_output_range: {}, max_output_range: {}, shift: {}", real_max_output_range.ilog2(), (full_max_output_range as u32).ilog2(), shift);
+        let output_min = mins.iter().min().unwrap();
+        let output_max = maxs.iter().max().unwrap();
+        let output_range = output_max - output_min;
         let s1 = input_scaling_factor;
-        let model_min = self.matrix.get_data().iter().enumerate().map(|(i,w)| w + self.bias.get_data()[i/ncols]).min().unwrap();
-        let model_max= self.matrix.get_data().iter().enumerate().map(|(i,w)| w + self.bias.get_data()[i/ncols]).max().unwrap();
-        let s2 = ScalingFactor::from(((model_max - model_min) as usize).next_power_of_two().ilog2() as usize);
-        let s3 = ScalingFactor::from(((global_max - global_min) as usize).next_power_of_two().ilog2() as usize);
+        let s2 = self.scaling;
+        assert_eq!(
+            (*output_max as f32) as Element,
+            *output_max,
+            "we're loosing precision because of f32"
+        );
+        assert_eq!(
+            (*output_min as f32) as Element,
+            *output_min,
+            "we're loosing precision because of f32"
+        );
+        let s3 = ScalingFactor::from_span(*output_max as f32, *output_min as f32);
         let shift = s1.shift(s2, s3);
-        (Requant {
-            range: max_output_range as usize,
-            right_shift: shift,
-            after_range: 1 << *quantization::BIT_LEN,
-        },s3)
+        (
+            Requant {
+                range: output_range as usize,
+                right_shift: shift,
+                after_range: 1 << *quantization::BIT_LEN,
+            },
+            s3,
+        )
     }
     pub fn prove_step<'b, E, T>(
         &self,
@@ -388,7 +407,6 @@ mod test {
     #[cfg(test)]
     mod tests {
         use super::*;
-        use crate::quantization::Quantizer;
 
         #[test]
         fn test_dense_pad_next_power_of_two() {
@@ -518,7 +536,7 @@ mod test {
             // Quantize the input
             let quantized_input: Vec<Element> = input_data
                 .iter()
-                .map(|x| Element::from_f32_unsafe(x))
+                .map(|x| ScalingFactor::default().quantize(x))
                 .collect();
 
             // Create a Dense layer

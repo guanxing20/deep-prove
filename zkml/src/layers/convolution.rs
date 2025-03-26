@@ -1,10 +1,10 @@
-use crate::quantization::ScalingFactor;
 use crate::{
     Claim, Prover,
     commit::{compute_betas_eval, identity_eval},
     iop::{context::ContextAux, verifier::Verifier},
     layers::{LayerProof, PolyID, requant::Requant},
     quantization,
+    quantization::ScalingFactor,
     tensor::{ConvData, get_root_of_unity},
 };
 use anyhow::Context;
@@ -28,6 +28,7 @@ pub(crate) const BIAS_POLY_ID: PolyID = 200_000;
 pub struct Convolution {
     pub filter: Tensor<Element>,
     pub bias: Tensor<Element>,
+    pub weight_scaling: ScalingFactor,
 }
 
 /// Info about the convolution layer derived during the setup phase
@@ -73,8 +74,25 @@ pub struct ConvProof<E: ExtensionField> {
 impl Convolution {
     pub fn new(filter: Tensor<Element>, bias: Tensor<Element>) -> Self {
         assert_eq!(filter.kw(), bias.get_shape()[0]);
-        Self { filter, bias }
+        Self {
+            filter,
+            bias,
+            weight_scaling: ScalingFactor::default(),
+        }
     }
+    pub fn new_with_scaling(
+        filter: Tensor<Element>,
+        bias: Tensor<Element>,
+        scaling: ScalingFactor,
+    ) -> Self {
+        assert_eq!(filter.kw(), bias.get_shape()[0]);
+        Self {
+            filter,
+            bias,
+            weight_scaling: scaling,
+        }
+    }
+
     pub fn add_bias(&self, conv_out: &Tensor<Element>) -> Tensor<Element> {
         let mut arr = conv_out.data.clone();
         assert_eq!(conv_out.data.len(), conv_out.kw() * conv_out.filter_size());
@@ -117,7 +135,10 @@ impl Convolution {
     pub fn filter_size(&self) -> usize {
         self.filter.filter_size()
     }
-    pub fn requant_info<E: ExtensionField>(&self, input_scaling_factor: ScalingFactor) -> (Requant,ScalingFactor) {
+    pub fn requant_info<E: ExtensionField>(
+        &self,
+        input_scaling_factor: ScalingFactor,
+    ) -> (Requant, ScalingFactor) {
         let weights = self.filter.get_real_weights::<E>();
         let min_quant = *quantization::MIN as Element;
         let max_quant = *quantization::MAX as Element;
@@ -164,12 +185,15 @@ impl Convolution {
         let max_range = 2 * (max_output - min_output).unsigned_abs().next_power_of_two();
         assert!(max_range.ilog2() as usize > *quantization::BIT_LEN);
         let shift = (2 * max_range).ilog2() as usize - *quantization::BIT_LEN;
-        (Requant {
-            // range: (max_val - min_val) as usize,
-            range: max_range as usize,
-            right_shift: shift,
-            after_range: 1 << *quantization::BIT_LEN,
-        }, input_scaling_factor)
+        (
+            Requant {
+                // range: (max_val - min_val) as usize,
+                range: max_range as usize,
+                right_shift: shift,
+                after_range: 1 << *quantization::BIT_LEN,
+            },
+            input_scaling_factor,
+        )
     }
 
     pub(crate) fn step_info<E: ExtensionField>(
@@ -753,7 +777,7 @@ mod test {
             ),
             Tensor::new(vec![k_w], random_vector_quant(k_w)),
         );
-        let (info ,_) = conv.requant_info::<GoldilocksExt2>(ScalingFactor::default());
+        let (info, _) = conv.requant_info::<GoldilocksExt2>(ScalingFactor::default());
         println!("range : {}", info.range);
         for _ in 0..100 {
             let (out, _proving_data) = conv.op::<GoldilocksExt2>(&Tensor::new(

@@ -12,7 +12,7 @@ use csv::WriterBuilder;
 use goldilocks::GoldilocksExt2;
 use tracing::info;
 use tracing_subscriber::{EnvFilter, fmt};
-use zkml::{load_model, quantization::Quantizer};
+use zkml::{ScalingFactor, load_model};
 
 use serde::{Deserialize, Serialize};
 use zkml::{
@@ -49,13 +49,13 @@ pub fn main() -> anyhow::Result<()> {
 
     tracing::subscriber::set_global_default(subscriber).expect("Failed to set global subscriber");
     let args = Args::parse();
-    
+
     if args.skip_proving {
         run_inference_only(args).context("error running inference-only bench:")?;
     } else {
         run(args).context("error running bench:")?;
     }
-    
+
     Ok(())
 }
 
@@ -100,7 +100,7 @@ impl InputJSON {
             .map(|input| {
                 input
                     .into_iter()
-                    .map(|e| Element::from_f32_unsafe(&(e as f32)))
+                    .map(|e| ScalingFactor::default().quantize(&(e as f32)))
                     .collect()
             })
             .collect();
@@ -110,7 +110,7 @@ impl InputJSON {
             .map(|output| {
                 output
                     .into_iter()
-                    .map(|e| Element::from_f32_unsafe(&(e as f32)))
+                    .map(|e| ScalingFactor::default().quantize(&(e as f32)))
                     .collect()
             })
             .collect();
@@ -127,7 +127,7 @@ const CSV_PROOF_SIZE: &str = "proof size (KB)";
 
 fn run(args: Args) -> anyhow::Result<()> {
     info!("[+] Reading onnx model");
-    let model = load_model::<Element>(&args.onnx)?;
+    let model = load_model(&args.onnx)?;
     info!("[+] Model loaded");
     model.describe();
     info!("[+] Reading input/output from pytorch");
@@ -193,7 +193,7 @@ fn run(args: Args) -> anyhow::Result<()> {
 
 fn run_inference_only(args: Args) -> anyhow::Result<()> {
     info!("[+] Reading onnx model");
-    let model = load_model::<Element>(&args.onnx)?;
+    let model = load_model(&args.onnx)?;
     info!("[+] Model loaded");
     model.describe();
     info!("[+] Reading input/output from pytorch");

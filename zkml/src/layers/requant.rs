@@ -1,5 +1,10 @@
 use crate::{
-    commit::same_poly, iop::verifier::Verifier, layers::LayerProof, lookup::logup_gkr::{prover::batch_prove as logup_batch_prove, verifier::verify_logup_proof}, quantization::{self, ScalingFactor}, Claim, Prover
+    Claim, Prover,
+    commit::same_poly,
+    iop::verifier::Verifier,
+    layers::LayerProof,
+    lookup::logup_gkr::{prover::batch_prove as logup_batch_prove, verifier::verify_logup_proof},
+    quantization::self,
 };
 use anyhow::anyhow;
 use ff::Field;
@@ -29,7 +34,7 @@ pub struct Requant {
     // what is the shift that needs to be applied to requantize input number to the correct range of QuantInteger.
     pub right_shift: usize,
     // this is the range we expect the values to be in pre shift
-    // This is a magnitude: e.g. [-4;8] gives range = 12. 
+    // This is a magnitude: e.g. [-4;8] gives range = 12.
     // This is to make sure to offset the values to be positive integers before doing the shift
     // That info is used to construct a lookup table for the requantization so the size of the lookup table
     // is directly correlated to the range of the input data.
@@ -59,13 +64,13 @@ where
 }
 impl Requant {
     pub fn op(&self, input: &crate::tensor::Tensor<Element>) -> crate::tensor::Tensor<Element> {
-        println!("BEFORE REQUANT: {:?}", &input.get_data().iter().take(100).collect_vec());
+        println!(
+            "BEFORE REQUANT: {:?}",
+            &input.get_data().iter().take(100).collect_vec()
+        );
         let res = input.get_data().iter().map(|e| self.apply(e)).collect_vec();
         println!("AFTER REQUANT: {:?}", &res.iter().take(100).collect_vec());
-        crate::tensor::Tensor::<Element>::new(
-            input.get_shape(),
-            res,
-        )
+        crate::tensor::Tensor::<Element>::new(input.get_shape(), res)
     }
 
     pub(crate) fn step_info<E: ExtensionField>(
@@ -105,7 +110,7 @@ impl Requant {
         let max_bit = (self.range << 1) as i128;
         let tmp = e + max_bit;
         let tmp = tmp >> self.right_shift;
-        let res =tmp - (max_bit >> self.right_shift);
+        let res = tmp - (max_bit >> self.right_shift);
         assert!(res >= *quantization::MIN && res <= *quantization::MAX);
         res
     }

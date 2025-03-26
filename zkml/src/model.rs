@@ -1,9 +1,13 @@
 use ff_ext::ExtensionField;
 use itertools::Itertools;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
+use tracing::info;
 
 use crate::{
-    layers::{Layer, LayerOutput}, quantization::{ScalingFactor, TensorFielder}, tensor::{ConvData, Tensor}, Element
+    Element,
+    layers::{Layer, LayerOutput},
+    quantization::{ScalingFactor, TensorFielder},
+    tensor::{ConvData, Tensor},
 };
 
 // The index of the step, starting from the input layer. (proving is done in the opposite flow)
@@ -22,6 +26,10 @@ pub struct Model {
 
 impl Model {
     pub fn new() -> Self {
+        info!(
+            "Creating model with {} BIT_LEN quantization",
+            *crate::quantization::BIT_LEN
+        );
         Self {
             input_not_padded: Vec::new(),
             padded_in_shape: Vec::new(),
@@ -36,7 +44,7 @@ impl Model {
         // do we need a requantization step after this layer or not
         let requant = l.subsequent_requant_layer::<F>(f);
         self.layers.push(l);
-        if let Some((requant,output_scaling_factor)) = requant {
+        if let Some((requant, output_scaling_factor)) = requant {
             self.layers.push(requant);
             self.last_input_scaling_factor = Some(output_scaling_factor);
         }
@@ -303,11 +311,11 @@ pub(crate) mod test {
 
     use crate::{
         Element, default_transcript,
+        model::ScalingFactor,
         quantization::TensorFielder,
         tensor::Tensor,
         testing::{NextPowerOfTwo, random_bool_vector, random_vector},
     };
-    use crate::model::ScalingFactor;
 
     use super::Model;
 
@@ -324,8 +332,8 @@ pub(crate) mod test {
             let mut rng = thread_rng();
             let mut last_row = rng.gen_range(3..15);
             for selector in 0..num_dense_layers {
-                //if selector % MOD_SELECTOR == SELECTOR_DENSE {
-                 if true {
+                // if selector % MOD_SELECTOR == SELECTOR_DENSE {
+                if true {
                     // last row becomes new column
                     let (nrows, ncols) = (rng.gen_range(3..15), last_row);
                     last_row = nrows;

@@ -1,13 +1,10 @@
 //! Module that takes care of (re)quantizing
-use std::ops::{Add, Div, Mul, Sub};
 use derive_more::From;
 use ff_ext::ExtensionField;
 use goldilocks::SmallField;
 use itertools::Itertools;
 use once_cell::sync::Lazy;
-use serde::Deserialize;
 use std::env;
-use tracing::debug;
 
 use crate::{Element, tensor::Tensor};
 
@@ -26,81 +23,50 @@ pub static ZERO: Lazy<Element> = Lazy::new(|| 0);
 pub static RANGE_BITLEN: Lazy<Element> = Lazy::new(|| (*MAX - *ZERO).ilog2() as Element);
 
 /// Each scaling factor is of the form 2^k / 2^BIT_LEN. THis struct stores k.
-#[derive(Debug,Clone, From,Copy)]
-pub struct ScalingFactor(pub(crate) usize);
-impl ScalingFactor  {
-   /// Derives the right shift to apply to values to requantize them
-   /// S_i = (a_i - b_i) / 2^Q = 2^k_i / 2^Q
-   /// So S1 * S2 / S3 = 2^k1 * 2^k2 * 2^Q / [2^k3 * 2^Q * 2^Q]
-   ///                 = 2^(k1 + k2 - k3 - Q)
-   ///                 = 2^{-n} where n = k3 + Q - k1 - k2
-   /// n is the number of bits to shift right
-   pub fn shift(&self,s2: Self, s3: Self) -> usize {
-        let twoq = (1 << *BIT_LEN) as f32;
-        let fulls1 = self.0 as f32 / twoq;
-        let fulls2 = s2.0 as f32 / twoq;
-        let fulls3 = s3.0 as f32 / twoq;
-        let full = fulls1 * fulls2 / fulls3;
-        assert!(full >= 0.0 && full <= 1.0, "Full is not in the range [0, 1]. This should not happen.");
-        println!("SHIFT DENSE s1={:?}, s2={:?},s3={:?} => shift={}", self,s2,s3, self.0 as i32 + s2.0 as i32 - s3.0  as i32 - *BIT_LEN as i32);
-        let exp = self.0 as i32 + s2.0 as i32 - s3.0  as i32 - *BIT_LEN as i32;
-        assert!(exp <= 0, "Shift exp {} is positive. This should not happen. (full={})", exp, full);
-        exp.abs() as usize
-   } 
+#[derive(Debug, Clone, From, Copy)]
+pub struct ScalingFactor(pub(crate) f32);
+impl ScalingFactor {
+    pub fn from_span(max: f32, min: f32) -> Self {
+        Self((max - min) / (1 << *BIT_LEN) as f32)
+    }
+
+    /// Derives the right shift to apply to values to requantize them
+    /// S_i = (a_i - b_i) / 2^Q = 2^k_i / 2^Q
+    /// So S1 * S2 / S3 = 2^k1 * 2^k2 * 2^Q / [2^k3 * 2^Q * 2^Q]
+    ///                 = 2^(k1 + k2 - k3 - Q)
+    ///                 = 2^{-n} where n = k3 + Q - k1 - k2
+    /// n is the number of bits to shift right
+    pub fn shift(&self, s2: Self, s3: Self) -> usize {
+        let full = self.0 * s2.0 / s3.0;
+        assert!(
+            full >= 0.0 && full <= 1.0,
+            "Full is not in the range [0, 1]. This should not happen."
+        );
+        let exp = (-full.log2()).ceil() as usize;
+        println!(
+            "SHIFT DENSE s1={:?}, s2={:?},s3={:?} => shift={}",
+            self, s2, s3, exp
+        );
+        exp
+    }
+
+    /// Take a floating point number and quantize it to an BIT_LEN-bit integer
+    pub fn quantize(&self, value: &f32) -> Element {
+        assert!(
+            *value >= -1.0 && *value <= 1.0,
+            "Input value must be between -1.0 and 1.0"
+        );
+        let zero_point = 0;
+
+        // formula is q = round(r/S) + z
+        let scaled = (*value / self.0).round() as Element + zero_point;
+        scaled as Element
+    }
 }
 
 impl Default for ScalingFactor {
     fn default() -> Self {
-        // (a -b) / 2^Q : for scaling factor we only keep the numerator since denumerator is always the same.
-        // in this case: max = 1, min = -1, (a-b) = 2, so k = 1
-        Self(1)
-    }
-}
-
-/// Trait used to quantize original floating point number to integer
-pub trait Quantizer<Output> {
-    fn from_f32_unsafe(e: &f32) -> Output;
-    fn from_f32_unsafe_clamp(e: &f32, max_abs: f64) -> Output;
-}
-
-impl Quantizer<Element> for Element {
-    fn from_f32_unsafe(e: &f32) -> Self {
-        assert!(
-            *e >= -1.0 && *e <= 1.0,
-            "Input value must be between -1.0 and 1.0"
-        );
-        let scale = ScalingFactor::default().0 as f32/ (1 << *BIT_LEN) as f32;
-        let zero_point = 0;
-
-        // formula is q = round(r/S) + z
-        let scaled = (*e / scale).round() as Element + zero_point;
-        scaled as Element
-    }
-
-    fn from_f32_unsafe_clamp(e: &f32, max_abs_range: f64) -> Self {
-        let e = *e as f64;
-        assert!(
-            max_abs_range > 0.0,
-            "max_abs should be greater than zero. Domain range is between [-max_abs, max_abs]."
-        );
-
-        let scale = max_abs_range / (1 << *BIT_LEN) as f64;
-        //let iscale = 1.0 / scale;
-        //let piscale = (iscale as u32).next_power_of_two() as f64;
-        //let fscale = 1.0 /piscale;
-        let zero_point = 0;
-
-        // formula is q = round(r/S) + z
-        let scaled = (e / scale).round() as Element + zero_point;
-        let scaled = scaled.clamp(*MIN, *MAX);
-
-        //if e < -max_abs || e > max_abs {
-        //    debug!(
-        //        "Quantization: Value {} is out of [-{}, {}]. But quantized to {}.",
-        //        e, max_abs, max_abs, scaled
-        //    );
-        //}
-        scaled as Element
+        Self((1.0 - (-1.0)) / (1 << *BIT_LEN) as f32)
     }
 }
 
@@ -255,14 +221,12 @@ mod tests {
             );
         }
     }
-    use std::ops::{Mul,Add,Div};
 
     #[test]
     fn test_scaling_factor() {
-        let s1 :ScalingFactor= ScalingFactor::from(2);
-        let s2 :ScalingFactor= ScalingFactor::from(2);
-        let s3 = ScalingFactor::from(4);
-        let shift = s1.shift(s2, s3);
-        assert_eq!(shift, s3.0 + *BIT_LEN - s1.0 - s2.0);
+        let s1 = ScalingFactor::from_span(0.8, -0.2);
+        let s2 = ScalingFactor::from_span(2.0, -2.0);
+        let s3 = ScalingFactor::from_span(128.0, -45.0);
+        s1.shift(s2, s3);
     }
 }
