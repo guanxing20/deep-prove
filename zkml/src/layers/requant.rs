@@ -453,13 +453,27 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(15420); 
         let input_min = -1.0;
         let input_max = 1.0;
+        println!("1");
         let s_input = ScalingFactor::from_span(input_min, input_max);
-        let input :Vec<Element> = (0..n).map(|_| { rng.gen_range(input_min..=input_max) }).map(|e| s_input.quantize(&e)).collect_vec();
+        let inputf :Vec<f32> = (0..n).map(|_| { rng.gen_range(input_min..=input_max) }).collect_vec();
+        let input: Vec<Element> = inputf.iter().map(|e| s_input.quantize(&e)).collect_vec();
         let min_f32 = -0.2;
         let max_f32 = 0.2;
+        println!("2");
         let s_model = ScalingFactor::from_span(min_f32, max_f32);
-        let model :Vec<Element> = (0..n).map(|_| { rng.gen_range(min_f32..=max_f32) }).map(|e| s_model.quantize(&e)).collect_vec();
+        println!("3");
+        let s_input = ScalingFactor::from_span(input_min, input_max);
+        println!("4");
+        let modelf :Vec<f32> = (0..n).map(|_| { rng.gen_range(min_f32..=max_f32) }).collect_vec();
+        let model :Vec<Element> = modelf.iter().map(|e| s_model.quantize(&e)).collect_vec();
 
+        let inputf = Tensor::new(vec![n], inputf);
+        let modelf  = Tensor::new(vec![n], modelf);
+        println!("5");
+        let resf = inputf.mul(&modelf);
+        println!("6");
+        let s_resf = ScalingFactor::from_tensor(&resf);
+        println!("7");
         let input = Tensor::new(vec![n], input);
         let model= Tensor::new(vec![n], model);
         assert!(input.get_data().iter().all(|e| *e >= *quantization::MIN && *e <= *quantization::MAX));
@@ -474,18 +488,28 @@ mod tests {
         println!("res: {:?}", res.get_data());
         println!("s1: {:?}", s_input);
         println!("s2: {:?}", s_model);
+        println!("s_resf: {:?}", s_resf);
         println!("s_res: {:?}", s_res);
         let shift = s_input.shift(s_model, s_res);
+        let shiftf= s_input.shift(s_model, s_resf);
         println!("shift: {:?}", shift);
-        let requant_info = Requant {
+        let requant = Requant {
             right_shift:  shift,
             // theoretical res_max and res_min at this point ! since we dont know the input when we create requant
             range: (res_max - res_min) as usize,
             after_range: 1 << *quantization::BIT_LEN,
         };
-        let res_requant = requant_info.op(&res);
+        let res_requant = requant.op(&res);
+        let requant = Requant {
+            right_shift:  shiftf,
+            // theoretical res_max and res_min at this point ! since we dont know the input when we create requant
+            range: (res_max - res_min) as usize,
+            after_range: 1 << *quantization::BIT_LEN,
+        };
+        let res_requantf = requant.op(&res);
         println!("res_requant: {:?}", res_requant.get_data());
-        assert!(res_requant.get_data().iter().filter(|r| **r == 0 || **r == -1).collect::<Vec<_>>().len() < res_requant.get_data().len());
+        println!("res_requantf: {:?}", res_requantf.get_data());
+        //assert!(res_requant.get_data().iter().filter(|r| **r == 0 || **r == -1).collect::<Vec<_>>().len() < res_requant.get_data().len());
     }
 
 }

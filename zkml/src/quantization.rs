@@ -4,7 +4,7 @@ use ff_ext::ExtensionField;
 use goldilocks::SmallField;
 use itertools::Itertools;
 use once_cell::sync::Lazy;
-use std::env;
+use std::{env};
 
 use crate::{Element, tensor::Tensor};
 
@@ -16,38 +16,36 @@ pub static BIT_LEN: Lazy<usize> = Lazy::new(|| {
         .unwrap_or(8) // Default value if env var is not set or invalid
 });
 
-// These values depend on BIT_LEN and need to be computed at runtime
-pub static MIN: Lazy<Element> = Lazy::new(|| -(1 << (*BIT_LEN - 1)));
+/// symmetric quantization range
+pub static MIN: Lazy<Element> = Lazy::new(|| -(1 << (*BIT_LEN - 1)) + 1 );
 pub static MAX: Lazy<Element> = Lazy::new(|| (1 << (*BIT_LEN - 1)) - 1);
 pub static ZERO: Lazy<Element> = Lazy::new(|| 0);
-pub static RANGE_BITLEN: Lazy<Element> = Lazy::new(|| (*MAX - *ZERO).ilog2() as Element);
 
-/// Each scaling factor is of the form 2^k / 2^BIT_LEN. THis struct stores k.
+/// Symmetric quantization scaling
 #[derive(Debug, Clone, From, Copy)]
 pub struct ScalingFactor {
-    pub(crate) min: f32,
-    pub(crate) max: f32,
+    abs_max: f32,
 }
 
 trait MinMax {
-    fn min_value() -> Self;
-    fn max_value() -> Self;
-    fn min(&self, other: &Self) -> Self;
-    fn max(&self, other: &Self) -> Self;
+    fn zero() -> Self;
+    fn absolute_value(&self) -> Self;
+    fn cmp_min(&self, other: Self) -> Self;
+    fn cmp_max(&self, other: Self) -> Self;
     fn to_f32(&self) -> f32;
 }
 
 impl MinMax for f32 {
-    fn min_value() -> Self {
-        f32::MIN
+    fn absolute_value(&self) -> Self {
+        self.abs()
     }
-    fn max_value() -> Self {
-        f32::MAX
-    }
-    fn min(&self, other: &Self) -> Self {
+    fn zero() -> Self {
+        0.0
+    }  
+    fn cmp_min(&self, other: Self) -> Self {
         self.min(other)
     }
-    fn max(&self, other: &Self) -> Self {
+    fn cmp_max(&self, other: Self) -> Self {
         self.max(other)
     }
     fn to_f32(&self) -> f32 {
@@ -56,17 +54,17 @@ impl MinMax for f32 {
 }
 
 impl MinMax for Element {
-    fn min(&self, other: &Self) -> Self {
-        std::cmp::min(*self, *other)
+    fn absolute_value(&self) -> Self {
+        self.abs()
     }
-    fn max(&self, other: &Self) -> Self {
-        std::cmp::max(*self, *other)
+    fn cmp_min(&self, other: Self) -> Self {
+        std::cmp::min(*self, other)
     }
-    fn min_value() -> Self {
-        Element::MIN
+    fn cmp_max(&self, other: Self) -> Self {
+        std::cmp::max(*self, other)
     }
-    fn max_value() -> Self {
-        Element::MAX
+    fn zero() -> Self {
+        0
     }
     fn to_f32(&self) -> f32 {
         *self as f32
@@ -74,18 +72,17 @@ impl MinMax for Element {
 }
 impl ScalingFactor {
     pub fn from_tensor<T: MinMax>(t: &Tensor<T>) -> Self {
-        let min = t.get_data().iter().fold(T::max_value(), |a, b| a.min(b));
-        let max = t.get_data().iter().fold(T::min_value(), |a, b| a.max(b));
-        Self::from_span(min.to_f32(), max.to_f32())
+        let max_abs = t.get_data().iter().fold(T::zero(), |a, b| a.cmp_max(b.absolute_value()));
+        Self { abs_max: max_abs.to_f32() }
     }
 
-
     pub fn from_span(min: f32, max: f32) -> Self {
-        Self { min, max }
+        let abs_max = min.abs().max(max.abs());
+        Self { abs_max }
     }
 
     fn scale(&self) -> f32 {
-        (self.max - self.min) / ((1 << *BIT_LEN) -1)as f32
+        (self.abs_max - ( - self.abs_max)) / (*MAX - *MIN) as f32
     }
 
     /// Derives the right shift to apply to values to requantize them
@@ -116,7 +113,7 @@ impl ScalingFactor {
         //let scaled =((value.clamp(self.min,self.max) - self.min) / self.scale()).round() * self.scale() + self.min;
         let scaled = (*value / self.scale()).round() as Element + zero_point;
 
-        scaled as Element
+        scaled.clamp(*MIN, *MAX)
     }
 }
 
