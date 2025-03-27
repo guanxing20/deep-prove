@@ -25,18 +25,67 @@ pub static RANGE_BITLEN: Lazy<Element> = Lazy::new(|| (*MAX - *ZERO).ilog2() as 
 /// Each scaling factor is of the form 2^k / 2^BIT_LEN. THis struct stores k.
 #[derive(Debug, Clone, From, Copy)]
 pub struct ScalingFactor {
-    min: f32,
-    max: f32,
+    pub(crate) min: f32,
+    pub(crate) max: f32,
 }
 
+trait MinMax {
+    fn min_value() -> Self;
+    fn max_value() -> Self;
+    fn min(&self, other: &Self) -> Self;
+    fn max(&self, other: &Self) -> Self;
+    fn to_f32(&self) -> f32;
+}
 
+impl MinMax for f32 {
+    fn min_value() -> Self {
+        f32::MIN
+    }
+    fn max_value() -> Self {
+        f32::MAX
+    }
+    fn min(&self, other: &Self) -> Self {
+        self.min(other)
+    }
+    fn max(&self, other: &Self) -> Self {
+        self.max(other)
+    }
+    fn to_f32(&self) -> f32 {
+        *self
+    }
+}
+
+impl MinMax for Element {
+    fn min(&self, other: &Self) -> Self {
+        std::cmp::min(*self, *other)
+    }
+    fn max(&self, other: &Self) -> Self {
+        std::cmp::max(*self, *other)
+    }
+    fn min_value() -> Self {
+        Element::MIN
+    }
+    fn max_value() -> Self {
+        Element::MAX
+    }
+    fn to_f32(&self) -> f32 {
+        *self as f32
+    }
+}
 impl ScalingFactor {
+    pub fn from_tensor<T: MinMax>(t: &Tensor<T>) -> Self {
+        let min = t.get_data().iter().fold(T::max_value(), |a, b| a.min(b));
+        let max = t.get_data().iter().fold(T::min_value(), |a, b| a.max(b));
+        Self::from_span(min.to_f32(), max.to_f32())
+    }
+
+
     pub fn from_span(min: f32, max: f32) -> Self {
         Self { min, max }
     }
 
     fn scale(&self) -> f32 {
-        (self.max - self.min) / (1 << *BIT_LEN) as f32
+        (self.max - self.min) / ((1 << *BIT_LEN) -1)as f32
     }
 
     /// Derives the right shift to apply to values to requantize them
@@ -52,7 +101,7 @@ impl ScalingFactor {
             "Full is not in the range [0, 1]. This should not happen."
         );
         let exp = (-full.log2()).ceil() as usize;
-                exp
+        exp
     }
 
     /// Take a floating point number and quantize it to an BIT_LEN-bit integer
