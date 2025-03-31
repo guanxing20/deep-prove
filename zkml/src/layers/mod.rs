@@ -16,7 +16,7 @@ use crate::{
         requant::{Requant, RequantProof},
     },
     quantization::ScalingFactor,
-    tensor::{ConvData, Tensor},
+    tensor::{ConvData, Number, Tensor},
 };
 use activation::ActivationCtx;
 use convolution::{ConvCtx, ConvProof, SchoolBookConvCtx};
@@ -26,13 +26,13 @@ use pooling::{PoolingCtx, PoolingProof};
 use requant::RequantCtx;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 #[derive(Clone, Debug)]
-pub enum Layer {
-    Dense(Dense),
+pub enum Layer<T> {
+    Dense(Dense<T>),
     // TODO: replace this with a Tensor based implementation
-    Convolution(Convolution),
+    Convolution(Convolution<T>),
     // Traditional convolution is used for debug purposes. That is because the actual convolution
     // we use relies on the FFT algorithm. This convolution does not have a snark implementation.
-    SchoolBookConvolution(Convolution),
+    SchoolBookConvolution(Convolution<T>),
     Activation(Activation),
     // this is the output quant info. Since we always do a requant layer after each dense,
     // then we assume the inputs requant info are default()
@@ -103,68 +103,8 @@ where
         }
     }
 }
-impl Layer {
-    pub(crate) fn step_info<E>(&self, id: PolyID, aux: ContextAux) -> (LayerCtx<E>, ContextAux)
-    where
-        E: ExtensionField + DeserializeOwned,
-        E::BaseField: Serialize + DeserializeOwned,
-    {
-        match self {
-            Layer::Dense(dense) => dense.step_info(id, aux),
-            Layer::Convolution(conv) => conv.step_info(id, aux),
-            Layer::SchoolBookConvolution(_conv) => SchoolBookConvCtx.step_info(id, aux),
-            Layer::Activation(activation) => activation.step_info(id, aux),
-            Layer::Requant(requant) => requant.step_info(id, aux),
-            Layer::Pooling(pooling) => pooling.step_info(id, aux),
-        }
-    }
 
-    // If a layer requires a requantization step the current layer, this method returns the
-    // next layer, e.g. requantization layer, as well as the scaling factor of the output. This is
-    // given to the next layer as input scaling factor.
-    // For example, a RELU doesn't need a requantization step afterwards but a dense layer does.
-    pub(crate) fn subsequent_requant_layer<F: ExtensionField>(
-        &self,
-        last_input_scaling_factor: ScalingFactor,
-    ) -> Option<(Layer, ScalingFactor)> {
-        match self {
-            Layer::Dense(ref d) => {
-                let (requant, output_scaling_factor) = d.requant_info(last_input_scaling_factor);
-                Some((Layer::Requant(requant), output_scaling_factor))
-            }
-            Layer::Convolution(ref d) => {
-                let (requant, output_scaling_factor) =
-                    d.requant_info::<F>(last_input_scaling_factor);
-                Some((Layer::Requant(requant), output_scaling_factor))
-            }
-            _ => None,
-        }
-    }
-
-    /// Run the operation associated with that layer with the given input
-    // TODO: move to tensor library : right now it works because we assume there is only Dense
-    // layer which is matmul
-    pub fn op<F: ExtensionField>(&self, input: &Tensor<Element>) -> LayerOutput<F> {
-        match &self {
-            Layer::Dense(ref dense) => LayerOutput::NormalOut(dense.op(input)),
-            Layer::Activation(activation) => LayerOutput::NormalOut(activation.op(input)),
-
-            Layer::Convolution(ref filter) => LayerOutput::ConvOut(filter.op(input)),
-            // Traditional convolution is used for debug purposes. That is because the actual convolution
-            // we use relies on the FFT algorithm. This convolution does not have a snark implementation.
-            Layer::SchoolBookConvolution(ref conv_pair) => {
-                // LayerOutput::NormalOut(filter.cnn_naive_convolution(input))
-                LayerOutput::NormalOut(input.conv2d(&conv_pair.filter, &conv_pair.bias, 1))
-            }
-
-            Layer::Requant(info) => {
-                // NOTE: we assume we have default quant structure as input
-                LayerOutput::NormalOut(info.op(input))
-            }
-            Layer::Pooling(info) => LayerOutput::NormalOut(info.op(input)),
-        }
-    }
-
+impl<T: Number> Layer<T> {
     pub fn shape(&self) -> Vec<usize> {
         match &self {
             Layer::Dense(ref dense) => vec![dense.matrix.nrows_2d(), dense.matrix.ncols_2d()],
@@ -216,6 +156,60 @@ impl Layer {
     }
 }
 
+impl Layer<f32> {
+    pub fn quantize(self, s: ScalingFactor) -> Layer<Element> {
+        match self {
+            Layer::Dense(dense) => Layer::Dense(dense.quantize(s)),
+            Layer::Convolution(conv) => Layer::Convolution(conv.quantize(s)),
+            Layer::SchoolBookConvolution(conv) => Layer::SchoolBookConvolution(conv.quantize(s)),
+            Layer::Activation(activation) => Layer::Activation(activation),
+            Layer::Requant(requant) => Layer::Requant(requant),
+            Layer::Pooling(pooling) => Layer::Pooling(pooling),
+        }
+    }
+}
+
+impl Layer<Element> {
+    pub(crate) fn step_info<E>(&self, id: PolyID, aux: ContextAux) -> (LayerCtx<E>, ContextAux)
+    where
+        E: ExtensionField + DeserializeOwned,
+        E::BaseField: Serialize + DeserializeOwned,
+    {
+        match self {
+            Layer::Dense(dense) => dense.step_info(id, aux),
+            Layer::Convolution(conv) => conv.step_info(id, aux),
+            Layer::SchoolBookConvolution(_conv) => SchoolBookConvCtx.step_info(id, aux),
+            Layer::Activation(activation) => activation.step_info(id, aux),
+            Layer::Requant(requant) => requant.step_info(id, aux),
+            Layer::Pooling(pooling) => pooling.step_info(id, aux),
+        }
+    }
+
+    /// Run the operation associated with that layer with the given input
+    // TODO: move to tensor library : right now it works because we assume there is only Dense
+    // layer which is matmul
+    pub fn op<F: ExtensionField>(&self, input: &Tensor<Element>) -> LayerOutput<F> {
+        match &self {
+            Layer::Dense(ref dense) => LayerOutput::NormalOut(dense.op(input)),
+            Layer::Activation(activation) => LayerOutput::NormalOut(activation.op(input)),
+
+            Layer::Convolution(ref filter) => LayerOutput::ConvOut(filter.op(input)),
+            // Traditional convolution is used for debug purposes. That is because the actual convolution
+            // we use relies on the FFT algorithm. This convolution does not have a snark implementation.
+            Layer::SchoolBookConvolution(ref conv_pair) => {
+                // LayerOutput::NormalOut(filter.cnn_naive_convolution(input))
+                LayerOutput::NormalOut(input.conv2d(&conv_pair.filter, &conv_pair.bias, 1))
+            }
+
+            Layer::Requant(info) => {
+                // NOTE: we assume we have default quant structure as input
+                LayerOutput::NormalOut(info.op(input))
+            }
+            Layer::Pooling(info) => LayerOutput::NormalOut(info.op(input)),
+        }
+    }
+}
+
 impl<E: ExtensionField> LayerProof<E>
 where
     E::BaseField: Serialize + DeserializeOwned,
@@ -240,7 +234,7 @@ where
         }
     }
 }
-impl std::fmt::Display for Layer {
+impl<T: Number> std::fmt::Display for Layer<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.describe())
     }

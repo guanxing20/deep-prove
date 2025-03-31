@@ -1,12 +1,14 @@
 //! Module that takes care of (re)quantizing
+mod strategy;
 use derive_more::From;
 use ff_ext::ExtensionField;
 use goldilocks::SmallField;
 use itertools::Itertools;
 use once_cell::sync::Lazy;
-use std::{env};
+use std::env;
 
 use crate::{Element, tensor::Tensor};
+pub use strategy::{AbsoluteMax, ScalingStrategy};
 
 // Get BIT_LEN from environment variable or use default value
 pub static BIT_LEN: Lazy<usize> = Lazy::new(|| {
@@ -17,9 +19,11 @@ pub static BIT_LEN: Lazy<usize> = Lazy::new(|| {
 });
 
 /// symmetric quantization range
-pub static MIN: Lazy<Element> = Lazy::new(|| -(1 << (*BIT_LEN - 1)) + 1 );
+pub static MIN: Lazy<Element> = Lazy::new(|| -(1 << (*BIT_LEN - 1)) + 1);
 pub static MAX: Lazy<Element> = Lazy::new(|| (1 << (*BIT_LEN - 1)) - 1);
 pub static ZERO: Lazy<Element> = Lazy::new(|| 0);
+pub const MIN_FLOAT: f32 = -1.0;
+pub const MAX_FLOAT: f32 = 1.0;
 
 /// Symmetric quantization scaling
 #[derive(Debug, Clone, From, Copy)]
@@ -27,53 +31,18 @@ pub struct ScalingFactor {
     abs_max: f32,
 }
 
-trait MinMax {
-    fn zero() -> Self;
-    fn absolute_value(&self) -> Self;
-    fn cmp_min(&self, other: Self) -> Self;
-    fn cmp_max(&self, other: Self) -> Self;
-    fn to_f32(&self) -> f32;
-}
-
-impl MinMax for f32 {
-    fn absolute_value(&self) -> Self {
-        self.abs()
-    }
-    fn zero() -> Self {
-        0.0
-    }  
-    fn cmp_min(&self, other: Self) -> Self {
-        self.min(other)
-    }
-    fn cmp_max(&self, other: Self) -> Self {
-        self.max(other)
-    }
-    fn to_f32(&self) -> f32 {
-        *self
-    }
-}
-
-impl MinMax for Element {
-    fn absolute_value(&self) -> Self {
-        self.abs()
-    }
-    fn cmp_min(&self, other: Self) -> Self {
-        std::cmp::min(*self, other)
-    }
-    fn cmp_max(&self, other: Self) -> Self {
-        std::cmp::max(*self, other)
-    }
-    fn zero() -> Self {
-        0
-    }
-    fn to_f32(&self) -> f32 {
-        *self as f32
-    }
-}
 impl ScalingFactor {
+    pub fn new(abs_max: f32) -> Self {
+        Self { abs_max }
+    }
     pub fn from_tensor<T: MinMax>(t: &Tensor<T>) -> Self {
-        let max_abs = t.get_data().iter().fold(T::zero(), |a, b| a.cmp_max(b.absolute_value()));
-        Self { abs_max: max_abs.to_f32() }
+        let max_abs = t
+            .get_data()
+            .iter()
+            .fold(T::zero(), |a, b| a.cmp_max(b.absolute_value()));
+        Self {
+            abs_max: max_abs.to_f32(),
+        }
     }
 
     pub fn from_span(min: f32, max: f32) -> Self {
@@ -82,7 +51,7 @@ impl ScalingFactor {
     }
 
     fn scale(&self) -> f32 {
-        (self.abs_max - ( - self.abs_max)) / (*MAX - *MIN) as f32
+        (self.abs_max - (-self.abs_max)) / (*MAX - *MIN) as f32
     }
 
     /// Derives the right shift to apply to values to requantize them
@@ -91,7 +60,7 @@ impl ScalingFactor {
     ///                 = 2^(k1 + k2 - k3 - Q)
     ///                 = 2^{-n} where n = k3 + Q - k1 - k2
     /// n is the number of bits to shift right
-    pub fn shift(&self, s2: Self, s3: Self) -> usize {
+    pub fn shift(&self, s2: &Self, s3: &Self) -> usize {
         let full = self.scale() * s2.scale() / s3.scale();
         assert!(
             full >= 0.0 && full <= 1.0,
@@ -110,7 +79,7 @@ impl ScalingFactor {
         let zero_point = 0;
 
         // formula is q = round(r/S) + z
-        //let scaled =((value.clamp(self.min,self.max) - self.min) / self.scale()).round() * self.scale() + self.min;
+        // let scaled =((value.clamp(self.min,self.max) - self.min) / self.scale()).round() * self.scale() + self.min;
         let scaled = (*value / self.scale()).round() as Element + zero_point;
 
         scaled.clamp(*MIN, *MAX)
@@ -186,25 +155,71 @@ where
     }
 }
 
-pub fn range_from_weight(weight: &Element) -> (Element, Element) {
-    let min = if weight.is_negative() {
-        weight * *MAX as Element
+pub fn max_range_from_weight(weight: &f32) -> (f32, f32) {
+    let min = if *weight < 0.0 {
+        *weight * MAX_FLOAT
     } else {
-        weight * *MIN as Element
+        *weight * MIN_FLOAT
     };
-    let max = if weight.is_negative() {
-        weight * *MIN as Element
+    let max = if *weight < 0.0 {
+        *weight * MIN_FLOAT
     } else {
-        weight * *MAX as Element
+        *weight * MAX_FLOAT
     };
     (min, max)
 }
 
+trait MinMax {
+    fn zero() -> Self;
+    fn absolute_value(&self) -> Self;
+    fn cmp_min(&self, other: Self) -> Self;
+    fn cmp_max(&self, other: Self) -> Self;
+    fn to_f32(&self) -> f32;
+}
+
+impl MinMax for f32 {
+    fn absolute_value(&self) -> Self {
+        self.abs()
+    }
+    fn zero() -> Self {
+        0.0
+    }
+    fn cmp_min(&self, other: Self) -> Self {
+        self.min(other)
+    }
+    fn cmp_max(&self, other: Self) -> Self {
+        self.max(other)
+    }
+    fn to_f32(&self) -> f32 {
+        *self
+    }
+}
+
+impl MinMax for Element {
+    fn absolute_value(&self) -> Self {
+        self.abs()
+    }
+    fn cmp_min(&self, other: Self) -> Self {
+        std::cmp::min(*self, other)
+    }
+    fn cmp_max(&self, other: Self) -> Self {
+        std::cmp::max(*self, other)
+    }
+    fn zero() -> Self {
+        0
+    }
+    fn to_f32(&self) -> f32 {
+        *self as f32
+    }
+}
+
 #[cfg(test)]
 mod test {
-    use crate::quantization::Fieldizer;
+    use crate::quantization::{Fieldizer, IntoElement};
 
     use crate::Element;
+
+    use super::{MAX, MIN};
     type F = goldilocks::GoldilocksExt2;
 
     #[test]
@@ -252,13 +267,7 @@ mod test {
             assert_eq!(res, expected, "test case {}: {:?}", i, case);
         }
     }
-}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    type F = goldilocks::GoldilocksExt2;
     #[test]
     fn test_element_field_roundtrip() {
         // Also test a few specific values explicitly
@@ -273,13 +282,5 @@ mod tests {
                 val, roundtrip
             );
         }
-    }
-
-    #[test]
-    fn test_scaling_factor() {
-        let s1 = ScalingFactor::from_span(0.8, -0.2);
-        let s2 = ScalingFactor::from_span(2.0, -2.0);
-        let s3 = ScalingFactor::from_span(128.0, -45.0);
-        s1.shift(s2, s3);
     }
 }

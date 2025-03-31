@@ -12,7 +12,7 @@ use csv::WriterBuilder;
 use goldilocks::GoldilocksExt2;
 use tracing::info;
 use tracing_subscriber::{EnvFilter, fmt};
-use zkml::{ScalingFactor, load_model};
+use zkml::{FloatOnnxLoader, ScalingFactor};
 
 use serde::{Deserialize, Serialize};
 use zkml::{
@@ -127,7 +127,7 @@ const CSV_PROOF_SIZE: &str = "proof size (KB)";
 
 fn run(args: Args) -> anyhow::Result<()> {
     info!("[+] Reading onnx model");
-    let model = load_model(&args.onnx)?;
+    let model = FloatOnnxLoader::new(&args.onnx).build()?;
     info!("[+] Model loaded");
     model.describe();
     info!("[+] Reading input/output from pytorch");
@@ -193,7 +193,7 @@ fn run(args: Args) -> anyhow::Result<()> {
 
 fn run_inference_only(args: Args) -> anyhow::Result<()> {
     info!("[+] Reading onnx model");
-    let model = load_model(&args.onnx)?;
+    let model = FloatOnnxLoader::new(&args.onnx).build()?;
     info!("[+] Model loaded");
     model.describe();
     info!("[+] Reading input/output from pytorch");

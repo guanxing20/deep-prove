@@ -1,11 +1,10 @@
-use crate::quantization::ScalingFactor;
 use crate::{
     Claim, Prover,
     commit::{compute_betas_eval, identity_eval},
     iop::{context::ContextAux, verifier::Verifier},
-    layers::{LayerProof, PolyID, requant::Requant},
-    quantization,
-    tensor::{ConvData, get_root_of_unity},
+    layers::{LayerProof, PolyID},
+    quantization::{ScalingFactor, max_range_from_weight},
+    tensor::{ConvData, Number, get_root_of_unity},
 };
 use anyhow::Context;
 use ff_ext::ExtensionField;
@@ -13,6 +12,7 @@ use multilinear_extensions::{
     mle::{IntoMLE, MultilinearExtension},
     virtual_poly::{VPAuxInfo, VirtualPolynomial},
 };
+use rayon::iter::IntoParallelRefIterator;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sumcheck::structs::{IOPProof, IOPProverState, IOPVerifierState};
 use tracing::instrument;
@@ -25,10 +25,15 @@ use super::LayerCtx;
 pub(crate) const BIAS_POLY_ID: PolyID = 200_000;
 /// Convolution layer description (weights)
 #[derive(Clone, Debug)]
-pub struct Convolution {
-    pub filter: Tensor<Element>,
-    pub bias: Tensor<Element>,
-    pub weight_scaling: ScalingFactor,
+pub struct Convolution<T> {
+    /// NOTE: in the case of f32, the weights are native
+    /// In the case of Element (i128), the weights are already fft'd
+    pub filter: Tensor<T>,
+    /// Same for bias.
+    pub bias: Tensor<T>,
+    /// Useful ONLY when loading a convolution from f32 so when we quantize it, we can
+    /// run the fft to get the fft'd weights. The fft needs to run on the padded input shape.
+    input_shape_padded: Vec<usize>,
 }
 
 /// Info about the convolution layer derived during the setup phase
@@ -71,17 +76,8 @@ pub struct ConvProof<E: ExtensionField> {
     bias_claim: E,
 }
 
-impl Convolution {
-    pub fn new(filter: Tensor<Element>, bias: Tensor<Element>) -> Self {
-        assert_eq!(filter.kw(), bias.get_shape()[0]);
-        Self { filter, bias, weight_scaling: ScalingFactor::default() }
-    }
-    pub fn new_with_scaling(filter: Tensor<Element>, bias: Tensor<Element>, scaling: ScalingFactor) -> Self {
-        assert_eq!(filter.kw(), bias.get_shape()[0]);
-        Self { filter, bias, weight_scaling: scaling }
-    }
-
-    pub fn add_bias(&self, conv_out: &Tensor<Element>) -> Tensor<Element> {
+impl<T: Number> Convolution<T> {
+    pub fn add_bias(&self, conv_out: &Tensor<T>) -> Tensor<T> {
         let mut arr = conv_out.data.clone();
         assert_eq!(conv_out.data.len(), conv_out.kw() * conv_out.filter_size());
         for i in 0..conv_out.kw() {
@@ -92,9 +88,15 @@ impl Convolution {
         Tensor::new(conv_out.get_shape(), arr)
     }
 
-    pub fn op<E: ExtensionField>(&self, input: &Tensor<Element>) -> (Tensor<Element>, ConvData<E>) {
-        let (output, proving_data) = self.filter.fft_conv(input);
-        (self.add_bias(&output), proving_data)
+    /// Retrieves an element using (N, C, H, W) indexing
+    pub fn get(&self, n: usize, c: usize, h: usize, w: usize) -> T {
+        assert!(self.filter.get_shape().len() <= 4);
+
+        let (n_size, c_size, h_size, w_size) = self.filter.get4d();
+
+        assert!(n < n_size);
+        let flat_index = n * (c_size * h_size * w_size) + c * (h_size * w_size) + h * w_size + w;
+        self.filter.get_data()[flat_index]
     }
 
     pub fn get_shape(&self) -> Vec<usize> {
@@ -123,61 +125,73 @@ impl Convolution {
     pub fn filter_size(&self) -> usize {
         self.filter.filter_size()
     }
-    pub fn requant_info<E: ExtensionField>(&self, input_scaling_factor: ScalingFactor) -> (Requant,ScalingFactor) {
-        let weights = self.filter.get_real_weights::<E>();
-        let min_quant = *quantization::MIN as Element;
-        let max_quant = *quantization::MAX as Element;
-
-        let mut max_output: Element = 0;
-        let mut min_output: Element = 0;
-        let max_bias = self.bias.get_data().iter().max().unwrap();
-        let min_bias = self.bias.get_data().iter().min().unwrap();
-
-        // Keep the original iteration order: first over kernel height (i), then kernel width (j), then output channels (k)
-        for i in 0..self.kw() {
-            for j in 0..self.kx() {
-                let mut min_temp: Element = *min_bias;
-                let mut max_temp: Element = *max_bias;
-
-                // Loop over output channels (k) and apply weights and bias
-                for k in 0..(self.nw() * self.nw()) {
-                    let weight = weights[i][j][k];
-                    // PANICKING HERE
-                    // let bias = self.bias.data[k]; // Bias for the current output channel
-                    let bias = *max_bias;
-
-                    if weight != 0 {
-                        let (min_contrib, max_contrib) = if weight < 0 {
-                            (max_quant * weight, min_quant * weight)
-                        } else {
-                            (min_quant * weight, max_quant * weight)
-                        };
-
-                        min_temp += min_contrib;
-                        max_temp += max_contrib;
-                    }
-
-                    // Add the bias for this output channel `k`
-                    min_temp += bias;
-                    max_temp += bias;
-                }
-
-                // After processing all output channels for this (i, j) location, update the global min and max
-                max_output = max_output.max(max_temp);
-                min_output = min_output.min(min_temp);
-            }
+}
+impl Convolution<f32> {
+    /// used to create a convoluation layer with from the raw float weights and bias.
+    /// The wieghts are NOT fft'd as they are when the it is being quantized.
+    pub fn new_raw(filter: Tensor<f32>, bias: Tensor<f32>, input_shape_padded: Vec<usize>) -> Self {
+        Self {
+            filter,
+            bias,
+            input_shape_padded,
         }
-        let max_range = 2 * (max_output - min_output).unsigned_abs().next_power_of_two();
-        assert!(max_range.ilog2() as usize > *quantization::BIT_LEN);
-        //let shift = (2 * max_range).ilog2() as usize - *quantization::BIT_LEN;
-        let scaling = ScalingFactor::from_span(min_output as f32, max_output as f32);
-        let shift = scaling.shift(input_scaling_factor, self.weight_scaling);
-        (Requant {
-            // range: (max_val - min_val) as usize,
-            range: max_range as usize,
-            right_shift: shift,
-            after_range: 1 << *quantization::BIT_LEN,
-        }, input_scaling_factor)
+    }
+
+    /// TODO: refactor new_conv to be in convolution.rs and more efficient than cloning
+    pub fn quantize(self, s: ScalingFactor) -> Convolution<Element> {
+        let quantized_filter = self.filter.quantize(s);
+        let fft_filter = Tensor::new_conv(
+            quantized_filter.get_shape(),
+            self.input_shape_padded.clone(),
+            quantized_filter.get_data().to_vec(),
+        );
+        let bias = self.bias.quantize(s);
+        Convolution::<Element> {
+            filter: fft_filter,
+            bias,
+            input_shape_padded: self.input_shape_padded,
+        }
+    }
+
+    pub fn op<E: ExtensionField>(&self, input: &Tensor<f32>) -> Tensor<f32> {
+        input.conv2d(&self.filter, &self.bias, 1)
+    }
+
+    pub fn max_abs_weight(&self) -> f32 {
+        let max_weight = self
+            .filter
+            .get_data()
+            .iter()
+            .fold(0.0f32, |max, w| max.max(w.abs()));
+        let max_bias = self
+            .bias
+            .get_data()
+            .iter()
+            .fold(0.0f32, |max, w| max.max(w.abs()));
+        max_weight.max(max_bias)
+    }
+
+    /// Returns the maximum absolute value that a vector output of this convolution layer can contain.
+    /// NOTE: it assumes the weights in float are NOT fft'd
+    /// TODO: it currently assumes the worst bias value to add to each output position, which
+    /// may not be the case at all. To fix this, one would need to compute the actual bias value being added.
+    pub fn max_abs_output(&self) -> f32 {
+        self.filter.max_abs_output().max(self.bias.max_abs_output())
+    }
+}
+
+impl Convolution<Element> {
+    pub fn new(filter: Tensor<Element>, bias: Tensor<Element>) -> Self {
+        Self {
+            filter,
+            bias,
+            input_shape_padded: vec![],
+        }
+    }
+
+    pub fn op<E: ExtensionField>(&self, input: &Tensor<Element>) -> (Tensor<Element>, ConvData<E>) {
+        let (output, proving_data) = self.filter.fft_conv(input);
+        (self.add_bias(&output), proving_data)
     }
 
     pub(crate) fn step_info<E: ExtensionField>(
@@ -734,47 +748,5 @@ mod test {
         // TODO: change that process by a deterministic ID depending on the position and additional info
         // not necessarily seuential
         assert!(BIAS_POLY_ID >= dense::BIAS_POLY_ID + 100_000);
-    }
-
-    #[test]
-    pub fn test_quantization() {
-        let n_w = 1 << 2;
-        let k_w = 1 << 0;
-        let n_x = 1 << 3;
-        let k_x = 1 << 0;
-
-        let mut in_dimensions: Vec<Vec<usize>> =
-            vec![vec![k_x, n_x, n_x], vec![16, 29, 29], vec![4, 26, 26]];
-
-        for i in 0..in_dimensions.len() {
-            for j in 0..in_dimensions[0].len() {
-                in_dimensions[i][j] = (in_dimensions[i][j]).next_power_of_two();
-            }
-        }
-        let w1 = random_vector_quant(k_w * k_x * n_w * n_w);
-
-        let conv = Convolution::new(
-            Tensor::new_conv(
-                vec![k_w, k_x, n_w, n_w],
-                in_dimensions[0].clone(),
-                w1.clone(),
-            ),
-            Tensor::new(vec![k_w], random_vector_quant(k_w)),
-        );
-        let (info ,_) = conv.requant_info::<GoldilocksExt2>(ScalingFactor::default());
-        println!("range : {}", info.range);
-        for _ in 0..100 {
-            let (out, _proving_data) = conv.op::<GoldilocksExt2>(&Tensor::new(
-                vec![k_x, n_x, n_x],
-                random_vector_quant(k_x * n_x * n_x),
-            ));
-            for j in 0..out.data.len() {
-                if out.data[j] < 0 {
-                    assert!((-out.data[j] as usize) < info.range);
-                } else {
-                    assert!((out.data[j] as usize) < info.range);
-                }
-            }
-        }
     }
 }

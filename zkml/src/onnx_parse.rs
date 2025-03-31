@@ -1,7 +1,9 @@
 use crate::{
-    ScalingFactor,
+    Element,
     layers::{convolution::Convolution, dense::Dense},
+    quantization::{AbsoluteMax, ScalingStrategy},
 };
+use crate::ScalingFactor;
 use anyhow::{Context, Error, Result, bail, ensure};
 use goldilocks::GoldilocksExt2;
 use itertools::Itertools;
@@ -17,10 +19,7 @@ use tract_onnx::pb::{
     type_proto::Value,
 };
 
-type F = GoldilocksExt2;
-
 use crate::{
-    Element,
     layers::{
         Layer,
         activation::{Activation, Relu},
@@ -29,6 +28,42 @@ use crate::{
     model::Model,
 };
 
+/// Utility struct for loading a onnx model with float weights and producing a quantized model
+/// that can be used for inference and proving.
+#[derive(Debug)]
+pub struct FloatOnnxLoader {
+    model_path: String,
+    scaling_strategy: Box<dyn ScalingStrategy>,
+    model_type: Option<ModelType>,
+}
+
+impl FloatOnnxLoader {
+    pub fn new(model_path: &str) -> Self {
+        Self {
+            model_path: model_path.to_string(),
+            scaling_strategy: Box::new(AbsoluteMax::new()),
+            model_type: None,
+        }
+    }
+    pub fn with_scaling_strategy(
+        mut self,
+        scaling_strategy: Box<dyn ScalingStrategy>,
+    ) -> Result<Self> {
+        self.scaling_strategy = scaling_strategy;
+        Ok(self)
+    }
+    pub fn with_model_type(mut self, model_type: ModelType) -> Self {
+        self.model_type = Some(model_type);
+        self
+    }
+    pub fn build(self) -> Result<Model<Element>> {
+        if let Some(model_type) = self.model_type {
+            model_type.validate(&self.model_path)?;
+        }
+        let float_model = load_float_model(&self.model_path)?;
+        self.scaling_strategy.quantize(float_model)
+    }
+}
 // Supported operators
 const ACTIVATION: [&str; 2] = ["Relu", "Sigmoid"];
 const CONVOLUTION: [&str; 1] = ["Conv"];
@@ -280,8 +315,7 @@ impl ModelType {
 }
 
 /// Unified model loading function that handles both MLP and CNN models
-pub fn load_model(filepath: &str) -> Result<Model> {
-    // Validate that the model matches the expected type
+pub fn load_float_model(filepath: &str) -> Result<Model<f32>> {
     let model_type = ModelType::from_onnx(filepath).context("can't prove unknown model:")?;
     info!("Model type detected: {:?}", model_type);
 
@@ -324,18 +358,15 @@ pub fn load_model(filepath: &str) -> Result<Model> {
         initializers.insert(key, value);
     }
 
-    let mut layers: Vec<Layer> = Vec::new();
+    let mut layers: Vec<Layer<f32>> = Vec::with_capacity(graph.node.len());
     // we need to keep track of the last shape because when we pad to next power of two one layer, we need to make sure
     // the next layer's expected input matches.
     info!("load_model:BEFORE loop of graph nodes extraction");
     for (i, node) in graph.node.iter().enumerate() {
         match node.op_type.as_str() {
             op if LINEAR_ALG.contains(&op) => {
-                let WeightBiasInfo {
-                    mut weights,
-                    bias,
-                    scaling,
-                } = fetch_weight_and_bias(node, &initializers)?;
+                let WeightBiasInfo { mut weights, bias } =
+                    fetch_weight_and_bias(node, &initializers)?;
                 ensure!(bias.get_shape().len() == 1, "bias is not a vector");
                 input_shape_og = vec![weights.get_shape()[0]];
                 let nrows = weights.get_shape()[0];
@@ -384,9 +415,7 @@ pub fn load_model(filepath: &str) -> Result<Model> {
                 input_shape_padded = vec![nrows];
 
                 debug!("layer idx {} -> final shape {:?}", i, weights.get_shape());
-                layers.push(Layer::Dense(Dense::new_with_scaling(
-                    weights, bias, scaling,
-                )));
+                layers.push(Layer::Dense(Dense::new_from_weights(weights, bias)));
             }
             op if ACTIVATION.contains(&op) => {
                 assert!(input_shape_padded.iter().all(|d| d.is_power_of_two()));
@@ -399,7 +428,6 @@ pub fn load_model(filepath: &str) -> Result<Model> {
                 let WeightBiasInfo {
                     mut weights,
                     mut bias,
-                    scaling,
                 } = fetch_weight_and_bias(node, &initializers)?;
                 input_shape_og = conv2d_shape(&input_shape_og, &weights.get_shape());
                 let weight_shape = weights.get_shape();
@@ -435,15 +463,20 @@ pub fn load_model(filepath: &str) -> Result<Model> {
                 // weight.update_input_shape(&input_shape_padded);
 
                 let dims = weights.get_shape();
-                let weight = crate::tensor::Tensor::new_conv(
-                    weights.get_shape(),
-                    input_shape_padded.clone(),
-                    weights.get_data().to_vec(),
-                );
+                // The conversion to fft'd weights is done when the quantization happens, see conv.quantize()
+                // let weight = crate::tensor::Tensor::new_conv(
+                //    weights.get_shape(),
+                //    input_shape_padded.clone(),
+                //    weights.get_data(),
+                //);
                 // let dims = weight.dims(); // save the shape of the filter to compute the output shape
 
-                let layer =
-                    Layer::Convolution(Convolution::new_with_scaling(weight, bias, scaling));
+                // this is the non fft'd convolution layer
+                let layer = Layer::Convolution(Convolution::new_raw(
+                    weights,
+                    bias,
+                    input_shape_padded.clone(),
+                ));
                 // let layer = Layer::SchoolBookConvolution(Convolution::new(weight, _bias));
 
                 layers.push(layer);
@@ -490,7 +523,7 @@ pub fn load_model(filepath: &str) -> Result<Model> {
     model.set_input_shape(input_shape);
     for layer in layers {
         debug!("Added the layer: {}", layer.describe());
-        model.add_layer::<F>(layer);
+        model.add_layer(layer);
     }
     model.describe();
     Ok(model)
@@ -555,9 +588,8 @@ fn extract_tensor_f32_data(
 }
 
 struct WeightBiasInfo {
-    weights: crate::Tensor<Element>,
-    bias: crate::Tensor<Element>,
-    scaling: ScalingFactor,
+    weights: crate::Tensor<f32>,
+    bias: crate::Tensor<f32>,
 }
 
 fn fetch_weight_and_bias(
@@ -574,27 +606,9 @@ fn fetch_weight_and_bias(
         None => bail!("No bias tensor found for node {}", node.name),
     };
 
-    let min_weight = data.iter().fold(f32::INFINITY, |a, &b| a.min(b));
-    let max_weight = data.iter().fold(f32::NEG_INFINITY, |a, &b| a.max(b));
-    let min_bias = bias.iter().fold(f32::INFINITY, |a, &b| a.min(b));
-    let max_bias = bias.iter().fold(f32::NEG_INFINITY, |a, &b| a.max(b));
-    // choose the maximal span between the two so they both get the same scaling factor
-    let min = min_weight.min(min_bias);
-    let max = max_weight.max(max_bias);
-    let scaling = ScalingFactor::from_span(min, max);
-    let weights = crate::Tensor::new(
-        shape,
-        data.iter().map(|x| scaling.quantize(x)).collect_vec(),
-    );
-    let bias = crate::Tensor::new(
-        bias_shape,
-        bias.iter().map(|x| scaling.quantize(x)).collect_vec(),
-    );
-    Ok(WeightBiasInfo {
-        weights,
-        bias,
-        scaling,
-    })
+    let weights = crate::Tensor::new(shape, data);
+    let bias = crate::Tensor::new(bias_shape, bias);
+    Ok(WeightBiasInfo { weights, bias })
 }
 
 /// Get the conv2d attributes and assert if supported by DeepProve
@@ -681,8 +695,9 @@ mod tests {
     #[test]
     fn test_load_mlp() {
         let filepath = "assets/scripts/MLP/mlp-iris-01.onnx";
-        ModelType::MLP.validate(filepath).unwrap();
-        let result = load_model(&filepath);
+        let result = FloatOnnxLoader::new(&filepath)
+            .with_model_type(ModelType::MLP)
+            .build();
 
         assert!(result.is_ok(), "Failed: {:?}", result.unwrap_err());
     }
@@ -690,8 +705,10 @@ mod tests {
     #[test]
     fn test_mlp_model_run() {
         let filepath = "assets/scripts/MLP/mlp-iris-01.onnx";
-        ModelType::MLP.validate(filepath).unwrap();
-        let model = load_model(&filepath).unwrap();
+        let model = FloatOnnxLoader::new(&filepath)
+            .with_model_type(ModelType::MLP)
+            .build()
+            .unwrap();
         let input = crate::tensor::Tensor::random(vec![model.input_shape()[0]]);
         let input = model.prepare_input(input);
         let trace = model.run::<F>(input.clone());
@@ -700,7 +717,7 @@ mod tests {
 
     #[test]
     fn test_quantize() {
-        let input = [0.09039914, -0.07716653];
+        let input: [f32; 2] = [0.09039914, -0.07716653];
         let scaling = ScalingFactor::from_span(1.0, -1.0);
         println!("Result: {} => {:?}", input[0], scaling.quantize(&input[0]));
         println!("Result: {} => {:?}", input[1], scaling.quantize(&input[0]));
@@ -719,8 +736,9 @@ mod tests {
             .expect("Failed to set global subscriber");
 
         let filepath = "assets/scripts/covid/cnn-covid.onnx";
-        ModelType::CNN.validate(filepath).unwrap();
-        let result = load_model(&filepath);
+        let result = FloatOnnxLoader::new(&filepath)
+            .with_model_type(ModelType::CNN)
+            .build();
 
         assert!(result.is_ok(), "Failed: {:?}", result.unwrap_err());
 
@@ -763,7 +781,9 @@ mod tests {
     fn test_load_cnn() {
         let filepath = "assets/scripts/CNN/cnn-cifar-01.onnx";
         ModelType::CNN.validate(filepath).unwrap();
-        let result = load_model(&filepath);
+        let result = FloatOnnxLoader::new(&filepath)
+            .with_model_type(ModelType::CNN)
+            .build();
 
         assert!(result.is_ok(), "Failed: {:?}", result.unwrap_err());
 

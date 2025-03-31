@@ -13,13 +13,12 @@ pub use iop::{
     prover::Prover,
     verifier::{IO, verify},
 };
-pub use quantization::ScalingFactor;
+pub use quantization::{AbsoluteMax, ScalingFactor, ScalingStrategy};
 pub mod layers;
 pub mod lookup;
 pub mod model;
 mod onnx_parse;
-pub use onnx_parse::{ModelType, load_model};
-
+pub use onnx_parse::{FloatOnnxLoader, ModelType};
 pub mod tensor;
 pub use tensor::Tensor;
 #[cfg(test)]
@@ -138,15 +137,12 @@ mod test {
     use crate::{
         default_transcript,
         iop::{
-            Context,
-            prover::Prover,
-            verifier::{IO, verify},
+            prover::Prover, verifier::{verify, IO}, Context
         },
-        load_model,
         onnx_parse::ModelType,
         quantization::TensorFielder,
         tensor::Tensor,
-        to_bit_sequence_le,
+        to_bit_sequence_le, FloatOnnxLoader,
     };
     use ff_ext::ff::Field;
 
@@ -167,10 +163,9 @@ mod test {
 
     fn test_model_run_helper() -> anyhow::Result<()> {
         let filepath = workspace_root().join("zkml/assets/model.onnx");
-        ModelType::MLP
-            .validate(&filepath.to_string_lossy())
-            .unwrap();
-        let model = load_model(&filepath.to_string_lossy()).unwrap();
+        let model = FloatOnnxLoader::new(&filepath.to_string_lossy())
+            .with_model_type(ModelType::MLP)
+            .build()?;
         println!("[+] Loaded onnx file");
         let ctx = Context::<E>::generate(&model, None).expect("unable to generate context");
         println!("[+] Setup parameters");

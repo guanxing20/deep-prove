@@ -1,4 +1,9 @@
+use crate::{
+    ScalingFactor,
+    quantization::{self, MAX_FLOAT, MIN_FLOAT},
+};
 use anyhow::bail;
+use ark_std::rand::{self, Rng, SeedableRng, rngs::StdRng};
 use ff_ext::ExtensionField;
 use goldilocks::GoldilocksExt2;
 use itertools::Itertools;
@@ -22,6 +27,37 @@ use crate::{
     quantization::{Fieldizer, IntoElement},
     to_bit_sequence_le,
 };
+
+pub trait Number:
+    Copy
+    + Clone
+    + Send
+    + Sync
+    + Default
+    + std::iter::Sum
+    + std::ops::Add<Output = Self>
+    + std::ops::Sub<Output = Self>
+    + std::ops::AddAssign<Self>
+    + std::ops::Mul<Output = Self>
+{
+    fn random<R: Rng>(rng: &mut R) -> Self;
+}
+
+impl Number for Element {
+    fn random<R: Rng>(rng: &mut R) -> Self {
+        rng.gen_range(*quantization::MIN..=*quantization::MAX)
+    }
+}
+impl Number for f32 {
+    fn random<R: Rng>(rng: &mut R) -> Self {
+        rng.gen_range(MIN_FLOAT..=MAX_FLOAT)
+    }
+}
+impl Number for GoldilocksExt2 {
+    fn random<R: Rng>(rng: &mut R) -> Self {
+        Element::random(rng).to_field()
+    }
+}
 
 /// Function testing the consistency between the actual convolution implementation and
 /// the FFT one. Used for debugging purposes.
@@ -329,19 +365,7 @@ impl Tensor<Element> {
             ConvData::new(real_input, input, x_vec, prod, output),
         );
     }
-    pub fn kx(&self) -> usize {
-        self.input_shape[0]
-    }
-    pub fn kw(&self) -> usize {
-        self.shape[0]
-    }
-    pub fn nw(&self) -> usize {
-        self.shape[2]
-    }
-    // Returns the size of an individual filter
-    pub fn filter_size(&self) -> usize {
-        self.shape[2] * self.shape[2]
-    }
+
     /// Returns the evaluation point, in order for (row,col) addressing
     pub fn evals_2d<F: ExtensionField>(&self) -> Vec<F> {
         assert!(self.is_matrix(), "Tensor is not a matrix");
@@ -373,6 +397,21 @@ impl Tensor<Element> {
         // N variable to address 2^N rows and M variables to address 2^M columns
         let num_vars = self.nrows_2d().ilog2() + self.ncols_2d().ilog2();
         DenseMultilinearExtension::from_evaluations_ext_vec(num_vars as usize, self.evals_2d())
+    }
+}
+
+impl Tensor<f32> {
+    pub fn quantize(self, s: ScalingFactor) -> Tensor<Element> {
+        let data = self
+            .data
+            .into_par_iter()
+            .map(|x| s.quantize(&x))
+            .collect::<Vec<_>>();
+        Tensor::new(self.shape, data)
+    }
+
+    pub fn max_abs_output(&self) -> f32 {
+        self.data.iter().fold(0.0f32, |max, x| max.max(x.abs()))
     }
 }
 
@@ -451,6 +490,20 @@ impl<T> Tensor<T> {
     pub fn get_data(&self) -> &[T] {
         &self.data
     }
+
+    pub fn kx(&self) -> usize {
+        self.input_shape[0]
+    }
+    pub fn kw(&self) -> usize {
+        self.shape[0]
+    }
+    pub fn nw(&self) -> usize {
+        self.shape[2]
+    }
+    // Returns the size of an individual filter
+    pub fn filter_size(&self) -> usize {
+        self.shape[2] * self.shape[2]
+    }
 }
 
 impl<T> Tensor<T>
@@ -510,10 +563,7 @@ where
 
 impl<T> Tensor<T>
 where
-    T: Copy + Clone + Send + Sync,
-    T: std::iter::Sum,
-    T: std::ops::Add<Output = T> + std::ops::Sub<Output = T> + std::ops::Mul<Output = T>,
-    T: std::default::Default,
+    T: Number,
 {
     /// Create a tensor filled with zeros
     pub fn zeros(shape: Vec<usize>) -> Self {
@@ -559,7 +609,12 @@ where
             self.shape == other.shape,
             "Shape mismatch for multiplication."
         );
-        let data = self.data.par_iter().zip(other.data.par_iter()).map(|(a, b)| *a * *b).collect::<Vec<_>>();
+        let data = self
+            .data
+            .par_iter()
+            .zip(other.data.par_iter())
+            .map(|(a, b)| *a * *b)
+            .collect::<Vec<_>>();
 
         Tensor {
             shape: self.shape.clone(),
@@ -1257,6 +1312,27 @@ impl PartialEq for Tensor<GoldilocksExt2> {
     }
 }
 
+impl<T: Number> Tensor<T> {
+    pub fn random(shape: Vec<usize>) -> Self {
+        Self::random_seed(shape, Some(rand::random::<u64>()))
+    }
+
+    /// Creates a random matrix with a given number of rows and cols.
+    /// NOTE: doesn't take a rng as argument because to generate it in parallel it needs be sync +
+    /// sync which is not true for basic rng core.
+    pub fn random_seed(shape: Vec<usize>, seed: Option<u64>) -> Self {
+        let seed = seed.unwrap_or(rand::random::<u64>()); // Use provided seed or default
+        let mut rng = StdRng::seed_from_u64(seed);
+        let size = shape.iter().product();
+        let data = (0..size).map(|_| T::random(&mut rng)).collect();
+        Self {
+            data,
+            shape,
+            input_shape: vec![0],
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
 
@@ -1267,33 +1343,7 @@ mod test {
 
     use super::*;
     use multilinear_extensions::mle::MultilinearExtension;
-    impl Tensor<Element> {
-        /// Creates a random matrix with a given number of rows and cols.
-        /// NOTE: doesn't take a rng as argument because to generate it in parallel it needs be sync +
-        /// sync which is not true for basic rng core.
-        pub fn random(shape: Vec<usize>) -> Self {
-            let size = shape.iter().product();
-            let data = random_vector(size);
-            Self {
-                data,
-                shape,
-                input_shape: vec![0],
-            }
-        }
 
-        /// Creates a random matrix with a given number of rows and cols.
-        /// NOTE: doesn't take a rng as argument because to generate it in parallel it needs be sync +
-        /// sync which is not true for basic rng core.
-        pub fn random_seed(shape: Vec<usize>, seed: Option<u64>) -> Self {
-            let size = shape.iter().product();
-            let data = random_vector_seed(size, seed);
-            Self {
-                data,
-                shape,
-                input_shape: vec![0],
-            }
-        }
-    }
     #[test]
     fn test_tensor_basic_ops() {
         let tensor1 = Tensor::new(vec![2, 2], vec![1, 2, 3, 4]);
@@ -1629,7 +1679,7 @@ mod test {
         let nrows = 12usize;
         let ncols = new_shape.iter().product::<usize>();
 
-        let og_t = Tensor::random(old_shape.clone());
+        let og_t = Tensor::<Element>::random(old_shape.clone());
         let og_flat_t = og_t.flatten(); // This is equivalent to conv2d output (flattened)
 
         let mut pad_t = og_t.clone();

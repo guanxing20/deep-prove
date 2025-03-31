@@ -48,8 +48,6 @@ pub fn random_vector_seed(n: usize, seed: Option<u64>) -> Vec<Element> {
     let seed = seed.unwrap_or(rand::random::<u64>()); // Use provided seed or default
     let mut rng = StdRng::seed_from_u64(seed);
     (0..n)
-        .map(|_| {
-            rng.gen_range(*quantization::MIN..=*quantization::MAX)
-        })
+        .map(|_| rng.gen_range(*quantization::MIN..=*quantization::MAX))
         .collect_vec()
 }

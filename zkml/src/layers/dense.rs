@@ -1,9 +1,10 @@
-use crate::quantization::ScalingFactor;
 use crate::{
     Claim, Prover,
     iop::{context::ContextAux, verifier::Verifier},
-    layers::{LayerCtx, LayerProof, PolyID, requant::Requant},
+    layers::{LayerCtx, LayerProof, PolyID},
     quantization,
+    quantization::ScalingFactor,
+    tensor::Number,
 };
 use anyhow::{Context, ensure};
 use ff_ext::ExtensionField;
@@ -26,10 +27,9 @@ pub(crate) const BIAS_POLY_ID: PolyID = 100_000;
 
 /// Description of the layer
 #[derive(Clone, Debug)]
-pub struct Dense {
-    pub matrix: Tensor<Element>,
-    pub bias: Tensor<Element>,
-    pub scaling: ScalingFactor,
+pub struct Dense<T> {
+    pub matrix: Tensor<T>,
+    pub bias: Tensor<T>,
 }
 
 /// Information stored in the context (setup phase) for this layer.
@@ -55,17 +55,11 @@ pub struct DenseProof<E: ExtensionField> {
     individual_claims: Vec<E>,
 }
 
-impl Dense {
-    //pub fn new(matrix: Tensor<Element>, bias: Tensor<Element>) -> Self {
-    //    assert_eq!(matrix.nrows_2d(), bias.get_shape()[0]);
-    //    Self { matrix, bias , scaling: ScalingFactor::default() }
-    //}
-
-    pub fn new_with_scaling(matrix: Tensor<Element>, bias: Tensor<Element>, scaling: ScalingFactor) -> Self {
+impl<T: Number> Dense<T> {
+    pub fn new(matrix: Tensor<T>, bias: Tensor<T>) -> Self {
         assert_eq!(matrix.nrows_2d(), bias.get_shape()[0]);
-        Self { matrix, bias , scaling }
+        Self { matrix, bias }
     }
-
     pub fn ncols(&self) -> usize {
         self.matrix.ncols_2d()
     }
@@ -73,7 +67,7 @@ impl Dense {
         self.matrix.nrows_2d()
     }
 
-    pub fn op(&self, input: &Tensor<Element>) -> Tensor<Element> {
+    pub fn op(&self, input: &Tensor<T>) -> Tensor<T> {
         if input.get_shape().len() != 1 {
             let flat_input = input.flatten();
             self.matrix.matvec(&flat_input).add(&self.bias)
@@ -85,14 +79,27 @@ impl Dense {
     pub fn pad_next_power_of_two(self) -> Self {
         let matrix = self.matrix.pad_next_power_of_two();
         let bias = self.bias.pad_1d(matrix.nrows_2d());
-        Self::new_with_scaling(matrix, bias, self.scaling)
+        Self { matrix, bias }
+    }
+}
+
+impl Dense<f32> {
+    pub fn quantize(self, s: ScalingFactor) -> Dense<Element> {
+        let matrix = self.matrix.quantize(s);
+        let bias = self.bias.quantize(s);
+        Dense::<Element> { matrix, bias }
     }
 
-    pub fn requant_info(&self, input_scaling_factor: ScalingFactor) -> (Requant, ScalingFactor){
+    pub fn new_from_weights(weights: Tensor<f32>, bias: Tensor<f32>) -> Self {
+        Self {
+            matrix: weights,
+            bias,
+        }
+    }
+    /// Returns the maximum absolute value that a vector output of this dense layer can contain.
+    pub fn max_abs_output(&self) -> f32 {
         let ncols = self.matrix.ncols_2d();
-        let model_1 = self.scaling.quantize(&1.0);
-        let (mins,maxs) :(Vec<_>,Vec<_>)= self
-            .matrix
+        self.matrix
             .get_data()
             .iter()
             .chunks(ncols)
@@ -100,33 +107,25 @@ impl Dense {
             .enumerate()
             .map(|(i, row)| {
                 let row_range = row
-                    .map(|w| quantization::range_from_weight(w))
-                    .fold((0, 0), |(min, max), (wmin, wmax)| (min + wmin, max + wmax));
-                // add the bias rescaled to the same scale as the model 
-                let bias_weight = &self.bias.get_data()[i] * model_1;
-                let total_range = (row_range.0 + bias_weight, row_range.1 + bias_weight);
-                //let total_range = (row_range.0 , row_range.1);
-                (total_range.0,total_range.1)
-                //(total_range.0,total_range.0+10)
+                    .map(|w| quantization::max_range_from_weight(w))
+                    .fold((0.0, 0.0), |(min, max), (wmin, wmax)| {
+                        (min + wmin, max + wmax)
+                    });
+                // add the bias rescaled to the same scale as the model
+                let bias_weight = &self.bias.get_data()[i];
+                let min_out: f32 = row_range.0 + bias_weight;
+                let max_out: f32 = row_range.1 + bias_weight;
+                min_out.abs().max(max_out.abs())
             })
-            .unzip();
-
-        let output_min = mins.iter().min().unwrap();
-        let output_max = maxs.iter().max().unwrap();
-        let output_range = output_max - output_min;
-        let s1 = input_scaling_factor;
-        let s2 = self.scaling;
-        assert_eq!((*output_max as f32) as Element, *output_max, "we're loosing precision because of f32");
-        assert_eq!((*output_min as f32) as Element, *output_min, "we're loosing precision because of f32");
-        let s3 = ScalingFactor::from_span(*output_min as f32, *output_max as f32);
-        let shift = s1.shift(s2, s3);
-        println!("SHIFT DENSE s1={:?}, s2={:?},s3={:?} => shift={}", s1, s2, s3, shift);
-        (Requant {
-            range: output_range as usize,
-            right_shift: shift,
-            after_range: 1 << *quantization::BIT_LEN,
-        },s3)
+            .fold(0.0f32, |max, curr| max.max(curr))
     }
+
+    pub fn max_abs_weight(&self) -> f32 {
+        self.matrix.max_abs_output().max(self.bias.max_abs_output())
+    }
+}
+
+impl Dense<Element> {
     pub fn prove_step<'b, E, T>(
         &self,
         prover: &mut Prover<E, T>,
@@ -372,178 +371,166 @@ impl<E: ExtensionField> DenseProof<E> {
 mod test {
     use super::*;
 
-    impl Dense {
+    impl<T: Number> Dense<T> {
         pub fn random(shape: Vec<usize>) -> Self {
             assert_eq!(shape.len(), 2);
             let (nrows, ncols) = (shape[0], shape[1]);
-            let matrix = Tensor::random(vec![nrows, ncols]);
-            //let bias = Tensor::random(vec![nrows]);
-            let bias = Tensor::zeros(vec![nrows]);
-            let min = matrix.get_data().iter().min().unwrap();
-            let max = matrix.get_data().iter().max().unwrap();
-            let scaling = ScalingFactor::from_span(*min as f32, *max as f32);
-            println!("random dense layer scaling: {:?}", scaling);
-            Self::new_with_scaling(matrix, bias, scaling)
+            let matrix = Tensor::<T>::random(vec![nrows, ncols]);
+            // let bias = Tensor::random(vec![nrows]);
+            let bias = Tensor::<T>::random(vec![nrows]);
+            Self::new(matrix, bias)
         }
     }
 
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-
-        #[test]
-        fn test_dense_pad_next_power_of_two() {
-            // Create a Dense layer with non-power-of-two dimensions
-            let matrix =
-                Tensor::<Element>::matix_from_coeffs(vec![vec![1, 2, 3], vec![4, 5, 6], vec![
-                    7, 8, 9,
-                ]])
+    #[test]
+    fn test_dense_pad_next_power_of_two() {
+        // Create a Dense layer with non-power-of-two dimensions
+        let matrix =
+            Tensor::<Element>::matix_from_coeffs(vec![vec![1, 2, 3], vec![4, 5, 6], vec![7, 8, 9]])
                 .unwrap();
 
-            let bias = Tensor::<Element>::new(vec![3], vec![10, 11, 12]);
+        let bias = Tensor::<Element>::new(vec![3], vec![10, 11, 12]);
 
-            let dense = Dense::new_with_scaling(matrix, bias, ScalingFactor::default());
+        let dense = Dense::new(matrix, bias);
 
-            // Pad to next power of two
-            let padded = dense.pad_next_power_of_two();
+        // Pad to next power of two
+        let padded = dense.pad_next_power_of_two();
 
-            // Check padded dimensions are powers of two
-            let padded_dims = padded.matrix.get_shape();
-            assert_eq!(padded_dims[0], 4); // Next power of 2 after 3
-            assert_eq!(padded_dims[1], 4); // Next power of 2 after 3
+        // Check padded dimensions are powers of two
+        let padded_dims = padded.matrix.get_shape();
+        assert_eq!(padded_dims[0], 4); // Next power of 2 after 3
+        assert_eq!(padded_dims[1], 4); // Next power of 2 after 3
 
-            // Check bias is padded
-            let bias_dims = padded.bias.get_shape();
-            assert_eq!(bias_dims[0], 4); // Next power of 2 after 3
+        // Check bias is padded
+        let bias_dims = padded.bias.get_shape();
+        assert_eq!(bias_dims[0], 4); // Next power of 2 after 3
 
-            // Check original values are preserved
-            assert_eq!(padded.matrix.get_data()[0], 1);
-            assert_eq!(padded.matrix.get_data()[1], 2);
-            assert_eq!(padded.matrix.get_data()[2], 3);
-            assert_eq!(padded.matrix.get_data()[4], 4);
-            assert_eq!(padded.matrix.get_data()[8], 7);
+        // Check original values are preserved
+        assert_eq!(padded.matrix.get_data()[0], 1);
+        assert_eq!(padded.matrix.get_data()[1], 2);
+        assert_eq!(padded.matrix.get_data()[2], 3);
+        assert_eq!(padded.matrix.get_data()[4], 4);
+        assert_eq!(padded.matrix.get_data()[8], 7);
 
-            // Check added values are zeros
-            assert_eq!(padded.matrix.get_data()[3], 0);
-            assert_eq!(padded.matrix.get_data()[7], 0);
-            assert_eq!(padded.matrix.get_data()[15], 0);
+        // Check added values are zeros
+        assert_eq!(padded.matrix.get_data()[3], 0);
+        assert_eq!(padded.matrix.get_data()[7], 0);
+        assert_eq!(padded.matrix.get_data()[15], 0);
 
-            // Check bias values
-            assert_eq!(padded.bias.get_data()[0], 10);
-            assert_eq!(padded.bias.get_data()[1], 11);
-            assert_eq!(padded.bias.get_data()[2], 12);
-            assert_eq!(padded.bias.get_data()[3], 0); // Padding
+        // Check bias values
+        assert_eq!(padded.bias.get_data()[0], 10);
+        assert_eq!(padded.bias.get_data()[1], 11);
+        assert_eq!(padded.bias.get_data()[2], 12);
+        assert_eq!(padded.bias.get_data()[3], 0); // Padding
+    }
+
+    #[test]
+    fn test_dense_pad_already_power_of_two() {
+        // Create a Dense layer with power-of-two dimensions
+        let matrix = Tensor::<Element>::matix_from_coeffs(vec![
+            vec![1, 2, 3, 4],
+            vec![5, 6, 7, 8],
+            vec![9, 10, 11, 12],
+            vec![13, 14, 15, 16],
+        ])
+        .unwrap();
+
+        let bias = Tensor::<Element>::new(vec![4], vec![20, 21, 22, 23]);
+
+        let dense = Dense::new(matrix, bias);
+
+        // Pad to next power of two
+        let padded = dense.clone().pad_next_power_of_two();
+
+        // Check dimensions remain the same
+        let padded_dims = padded.matrix.get_shape();
+        assert_eq!(padded_dims[0], 4);
+        assert_eq!(padded_dims[1], 4);
+
+        // Check bias dimensions remain the same
+        let bias_dims = padded.bias.get_shape();
+        assert_eq!(bias_dims[0], 4);
+
+        // Check values are preserved
+        for i in 0..16 {
+            assert_eq!(padded.matrix.get_data()[i], dense.matrix.get_data()[i]);
         }
 
-        #[test]
-        fn test_dense_pad_already_power_of_two() {
-            // Create a Dense layer with power-of-two dimensions
-            let matrix = Tensor::<Element>::matix_from_coeffs(vec![
-                vec![1, 2, 3, 4],
-                vec![5, 6, 7, 8],
-                vec![9, 10, 11, 12],
-                vec![13, 14, 15, 16],
-            ])
+        for i in 0..4 {
+            assert_eq!(padded.bias.get_data()[i], dense.bias.get_data()[i]);
+        }
+    }
+
+    #[test]
+    fn test_dense_pad_mixed_dimensions() {
+        // Create a Dense layer with one power-of-two dimension and one non-power-of-two
+        let matrix =
+            Tensor::<Element>::matix_from_coeffs(vec![vec![1, 2, 3, 4], vec![5, 6, 7, 8], vec![
+                9, 10, 11, 12,
+            ]])
             .unwrap();
 
-            let bias = Tensor::<Element>::new(vec![4], vec![20, 21, 22, 23]);
+        let bias = Tensor::<Element>::new(vec![3], vec![20, 21, 22]);
 
-            let dense = Dense::new_with_scaling(matrix, bias, ScalingFactor::default());
+        let dense = Dense::new(matrix, bias);
 
-            // Pad to next power of two
-            let padded = dense.clone().pad_next_power_of_two();
+        // Pad to next power of two
+        let padded = dense.pad_next_power_of_two();
 
-            // Check dimensions remain the same
-            let padded_dims = padded.matrix.get_shape();
-            assert_eq!(padded_dims[0], 4);
-            assert_eq!(padded_dims[1], 4);
+        // Check dimensions are padded correctly
+        let padded_dims = padded.matrix.get_shape();
+        assert_eq!(padded_dims[0], 4); // Next power of 2 after 3
+        assert_eq!(padded_dims[1], 4); // Already a power of 2
 
-            // Check bias dimensions remain the same
-            let bias_dims = padded.bias.get_shape();
-            assert_eq!(bias_dims[0], 4);
+        // Check bias is padded
+        let bias_dims = padded.bias.get_shape();
+        assert_eq!(bias_dims[0], 4); // Next power of 2 after 3
 
-            // Check values are preserved
-            for i in 0..16 {
-                assert_eq!(padded.matrix.get_data()[i], dense.matrix.get_data()[i]);
-            }
+        // Check original values are preserved and padding is zeros
+        assert_eq!(padded.matrix.get_data()[0], 1);
+        assert_eq!(padded.matrix.get_data()[4], 5);
+        assert_eq!(padded.matrix.get_data()[8], 9);
+        assert_eq!(padded.matrix.get_data()[12], 0); // Padding
 
-            for i in 0..4 {
-                assert_eq!(padded.bias.get_data()[i], dense.bias.get_data()[i]);
-            }
-        }
+        // Check bias values
+        assert_eq!(padded.bias.get_data()[0], 20);
+        assert_eq!(padded.bias.get_data()[1], 21);
+        assert_eq!(padded.bias.get_data()[2], 22);
+        assert_eq!(padded.bias.get_data()[3], 0); // Padding
+    }
 
-        #[test]
-        fn test_dense_pad_mixed_dimensions() {
-            // Create a Dense layer with one power-of-two dimension and one non-power-of-two
-            let matrix = Tensor::<Element>::matix_from_coeffs(vec![
-                vec![1, 2, 3, 4],
-                vec![5, 6, 7, 8],
-                vec![9, 10, 11, 12],
-            ])
-            .unwrap();
+    #[test]
+    fn test_quantization_with_padded_dense() {
+        // Create input data that needs quantization
+        let input_data = vec![0.5f32, -0.3f32, 0.1f32];
 
-            let bias = Tensor::<Element>::new(vec![3], vec![20, 21, 22]);
+        // Quantize the input
+        let quantized_input: Vec<Element> = input_data
+            .iter()
+            .map(|x| ScalingFactor::default().quantize(x))
+            .collect();
 
-            let dense = Dense::new_with_scaling(matrix, bias,ScalingFactor::default());
+        // Create a Dense layer
+        let matrix =
+            Tensor::<Element>::matix_from_coeffs(vec![vec![1, 2, 3], vec![4, 5, 6]]).unwrap();
 
-            // Pad to next power of two
-            let padded = dense.pad_next_power_of_two();
+        let bias = Tensor::<Element>::new(vec![2], vec![10, 11]);
 
-            // Check dimensions are padded correctly
-            let padded_dims = padded.matrix.get_shape();
-            assert_eq!(padded_dims[0], 4); // Next power of 2 after 3
-            assert_eq!(padded_dims[1], 4); // Already a power of 2
+        let dense = Dense::new(matrix, bias);
 
-            // Check bias is padded
-            let bias_dims = padded.bias.get_shape();
-            assert_eq!(bias_dims[0], 4); // Next power of 2 after 3
+        // Pad the dense layer
+        let padded = dense.clone().pad_next_power_of_two();
 
-            // Check original values are preserved and padding is zeros
-            assert_eq!(padded.matrix.get_data()[0], 1);
-            assert_eq!(padded.matrix.get_data()[4], 5);
-            assert_eq!(padded.matrix.get_data()[8], 9);
-            assert_eq!(padded.matrix.get_data()[12], 0); // Padding
+        // Create input tensor
+        let input_tensor = Tensor::<Element>::new(vec![3], quantized_input);
 
-            // Check bias values
-            assert_eq!(padded.bias.get_data()[0], 20);
-            assert_eq!(padded.bias.get_data()[1], 21);
-            assert_eq!(padded.bias.get_data()[2], 22);
-            assert_eq!(padded.bias.get_data()[3], 0); // Padding
-        }
+        // Apply the dense operation on both original and padded
+        let output = dense.op(&input_tensor);
+        let padded_output = padded.op(&input_tensor.pad_1d(4));
 
-        #[test]
-        fn test_quantization_with_padded_dense() {
-            // Create input data that needs quantization
-            let input_data = vec![0.5f32, -0.3f32, 0.1f32];
-
-            // Quantize the input
-            let quantized_input: Vec<Element> = input_data
-                .iter()
-                .map(|x| ScalingFactor::default().quantize(x))
-                .collect();
-
-            // Create a Dense layer
-            let matrix =
-                Tensor::<Element>::matix_from_coeffs(vec![vec![1, 2, 3], vec![4, 5, 6]]).unwrap();
-
-            let bias = Tensor::<Element>::new(vec![2], vec![10, 11]);
-
-            let dense = Dense::new_with_scaling(matrix, bias, ScalingFactor::default());
-
-            // Pad the dense layer
-            let padded = dense.clone().pad_next_power_of_two();
-
-            // Create input tensor
-            let input_tensor = Tensor::<Element>::new(vec![3], quantized_input);
-
-            // Apply the dense operation on both original and padded
-            let output = dense.op(&input_tensor);
-            let padded_output = padded.op(&input_tensor.pad_1d(4));
-
-            // Check that the result is correct (for the non-padded parts)
-            for i in 0..2 {
-                assert_eq!(output.get_data()[i], padded_output.get_data()[i]);
-            }
+        // Check that the result is correct (for the non-padded parts)
+        for i in 0..2 {
+            assert_eq!(output.get_data()[i], padded_output.get_data()[i]);
         }
     }
 }
