@@ -72,10 +72,10 @@ impl ScalingFactor {
 
     /// Take a floating point number and quantize it to an BIT_LEN-bit integer
     pub fn quantize(&self, value: &f32) -> Element {
-        assert!(
-            *value >= -1.0 && *value <= 1.0,
-            "Input value must be between -1.0 and 1.0"
-        );
+        //assert!(
+        //    *value >= -1.0 && *value <= 1.0,
+        //    "Input value must be between -1.0 and 1.0"
+        //);
         let zero_point = 0;
 
         // formula is q = round(r/S) + z

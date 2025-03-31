@@ -41,21 +41,43 @@ pub trait Number:
     + std::ops::Mul<Output = Self>
 {
     fn random<R: Rng>(rng: &mut R) -> Self;
+    /// reason abs is necessary is because f32 doesn't implement Ord trait, so to have uniform code for f32 and Element,
+    /// we implement abs here.
+    fn absolute_value(&self) -> Self;
+    fn cmp_max(&self, other: &Self) -> Self;
 }
 
 impl Number for Element {
     fn random<R: Rng>(rng: &mut R) -> Self {
         rng.gen_range(*quantization::MIN..=*quantization::MAX)
     }
+    fn absolute_value(&self) -> Self {
+        self.abs()
+    }
+    fn cmp_max(&self, other: &Self) -> Self {
+        *self.max(&other)
+    }
 }
 impl Number for f32 {
     fn random<R: Rng>(rng: &mut R) -> Self {
         rng.gen_range(MIN_FLOAT..=MAX_FLOAT)
     }
+    fn absolute_value(&self) -> Self {
+        self.abs()
+    }
+    fn cmp_max(&self, other: &Self) -> Self {
+        self.max(*other)
+    }
 }
 impl Number for GoldilocksExt2 {
     fn random<R: Rng>(rng: &mut R) -> Self {
         Element::random(rng).to_field()
+    }
+    fn absolute_value(&self) -> Self {
+        *self
+    }
+    fn cmp_max(&self, other: &Self) -> Self {
+        *self.max(other)
     }
 }
 
@@ -410,9 +432,7 @@ impl Tensor<f32> {
         Tensor::new(self.shape, data)
     }
 
-    pub fn max_abs_output(&self) -> f32 {
-        self.data.iter().fold(0.0f32, |max, x| max.max(x.abs()))
-    }
+    
 }
 
 impl<T> Tensor<T> {
@@ -565,6 +585,9 @@ impl<T> Tensor<T>
 where
     T: Number,
 {
+    pub fn max_abs_output(&self) -> T {
+        self.data.iter().fold(T::default(), |max, x| max.cmp_max(&x.absolute_value()))
+    }
     /// Create a tensor filled with zeros
     pub fn zeros(shape: Vec<usize>) -> Self {
         let size = shape.iter().product();

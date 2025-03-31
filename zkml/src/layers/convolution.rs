@@ -168,7 +168,7 @@ impl Convolution<f32> {
             .get_data()
             .iter()
             .fold(0.0f32, |max, w| max.max(w.abs()));
-        max_weight.max(max_bias)
+        max_weight + max_bias
     }
 
     /// Returns the maximum absolute value that a vector output of this convolution layer can contain.

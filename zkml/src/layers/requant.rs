@@ -120,7 +120,7 @@ impl Requant {
     pub fn apply(&self, e: &Element) -> Element {
         let max_bit = (self.range << 1) as Element;
         let tmp = e + max_bit;
-        assert!(tmp >= 0);
+        assert!(tmp >= 0,"offset is too small: element {} + {} (self.range << 1) = {}", e, self.range << 1,tmp);
         let tmp = tmp >> self.right_shift;
         let res = tmp - (max_bit >> self.right_shift);
         assert!(res >= *quantization::MIN && res <= *quantization::MAX);

@@ -90,11 +90,19 @@ impl ScalingStrategy for AbsoluteMax {
 
 fn requant_from(s1: ScalingFactor, s2: ScalingFactor, max_output: f32) -> Layer<Element> {
     let s3 = ScalingFactor::new(max_output);
+    let quantized_output = s3.quantize(&max_output);
     let shift = s1.shift(&s2, &s3);
-    let max_quantized_output = s3.quantize(&max_output);
+    /// requantized_output = S1 * S2 / S3 * MODEL * INPUT
+    /// we want maximum NON-QUANTIZED output, so range = MODEL * INPUT, e.g. it approximates the 
+    /// maximum absolute value of the non-requantized output
+    /// so range = requantized_output * S3 / (S1 * S2)
+    /// NOTE: a better approximation would be to actually run the quantized model and check the maximum absolute value of the output.
+    /// This is however costly, so we use this approximation for now.
+    let range = (quantized_output as f32 * s3.scale() / (s1.scale() * s2.scale())).ceil() as usize;
     Layer::Requant(Requant {
         right_shift: shift,
-        range: max_quantized_output as usize,
+        range: range,
         after_range: 1 << *quantization::BIT_LEN,
     })
 }
+
