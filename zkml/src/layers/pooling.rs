@@ -1,17 +1,11 @@
 use crate::{
-    Claim, Element, Prover,
-    commit::{compute_betas_eval, identity_eval, precommit::PolyID, same_poly},
-    iop::verifier::Verifier,
-    layers::{ContextAux, LayerProof},
-    lookup::{
+    commit::{compute_betas_eval, identity_eval, precommit::PolyID, same_poly}, iop::verifier::Verifier, layers::{ContextAux, LayerProof}, lookup::{
         context::TableType,
         logup_gkr::{
             prover::batch_prove as logup_batch_prove, structs::LogUpProof,
             verifier::verify_logup_proof,
         },
-    },
-    quantization::{Fieldizer, IntoElement},
-    tensor::Tensor,
+    }, quantization::{Fieldizer, IntoElement}, tensor::{Number, Tensor}, Claim, Element, Prover
 };
 use anyhow::{Context, ensure};
 use ff_ext::ExtensionField;
@@ -66,7 +60,7 @@ where
 }
 
 impl Pooling {
-    pub fn op(&self, input: &Tensor<Element>) -> Tensor<Element> {
+    pub fn op<T: Number>(&self, input: &Tensor<T>) -> Tensor<T> {
         match self {
             Pooling::Maxpool2D(maxpool2d) => maxpool2d.op(input),
         }
@@ -422,7 +416,7 @@ impl Default for Maxpool2D {
 }
 
 impl Maxpool2D {
-    pub fn op(&self, input: &Tensor<Element>) -> Tensor<Element> {
+    pub fn op<T: Number>(&self, input: &Tensor<T>) -> Tensor<T> {
         assert!(
             self.kernel_size == MAXPOOL2D_KERNEL_SIZE,
             "Maxpool2D works only for kernel size {}",
@@ -445,7 +439,7 @@ impl Maxpool2D {
     ) -> Vec<Vec<E::BaseField>> {
         let padded_input = input.pad_next_power_of_two();
 
-        let padded_output = self.op(&input).pad_next_power_of_two();
+        let padded_output = self.op(input).pad_next_power_of_two();
         let padded_input_shape = padded_input.get_shape();
 
         let new_fixed = (0..padded_input_shape[2] << 1)

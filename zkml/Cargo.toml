@@ -33,6 +33,7 @@ rmp-serde = "1.3.0"
 serde.workspace = true
 serde_json.workspace = true
 simple-frontend = { path = "../simple-frontend" }
+statrs = "0.18.0"
 sumcheck = { version = "0.1.0", path = "../sumcheck" }
 timed = { workspace = true }
 timed-core = { workspace = true }

@@ -4,6 +4,7 @@ use crate::{
 };
 use anyhow::bail;
 use ark_std::rand::{self, Rng, SeedableRng, rngs::StdRng};
+use ff::Field;
 use ff_ext::ExtensionField;
 use goldilocks::GoldilocksExt2;
 use itertools::Itertools;
@@ -17,7 +18,7 @@ use rayon::{
     slice::ParallelSliceMut,
 };
 use std::{
-    cmp::PartialEq,
+    cmp::{Ordering, PartialEq},
     fmt::{self, Debug},
 };
 
@@ -44,7 +45,17 @@ pub trait Number:
     /// reason abs is necessary is because f32 doesn't implement Ord trait, so to have uniform code for f32 and Element,
     /// we implement abs here.
     fn absolute_value(&self) -> Self;
-    fn cmp_max(&self, other: &Self) -> Self;
+    /// reason abs is necessary is because f32 doesn't implement Ord trait, so to have uniform code for f32 and Element,
+    /// we implement abs here.
+    fn cmp_max(&self, other: &Self) -> Self {
+        match self.compare(other) {
+            Ordering::Greater => *self,
+            Ordering::Equal => *self,
+            Ordering::Less => *other,
+        }
+    }
+    fn compare(&self,other: &Self) -> Ordering;
+    fn is_negative(&self) -> bool;
 }
 
 impl Number for Element {
@@ -54,8 +65,11 @@ impl Number for Element {
     fn absolute_value(&self) -> Self {
         self.abs()
     }
-    fn cmp_max(&self, other: &Self) -> Self {
-        *self.max(&other)
+    fn compare(&self, other: &Self) -> Ordering {
+        self.cmp(&other)
+    }
+    fn is_negative(&self) -> bool {
+        *self < 0
     }
 }
 impl Number for f32 {
@@ -65,8 +79,18 @@ impl Number for f32 {
     fn absolute_value(&self) -> Self {
         self.abs()
     }
-    fn cmp_max(&self, other: &Self) -> Self {
-        self.max(*other)
+    fn compare(&self,other: &Self) -> Ordering {
+        if self < other {
+            Ordering::Less
+        } else if self == other {
+            Ordering::Equal
+        } else {
+            Ordering::Greater
+        }
+    }
+
+    fn is_negative(&self) -> bool {
+        *self < 0.0
     }
 }
 impl Number for GoldilocksExt2 {
@@ -76,8 +100,12 @@ impl Number for GoldilocksExt2 {
     fn absolute_value(&self) -> Self {
         *self
     }
-    fn cmp_max(&self, other: &Self) -> Self {
-        *self.max(other)
+    fn compare(&self,other: &Self) -> Ordering {
+        self.cmp(other)
+    }
+
+    fn is_negative(&self) -> bool {
+        panic!("GoldilocksExt2: is_negative is meaningless");
     }
 }
 
@@ -1021,14 +1049,6 @@ where
 
         *self = Tensor::new(new_shape, new_data);
     }
-}
-
-impl<T> Tensor<T>
-where
-    T: PartialOrd + Ord + Debug,
-    T: Copy + Clone + Send + Sync,
-    T: std::default::Default,
-{
     pub fn maxpool2d(&self, kernel_size: usize, stride: usize) -> Tensor<T> {
         let dims = self.get_shape().len();
         assert!(dims >= 2, "Input tensor must have at least 2 dimensions.");
@@ -1063,9 +1083,7 @@ where
                     for kj in 0..kernel_size {
                         let src_idx = matrix_idx + (i * stride + ki) * w + (j * stride + kj);
                         let value = self.data[src_idx].clone();
-                        if value > max_val {
-                            max_val = value;
-                        }
+                        max_val = max_val.cmp_max(&value);
                     }
                 }
 
@@ -1083,6 +1101,7 @@ where
             input_shape: vec![0],
         }
     }
+    
     // Replaces every value of a tensor with the maxpool of its kernel
     pub fn padded_maxpool2d(&self) -> (Tensor<T>, Tensor<T>) {
         let kernel_size = MAXPOOL2D_KERNEL_SIZE;
@@ -1133,39 +1152,7 @@ where
 
         (maxpool_result, padded_maxpool_tensor)
     }
-}
 
-impl<T> Tensor<T>
-where
-    T: Copy + Default + std::ops::Mul<Output = T> + std::iter::Sum,
-    T: std::ops::Add<Output = T> + std::ops::Sub<Output = T> + std::ops::Mul<Output = T>,
-{
-    pub fn get4d(&self) -> (usize, usize, usize, usize) {
-        let n_size = self.shape.get(0).cloned().unwrap_or(1);
-        let c_size = self.shape.get(1).cloned().unwrap_or(1);
-        let h_size = self.shape.get(2).cloned().unwrap_or(1);
-        let w_size = self.shape.get(3).cloned().unwrap_or(1);
-
-        (n_size, c_size, h_size, w_size)
-    }
-
-    /// Retrieves an element using (N, C, H, W) indexing
-    pub fn get(&self, n: usize, c: usize, h: usize, w: usize) -> T {
-        assert!(self.shape.len() <= 4);
-
-        let (n_size, c_size, h_size, w_size) = self.get4d();
-
-        assert!(n < n_size);
-        let flat_index = n * (c_size * h_size * w_size) + c * (h_size * w_size) + h * w_size + w;
-        self.data[flat_index]
-    }
-}
-impl<T> Tensor<T>
-where
-    T: Copy + Clone + Send + Sync,
-    T: Copy + Default + std::ops::Mul<Output = T> + std::iter::Sum,
-    T: std::ops::Add<Output = T> + std::ops::Sub<Output = T> + std::ops::Mul<Output = T>,
-{
     pub fn conv2d(&self, kernels: &Tensor<T>, bias: &Tensor<T>, stride: usize) -> Tensor<T> {
         let (n_size, c_size, h_size, w_size) = self.get4d();
     let (k_n, k_c, k_h, k_w) = kernels.get4d();
@@ -1226,7 +1213,39 @@ where
             input_shape: vec![0],
         }
     }
+}
 
+impl<T> Tensor<T>
+where
+    T: Copy + Default + std::ops::Mul<Output = T> + std::iter::Sum,
+    T: std::ops::Add<Output = T> + std::ops::Sub<Output = T> + std::ops::Mul<Output = T>,
+{
+    pub fn get4d(&self) -> (usize, usize, usize, usize) {
+        let n_size = self.shape.get(0).cloned().unwrap_or(1);
+        let c_size = self.shape.get(1).cloned().unwrap_or(1);
+        let h_size = self.shape.get(2).cloned().unwrap_or(1);
+        let w_size = self.shape.get(3).cloned().unwrap_or(1);
+
+        (n_size, c_size, h_size, w_size)
+    }
+
+    /// Retrieves an element using (N, C, H, W) indexing
+    pub fn get(&self, n: usize, c: usize, h: usize, w: usize) -> T {
+        assert!(self.shape.len() <= 4);
+
+        let (n_size, c_size, h_size, w_size) = self.get4d();
+
+        assert!(n < n_size);
+        let flat_index = n * (c_size * h_size * w_size) + c * (h_size * w_size) + h * w_size + w;
+        self.data[flat_index]
+    }
+}
+impl<T> Tensor<T>
+where
+    T: Copy + Clone + Send + Sync,
+    T: Copy + Default + std::ops::Mul<Output = T> + std::iter::Sum,
+    T: std::ops::Add<Output = T> + std::ops::Sub<Output = T> + std::ops::Mul<Output = T>,
+{
     // Pads a matrix `M` to `M'` so that matrix-vector multiplication with a flattened FFT-padded convolution output `X'`
     /// matches the result of multiplying `M` with the original convolution output `X`.
     ///

@@ -166,6 +166,7 @@ mod test {
         let model = FloatOnnxLoader::new(&filepath.to_string_lossy())
             .with_model_type(ModelType::MLP)
             .build()?;
+
         println!("[+] Loaded onnx file");
         let ctx = Context::<E>::generate(&model, None).expect("unable to generate context");
         println!("[+] Setup parameters");

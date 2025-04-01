@@ -163,6 +163,10 @@ impl Convolution<f32> {
         self.filter.max_abs_output().max(self.bias.max_abs_output())
     }
 
+    pub fn float_op(&self, input: &Tensor<f32>) -> Tensor<f32> {
+        input.conv2d(&self.filter, &self.bias, 1)
+    }
+
     /// Returns the maximum absolute value that a vector output of this convolution layer can contain.
     /// NOTE: it assumes the weights in float are NOT fft'd
     pub fn max_abs_output(&self,input_scaling: ScalingFactor) -> f32 {

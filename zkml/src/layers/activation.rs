@@ -1,15 +1,11 @@
 use crate::{
-    Claim, Prover,
-    commit::same_poly,
-    iop::{context::ContextAux, verifier::Verifier},
-    layers::{LayerCtx, LayerProof, PolyID},
-    lookup::{
+    commit::same_poly, iop::{context::ContextAux, verifier::Verifier}, layers::{LayerCtx, LayerProof, PolyID}, lookup::{
         context::TableType,
         logup_gkr::{
             prover::batch_prove as logup_batch_prove, structs::LogUpProof,
             verifier::verify_logup_proof,
         },
-    },
+    }, tensor::Number, Claim, Prover
 };
 use ff_ext::ExtensionField;
 use gkr::util::ceil_log2;
@@ -50,7 +46,7 @@ where
 }
 
 impl Activation {
-    pub fn op(&self, input: &Tensor<Element>) -> Tensor<Element> {
+    pub fn op<T: Number>(&self, input: &Tensor<T>) -> Tensor<T> {
         match self {
             Activation::Relu(relu) => relu.op(input),
         }
@@ -189,7 +185,7 @@ impl Relu {
             .unzip()
     }
 
-    pub fn op(&self, input: &Tensor<Element>) -> Tensor<Element> {
+    pub fn op<T: Number>(&self, input: &Tensor<T>) -> Tensor<T> {
         Tensor::new(
             input.get_shape(),
             input
@@ -201,8 +197,8 @@ impl Relu {
     }
 
     #[inline(always)]
-    pub fn apply(e: Element) -> Element {
-        if e.is_negative() { 0 } else { e }
+    pub fn apply<T: Number>(e: T) -> T {
+        if e.is_negative() { T::default() } else { e }
     }
 }
 
