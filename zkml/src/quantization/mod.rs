@@ -50,6 +50,14 @@ impl ScalingFactor {
         Self { abs_max }
     }
 
+    pub fn min(&self) -> f32 {
+        -self.abs_max
+    }
+
+    pub fn max(&self) -> f32 {
+        self.abs_max
+    }
+
     fn scale(&self) -> f32 {
         (self.abs_max - (-self.abs_max)) / (*MAX - *MIN) as f32
     }
@@ -81,7 +89,6 @@ impl ScalingFactor {
         // formula is q = round(r/S) + z
         // let scaled =((value.clamp(self.min,self.max) - self.min) / self.scale()).round() * self.scale() + self.min;
         let scaled = (*value / self.scale()).round() as Element + zero_point;
-
         scaled.clamp(*MIN, *MAX)
     }
 }
@@ -155,16 +162,18 @@ where
     }
 }
 
-pub fn max_range_from_weight(weight: &f32) -> (f32, f32) {
+pub fn max_range_from_weight(weight: &f32, input_scaling: ScalingFactor) -> (f32, f32) {
+    let min_input = -input_scaling.abs_max;
+    let max_input = input_scaling.abs_max;
     let min = if *weight < 0.0 {
-        *weight * MAX_FLOAT
+        *weight * min_input
     } else {
-        *weight * MIN_FLOAT
+        *weight * max_input
     };
     let max = if *weight < 0.0 {
-        *weight * MIN_FLOAT
+        *weight * min_input
     } else {
-        *weight * MAX_FLOAT
+        *weight * max_input
     };
     (min, max)
 }

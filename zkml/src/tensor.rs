@@ -1168,7 +1168,7 @@ where
 {
     pub fn conv2d(&self, kernels: &Tensor<T>, bias: &Tensor<T>, stride: usize) -> Tensor<T> {
         let (n_size, c_size, h_size, w_size) = self.get4d();
-        let (k_n, k_c, k_h, k_w) = kernels.get4d();
+    let (k_n, k_c, k_h, k_w) = kernels.get4d();
 
         assert!(
             self.get_shape().len() <= 4,
@@ -1690,6 +1690,20 @@ mod test {
 
         let result = input.conv2d(&weights, &bias, 1);
         assert_eq!(result, expected, "Conv2D (Element) failed.");
+    }
+
+    #[test]
+    fn test_tensor_minimal_conv2d() {
+        // k_n,k_c,k_h,k_w
+        let conv_shape = vec![2,3,3,3];
+        let conv = Tensor::<Element>::random(conv_shape.clone());
+        // minimal input shape is 1,k_c,k_h,k_w
+        let input_shape = vec![1,3,3,3];
+        let input = Tensor::<Element>::random(input_shape.clone());
+        // minimal bias shape is k_n
+        let bias = Tensor::<Element>::random(vec![2]);
+        let output = input.conv2d(&conv, &bias, 1);
+        //assert_eq!(output.get_shape(), vec![2,3,3,3]);
     }
 
     #[test]

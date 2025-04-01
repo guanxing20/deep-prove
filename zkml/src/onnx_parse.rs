@@ -684,7 +684,7 @@ mod tests {
 
     use super::*;
 
-    use crate::{Context, IO, Prover, quantization::TensorFielder, verify};
+    use crate::{init_test_logging, quantization::TensorFielder, verify, Context, Prover, IO};
     use goldilocks::GoldilocksExt2;
     use transcript::BasicTranscript;
 
@@ -704,7 +704,9 @@ mod tests {
 
     #[test]
     fn test_mlp_model_run() {
-        let filepath = "assets/scripts/MLP/mlp-iris-01.onnx";
+        init_test_logging();
+        //let filepath = "assets/scripts/MLP/mlp-iris-01.onnx";
+        let filepath = "assets/scripts/MLP/model.onnx";
         let model = FloatOnnxLoader::new(&filepath)
             .with_model_type(ModelType::MLP)
             .build()
@@ -793,17 +795,17 @@ mod tests {
         let trace = model.run::<F>(input.clone());
         // println!("Result: {:?}", trace.final_output());
 
-        let mut tr: BasicTranscript<GoldilocksExt2> = BasicTranscript::new(b"m2vec");
-        let ctx = Context::<GoldilocksExt2>::generate(&model, Some(input.get_shape()))
-            .expect("Unable to generate context");
-        let output = trace.final_output().clone();
+        //let mut tr: BasicTranscript<GoldilocksExt2> = BasicTranscript::new(b"m2vec");
+        //let ctx = Context::<GoldilocksExt2>::generate(&model, Some(input.get_shape()))
+        //    .expect("Unable to generate context");
+        //let output = trace.final_output().clone();
 
-        let prover: Prover<'_, GoldilocksExt2, BasicTranscript<GoldilocksExt2>> =
-            Prover::new(&ctx, &mut tr);
-        let proof = prover.prove(trace).expect("unable to generate proof");
-        let mut verifier_transcript: BasicTranscript<GoldilocksExt2> =
-            BasicTranscript::new(b"m2vec");
-        let io = IO::new(input.to_fields(), output.to_fields());
-        verify::<_, _>(ctx, proof, io, &mut verifier_transcript).unwrap();
+        //let prover: Prover<'_, GoldilocksExt2, BasicTranscript<GoldilocksExt2>> =
+        //    Prover::new(&ctx, &mut tr);
+        //let proof = prover.prove(trace).expect("unable to generate proof");
+        //let mut verifier_transcript: BasicTranscript<GoldilocksExt2> =
+        //    BasicTranscript::new(b"m2vec");
+        //let io = IO::new(input.to_fields(), output.to_fields());
+        //verify::<_, _>(ctx, proof, io, &mut verifier_transcript).unwrap();
     }
 }

@@ -98,6 +98,14 @@ impl Dense<f32> {
     }
     /// Returns the maximum absolute value that a vector output of this dense layer can contain.
     pub fn max_abs_output(&self, input_scaling: ScalingFactor) -> f32 {
+        //return {
+        //    let ncols = self.matrix.ncols_2d();
+        //    let min_input_tensor = Tensor::new(vec![ncols],std::iter::repeat(input_scaling.min()).take(ncols).collect());
+        //    let max_input_tensor = Tensor::new(vec![ncols],std::iter::repeat(input_scaling.max()).take(ncols).collect());
+        //    let min_output = self.matrix.matvec(&min_input_tensor).add(&self.bias);
+        //    let max_output = self.matrix.matvec(&max_input_tensor).add(&self.bias);
+        //    min_output.max_abs_output().max(max_output.max_abs_output())
+        //};
         let ncols = self.matrix.ncols_2d();
         self.matrix
             .get_data()

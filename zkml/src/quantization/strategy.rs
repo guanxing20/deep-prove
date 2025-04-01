@@ -29,19 +29,18 @@ impl AbsoluteMax {
 
 impl ScalingStrategy for AbsoluteMax {
     fn quantize(&self, model: Model<f32>) -> Result<Model<Element>> {
-        let input = if let Some(ref input) = self.0 {
+        let mut last_input_scaling_factor = if let Some(ref input) = self.0 {
             ensure!(
                 model.input_shape() == input.get_shape(),
                 "input shape mismatch: expected {:?}, got {:?}",
                 model.input_shape(),
                 input.get_shape()
             );
-            input.clone()
+            let prepared_input = model.prepare_input(input.clone());
+            ScalingFactor::new(prepared_input.max_abs_output())
         } else {
-            Tensor::<f32>::random(model.input_shape())
+            ScalingFactor::default()
         };
-        let prepared_input = model.prepare_input(input);
-        let mut last_input_scaling_factor = ScalingFactor::new(prepared_input.max_abs_output());
         let input_shape = model.input_shape();
         let input_not_padded_shape = model.input_not_padded();
         let quantized_layers = model
@@ -53,9 +52,9 @@ impl ScalingStrategy for AbsoluteMax {
                 // given to the next layer as input scaling factor.
                 match l {
                     Layer::Dense(ref d) => {
-                        let max_weight =d.max_abs_weight();
+                        let max_weight = d.max_abs_weight();
                         let model_scaling = ScalingFactor::new(max_weight);
-                        let max_output = d.max_abs_output();
+                        let max_output = d.max_abs_output(last_input_scaling_factor);
                         let output_scaling = ScalingFactor::new(max_output);
                         last_input_scaling_factor = output_scaling;
                         println!("Scaling: AbsoluteMax: DENSE max_weight {:?}, max_output: {:?} - adding requant",max_weight,max_output);
@@ -67,7 +66,7 @@ impl ScalingStrategy for AbsoluteMax {
                     Layer::Convolution(ref d) => {
                         let max_weight = d.max_abs_weight();
                         let model_scaling = ScalingFactor::new(max_weight);
-                        let max_output = d.max_abs_output();
+                        let max_output = d.max_abs_output(last_input_scaling_factor);
                         let output_scaling = ScalingFactor::new(max_output);
                         last_input_scaling_factor = output_scaling;
                         println!("Scaling: AbsoluteMax: CONV max_weight {:?}, max_output: {:?} - adding requant", max_weight, max_output);
@@ -90,10 +89,10 @@ impl ScalingStrategy for AbsoluteMax {
 
 fn requant_from(s1: ScalingFactor, s2: ScalingFactor, max_output: f32) -> Layer<Element> {
     let s3 = ScalingFactor::new(max_output);
-    let quantized_output = s3.quantize(&max_output);
     let shift = s1.shift(&s2, &s3);
+    let quantized_output = s3.quantize(&max_output);
     /// requantized_output = S1 * S2 / S3 * MODEL * INPUT
-    /// we want maximum NON-QUANTIZED output, so range = MODEL * INPUT, e.g. it approximates the 
+    /// we want maximum NON-QUANTIZED utput, so range = MODEL * INPUT, e.g. it approximates the 
     /// maximum absolute value of the non-requantized output
     /// so range = requantized_output * S3 / (S1 * S2)
     /// NOTE: a better approximation would be to actually run the quantized model and check the maximum absolute value of the output.
