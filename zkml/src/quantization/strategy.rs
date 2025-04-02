@@ -1,11 +1,16 @@
+use crate::quantization::metadata::{MetadataBuilder, ModelMetadata};
 use std::collections::HashMap;
 
 use crate::{
-    layers::{requant::Requant, Layer, LayerOutput}, model::Model, quantization, Element, Tensor
+    Element, Tensor,
+    layers::{Layer, LayerOutput, requant::Requant},
+    model::Model,
+    quantization,
 };
+use anyhow::{Result, bail, ensure};
 use statrs::statistics::{Data, OrderStatistics};
-use anyhow::{bail, ensure, Result};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
+use tract_onnx::tract_core::ops::matmul::quant;
 
 use super::ScalingFactor;
 
@@ -13,17 +18,30 @@ use super::ScalingFactor;
 /// simply looks at the absolute maximum value of the model and uses that as the scaling factor
 /// to quantize the model, one scaling factor per layer.
 pub trait ScalingStrategy: std::fmt::Debug {
-    fn quantize(&self, model: Model<f32>) -> Result<Model<Element>>;
+    fn quantize(&self, model: Model<f32>) -> Result<(Model<Element>, ModelMetadata)>;
+    fn name(&self) -> &str;
 }
 
+/// Quantization strategy that observes the inference of the model with different inputs and uses the
+/// min/max values of the output to determine the output scaling factor of each layer that needs
+/// requantization afterwards.
 #[derive(Debug)]
 pub struct InferenceObserver {
-    inputs: Vec<Tensor<f32>>,
+    inputs: Vec<Vec<f32>>,
+}
+
+impl InferenceObserver {
+    pub fn new_with_representative_input(inputs: Vec<Vec<f32>>) -> Self {
+        Self { inputs }
+    }
 }
 
 const INPUT_TRACKING_ID: usize = 10_000;
 impl ScalingStrategy for InferenceObserver {
-    fn quantize(&self, model: Model<f32>) -> Result<Model<Element>> {
+    fn name(&self) -> &str {
+        "inference"
+    }
+    fn quantize(&self, model: Model<f32>) -> Result<(Model<Element>, ModelMetadata)> {
         let mut tracker = InferenceTracker::new();
         let input_shape = model.input_shape();
         let input_not_padded_shape = model.input_not_padded();
@@ -31,70 +49,102 @@ impl ScalingStrategy for InferenceObserver {
         // TODO: integrate that within model.rs in a more elegant way with inference step - currently problematic
         // because of the generics and FFT requirement to take a field
         for (i, input) in self.inputs.iter().enumerate() {
+            let input_tensor = model.load_input_flat(input.clone());
             ensure!(
-                model.input_shape() == input.get_shape(),
+                model.input_shape() == input_tensor.get_shape(),
                 "input shape mismatch: expected {:?}, got {:?}",
                 model.input_shape(),
-                input.get_shape()
+                input_tensor.get_shape()
             );
-            let prepared_input = model.prepare_input(input.clone());
-            let mut last_output = prepared_input;
+            let mut last_output = input_tensor;
             tracker.track(INPUT_TRACKING_ID, last_output.clone());
             for (id, layer) in model.layers.iter().enumerate() {
-                info!("Inference Observer: inference run #{}: running layer {}",i,layer.describe());
-                last_output= run_layer(layer, &last_output);
+                debug!(
+                    "Inference Observer: inference run #{}: running layer {}",
+                    i,
+                    layer.describe()
+                );
+                last_output = run_layer(layer, &last_output);
                 tracker.track(id, last_output.clone());
             }
         }
+        let mut md = MetadataBuilder::new();
         // 2. get the scaling factor of the input
-        let (input_min,input_max) = tracker.get_bounds(INPUT_TRACKING_ID);
-        let last_input_scaling = ScalingFactor::new(input_min.abs().max(input_max.abs()));
+        let (input_min, input_max) = tracker.distribution_info(INPUT_TRACKING_ID);
+        let input_scaling = ScalingFactor::new(input_min.abs().max(input_max.abs()));
+        md.set_input_scaling(input_scaling);
+        let last_input_scaling = input_scaling.clone();
         // 2. Create the requant layers from the infered data
-        let quantized_layers = model.layers.into_iter().enumerate().map(|(id, layer)| {
-            match layer {
-                Layer::Dense(ref dense) => {
-                    let (min, max) = tracker.get_bounds(id);
-                    // since we are doing symmetric scaling
-                    let abs_max = min.abs().max(max.abs());
-                    let model_scaling = ScalingFactor::new(dense.max_abs_weight());
-                    let requant = requant_from(last_input_scaling, model_scaling, abs_max);
-                    vec![layer.quantize(model_scaling), requant]
+        let quantized_layers = model
+            .layers
+            .into_iter()
+            .enumerate()
+            .map(|(id, layer)| {
+                match layer {
+                    Layer::Dense(dense) => {
+                        let model_scaling = ScalingFactor::new(dense.max_abs_weight());
+                        let quantized_dense = dense.quantize(&model_scaling);
+                        let (min, max) = tracker.distribution_info(id);
+                        // since we are doing symmetric scaling
+                        let output_scaling = ScalingFactor::new(min.abs().max(max.abs()));
+                        let (quantized_min, _quantized_max) =
+                            quantized_dense.output_range(*quantization::MIN, *quantization::MAX);
+                        let shift = last_input_scaling.shift(&model_scaling, &output_scaling);
+                        let requant = Requant {
+                            right_shift: shift,
+                            range: quantized_min as usize,
+                            after_range: 1 << *quantization::BIT_LEN,
+                        };
+                        md.set_layers_scaling(id, output_scaling);
+                        vec![Layer::Dense(quantized_dense), Layer::Requant(requant)]
+                    }
+                    Layer::Convolution(conv) => {
+                        let model_scaling = ScalingFactor::new(conv.max_abs_weight());
+                        let quantized_conv = conv.quantize(&model_scaling);
+                        let (min, max) = tracker.distribution_info(id);
+                        let output_scaling = ScalingFactor::new(min.abs().max(max.abs()));
+                        let (quantized_min, _quantized_max) =
+                            quantized_conv.output_range(*quantization::MIN, *quantization::MAX);
+                        let shift = last_input_scaling.shift(&model_scaling, &output_scaling);
+                        md.set_layers_scaling(id, output_scaling);
+                        let requant = Requant {
+                            right_shift: shift,
+                            range: quantized_min as usize,
+                            after_range: 1 << *quantization::BIT_LEN,
+                        };
+                        vec![Layer::Convolution(quantized_conv), Layer::Requant(requant)]
+                    }
+                    _ => vec![],
                 }
-                Layer::Convolution(ref conv) => {
-                    let (min, max) = tracker.get_bounds(id);
-                    let abs_max = min.abs().max(max.abs());
-                    let model_scaling = ScalingFactor::new(conv.max_abs_weight());
-                    let requant = requant_from(last_input_scaling, model_scaling, abs_max);
-                    vec![layer.quantize(model_scaling), requant]
-                }
-                _ => vec![]
-            }
-        }).flatten().collect::<Vec<_>>();
-        Ok(Model::<Element>::new_from(
-            quantized_layers,
-            input_not_padded_shape,
-            input_shape,
+            })
+            .flatten()
+            .collect::<Vec<_>>();
+        Ok((
+            Model::<Element>::new_from(quantized_layers, input_not_padded_shape, input_shape),
+            md.build(),
         ))
     }
 }
-    fn run_layer(layer: &Layer<f32>,input: &Tensor<f32>) -> Tensor<f32> {
-        match layer {
-            Layer::Dense(ref dense) => dense.op(input),
-            Layer::Activation(activation) => activation.op(input),
-            Layer::Convolution(ref conv_pair) => 
-                input.conv2d(&conv_pair.filter, &conv_pair.bias, 1),
-            Layer::Pooling(info) => info.op(input),
-            // Traditional convolution is used for debug purposes. That is because the actual convolution
-            // we use relies on the FFT algorithm. This convolution does not have a snark implementation.
-            Layer::SchoolBookConvolution(_) => {
-                panic!("InferenceObserver: schoolbook convolution found while observing inference on float !?");
-            }
-            Layer::Requant(_) => {
-                panic!("InferenceObserver: requantization layer found while observing inference on float !?");
-            }
+fn run_layer(layer: &Layer<f32>, input: &Tensor<f32>) -> Tensor<f32> {
+    match layer {
+        Layer::Dense(ref dense) => dense.op(input),
+        Layer::Activation(activation) => activation.op(input),
+        Layer::Convolution(ref conv_pair) => input.conv2d(&conv_pair.filter, &conv_pair.bias, 1),
+        Layer::Pooling(info) => info.op(input),
+        // Traditional convolution is used for debug purposes. That is because the actual convolution
+        // we use relies on the FFT algorithm. This convolution does not have a snark implementation.
+        Layer::SchoolBookConvolution(_) => {
+            panic!(
+                "InferenceObserver: schoolbook convolution found while observing inference on float !?"
+            );
+        }
+        Layer::Requant(_) => {
+            panic!(
+                "InferenceObserver: requantization layer found while observing inference on float !?"
+            );
         }
     }
-
+}
 struct InferenceTracker {
     /// For each layer of interest, we track all the outputs of that layer
     data: HashMap<usize, Vec<f64>>,
@@ -107,11 +157,15 @@ impl InferenceTracker {
         }
     }
     fn track(&mut self, layer_index: usize, output: Tensor<f32>) {
-        self.data.entry(layer_index).or_insert(Vec::new()).extend(output.get_data().iter().map(|x| *x as f64));
+        self.data
+            .entry(layer_index)
+            .or_insert(Vec::new())
+            .extend(output.get_data().iter().map(|x| *x as f64));
     }
 
-    fn get_bounds(&self, layer_index: usize) -> (f32, f32) {
-        let mut d : Data<Vec<f64>> = Data::new(self.data[&layer_index].clone());
+    /// Returns the 0.05 and 0.95 quantiles of the distribution of the output values of the layer.
+    fn distribution_info(&self, layer_index: usize) -> (f32, f32) {
+        let mut d: Data<Vec<f64>> = Data::new(self.data[&layer_index].clone());
         let min = d.percentile(5) as f32;
         let max = d.percentile(95) as f32;
         (min, max)
@@ -119,10 +173,10 @@ impl InferenceTracker {
 }
 
 #[derive(Debug)]
-pub struct AbsoluteMax(Option<Tensor<f32>>);
+pub struct AbsoluteMax(Option<Vec<f32>>);
 
 impl AbsoluteMax {
-    pub fn new_with_representative_input(input: Tensor<f32>) -> Self {
+    pub fn new_with_representative_input(input: Vec<f32>) -> Self {
         Self(Some(input))
     }
     pub fn new() -> Self {
@@ -130,80 +184,81 @@ impl AbsoluteMax {
     }
 }
 impl ScalingStrategy for AbsoluteMax {
-    fn quantize(&self, model: Model<f32>) -> Result<Model<Element>> {
+    fn name(&self) -> &str {
+        "absolute_max"
+    }
+    fn quantize(&self, model: Model<f32>) -> Result<(Model<Element>, ModelMetadata)> {
         let mut last_input_scaling_factor = if let Some(ref input) = self.0 {
+            let input_tensor = model.load_input_flat(input.clone());
             ensure!(
-                model.input_shape() == input.get_shape(),
+                model.input_shape() == input_tensor.get_shape(),
                 "input shape mismatch: expected {:?}, got {:?}",
                 model.input_shape(),
-                input.get_shape()
+                input_tensor.get_shape()
             );
-            let prepared_input = model.prepare_input(input.clone());
-            ScalingFactor::new(prepared_input.max_abs_output())
+            ScalingFactor::new(input_tensor.max_abs_output())
         } else {
             ScalingFactor::default()
         };
+        let mut md = MetadataBuilder::new();
+        md.set_input_scaling(last_input_scaling_factor.clone());
         let input_shape = model.input_shape();
         let input_not_padded_shape = model.input_not_padded();
         let quantized_layers = model
             .layers
             .into_iter()
-            .flat_map(|l| {
+            .enumerate()
+            .flat_map(|(id,l)| {
                 // If a layer requires a requantization step the current layer, this method returns the
                 // next layer, e.g. requantization layer, as well as the scaling factor of the output. This is
                 // given to the next layer as input scaling factor.
                 match l {
-                    Layer::Dense(ref d) => {
+                    Layer::Dense(d) => {
                         let max_weight = d.max_abs_weight();
                         let model_scaling = ScalingFactor::new(max_weight);
-                        let max_output = d.max_abs_output(last_input_scaling_factor);
-                        let output_scaling = ScalingFactor::new(max_output);
+                        let (min_output,max_output) = d.output_range(-last_input_scaling_factor.abs_max,last_input_scaling_factor.abs_max);
+                        let quantized_dense= d.quantize(&model_scaling);
+                        let (quant_min_output,_quant_max_output) = quantized_dense.output_range(*quantization::MIN,*quantization::MAX);
+                        let abs_max = min_output.abs().max(max_output.abs());
+                        let output_scaling = ScalingFactor::new(abs_max);
                         last_input_scaling_factor = output_scaling;
-                        println!("Scaling: AbsoluteMax: DENSE max_weight {:?}, max_output: {:?} - adding requant",max_weight,max_output);
-                        vec![
-                            l.quantize(model_scaling),
-                            requant_from(last_input_scaling_factor, model_scaling, max_output),
-                        ]
-                    }
-                    Layer::Convolution(ref d) => {
-                        let max_weight = d.max_abs_weight();
-                        let model_scaling = ScalingFactor::new(max_weight);
-                        let max_output = d.max_abs_output(last_input_scaling_factor);
-                        let output_scaling = ScalingFactor::new(max_output);
-                        last_input_scaling_factor = output_scaling;
+                        md.set_layers_scaling(id, output_scaling);
+                        let shift = last_input_scaling_factor.shift(&model_scaling, &output_scaling);
                         println!("Scaling: AbsoluteMax: CONV max_weight {:?}, max_output: {:?} - adding requant", max_weight, max_output);
-                        vec![
-                            l.quantize(model_scaling),
-                            requant_from(last_input_scaling_factor, model_scaling, max_output),
-                        ]
+                        let requant = Requant {
+                            right_shift: shift,
+                            range: quant_min_output as usize,
+                            after_range: 1 << *quantization::BIT_LEN,
+                        };
+                        vec![Layer::Dense(quantized_dense), Layer::Requant(requant)]
+
                     }
-                    a => return vec![a.quantize(last_input_scaling_factor)],
+                    Layer::Convolution(d) => {
+                        let max_weight = d.max_abs_weight();
+                        let model_scaling = ScalingFactor::new(max_weight);
+                        let (min_output,max_output) = d.output_range(-last_input_scaling_factor.abs_max,last_input_scaling_factor.abs_max);
+                        let quantized_conv= d.quantize(&model_scaling);
+                        let (quant_min_output,_quant_max_output) = quantized_conv.output_range(*quantization::MIN,*quantization::MAX);
+                        let abs_max = min_output.abs().max(max_output.abs());
+                        let output_scaling = ScalingFactor::new(abs_max);
+                        last_input_scaling_factor = output_scaling;
+                        md.set_layers_scaling(id, output_scaling);
+                        let shift = last_input_scaling_factor.shift(&model_scaling, &output_scaling);
+                        println!("Scaling: AbsoluteMax: CONV max_weight {:?}, max_output: {:?} - adding requant", max_weight, max_output);
+                        let requant = Requant {
+                            right_shift: shift,
+                            range: quant_min_output as usize,
+                            after_range: 1 << *quantization::BIT_LEN,
+                        };
+                        vec![Layer::Convolution(quantized_conv), Layer::Requant(requant)]
+                    }
+                    a => return vec![a.quantize(&last_input_scaling_factor)],
                 }
             })
             .collect::<Vec<Layer<Element>>>();
-        Ok(Model::<Element>::new_from(
-            quantized_layers,
-            input_not_padded_shape,
-            input_shape,
+        Ok((
+            Model::<Element>::new_from(quantized_layers, input_not_padded_shape, input_shape),
+            md.build(),
         ))
     }
 }
-
-fn requant_from(s1: ScalingFactor, s2: ScalingFactor, max_output: f32) -> Layer<Element> {
-    let s3 = ScalingFactor::new(max_output);
-    let shift = s1.shift(&s2, &s3);
-    let quantized_output = s3.quantize(&max_output);
-    /// requantized_output = S1 * S2 / S3 * MODEL * INPUT
-    /// we want maximum NON-QUANTIZED utput, so range = MODEL * INPUT, e.g. it approximates the 
-    /// maximum absolute value of the non-requantized output
-    /// so range = requantized_output * S3 / (S1 * S2)
-    /// NOTE: a better approximation would be to actually run the quantized model and check the maximum absolute value of the output.
-    /// This is however costly, so we use this approximation for now.
-    let range = (quantized_output as f32 * s3.scale() / (s1.scale() * s2.scale())).ceil() as usize;
-    Layer::Requant(Requant {
-        right_shift: shift,
-        range: range,
-        after_range: 1 << *quantization::BIT_LEN,
-    })
-}
-

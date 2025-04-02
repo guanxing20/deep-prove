@@ -1,11 +1,17 @@
 use crate::{
-    commit::{compute_betas_eval, identity_eval, precommit::PolyID, same_poly}, iop::verifier::Verifier, layers::{ContextAux, LayerProof}, lookup::{
+    Claim, Element, Prover,
+    commit::{compute_betas_eval, identity_eval, precommit::PolyID, same_poly},
+    iop::verifier::Verifier,
+    layers::{ContextAux, LayerProof},
+    lookup::{
         context::TableType,
         logup_gkr::{
             prover::batch_prove as logup_batch_prove, structs::LogUpProof,
             verifier::verify_logup_proof,
         },
-    }, quantization::{Fieldizer, IntoElement}, tensor::{Number, Tensor}, Claim, Element, Prover
+    },
+    quantization::{Fieldizer, IntoElement},
+    tensor::{Number, Tensor},
 };
 use anyhow::{Context, ensure};
 use ff_ext::ExtensionField;

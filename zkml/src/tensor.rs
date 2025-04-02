@@ -6,7 +6,7 @@ use anyhow::bail;
 use ark_std::rand::{self, Rng, SeedableRng, rngs::StdRng};
 use ff::Field;
 use ff_ext::ExtensionField;
-use goldilocks::GoldilocksExt2;
+use goldilocks::{GoldilocksExt2, SmallField};
 use itertools::Itertools;
 use multilinear_extensions::mle::DenseMultilinearExtension;
 use rayon::{
@@ -41,12 +41,12 @@ pub trait Number:
     + std::ops::AddAssign<Self>
     + std::ops::Mul<Output = Self>
 {
+    const MIN: Self;
+    const MAX: Self;
     fn random<R: Rng>(rng: &mut R) -> Self;
     /// reason abs is necessary is because f32 doesn't implement Ord trait, so to have uniform code for f32 and Element,
     /// we implement abs here.
     fn absolute_value(&self) -> Self;
-    /// reason abs is necessary is because f32 doesn't implement Ord trait, so to have uniform code for f32 and Element,
-    /// we implement abs here.
     fn cmp_max(&self, other: &Self) -> Self {
         match self.compare(other) {
             Ordering::Greater => *self,
@@ -54,11 +54,20 @@ pub trait Number:
             Ordering::Less => *other,
         }
     }
-    fn compare(&self,other: &Self) -> Ordering;
+    fn cmp_min(&self, other: &Self) -> Self {
+        match self.compare(other) {
+            Ordering::Greater => *other,
+            Ordering::Equal => *self,
+            Ordering::Less => *self,
+        }
+    }
+    fn compare(&self, other: &Self) -> Ordering;
     fn is_negative(&self) -> bool;
 }
 
 impl Number for Element {
+    const MIN: Element = Element::MIN;
+    const MAX: Element = Element::MAX;
     fn random<R: Rng>(rng: &mut R) -> Self {
         rng.gen_range(*quantization::MIN..=*quantization::MAX)
     }
@@ -73,13 +82,15 @@ impl Number for Element {
     }
 }
 impl Number for f32 {
+    const MIN: f32 = f32::MIN;
+    const MAX: f32 = f32::MAX;
     fn random<R: Rng>(rng: &mut R) -> Self {
         rng.gen_range(MIN_FLOAT..=MAX_FLOAT)
     }
     fn absolute_value(&self) -> Self {
         self.abs()
     }
-    fn compare(&self,other: &Self) -> Ordering {
+    fn compare(&self, other: &Self) -> Ordering {
         if self < other {
             Ordering::Less
         } else if self == other {
@@ -94,13 +105,16 @@ impl Number for f32 {
     }
 }
 impl Number for GoldilocksExt2 {
+    const MIN: GoldilocksExt2 = GoldilocksExt2::ZERO;
+    const MAX: GoldilocksExt2 = GoldilocksExt2::ZERO;
+
     fn random<R: Rng>(rng: &mut R) -> Self {
         Element::random(rng).to_field()
     }
     fn absolute_value(&self) -> Self {
         *self
     }
-    fn compare(&self,other: &Self) -> Ordering {
+    fn compare(&self, other: &Self) -> Ordering {
         self.cmp(other)
     }
 
@@ -451,7 +465,7 @@ impl Tensor<Element> {
 }
 
 impl Tensor<f32> {
-    pub fn quantize(self, s: ScalingFactor) -> Tensor<Element> {
+    pub fn quantize(self, s: &ScalingFactor) -> Tensor<Element> {
         let data = self
             .data
             .into_par_iter()
@@ -459,8 +473,6 @@ impl Tensor<f32> {
             .collect::<Vec<_>>();
         Tensor::new(self.shape, data)
     }
-
-    
 }
 
 impl<T> Tensor<T> {
@@ -488,6 +500,7 @@ impl<T> Tensor<T> {
     pub fn is_convolution(&self) -> bool {
         self.get_shape().len() == 4
     }
+
     /// Get the number of rows from the matrix
     pub fn nrows_2d(&self) -> usize {
         let mut cols = 0;
@@ -614,7 +627,9 @@ where
     T: Number,
 {
     pub fn max_abs_output(&self) -> T {
-        self.data.iter().fold(T::default(), |max, x| max.cmp_max(&x.absolute_value()))
+        self.data
+            .iter()
+            .fold(T::default(), |max, x| max.cmp_max(&x.absolute_value()))
     }
     /// Create a tensor filled with zeros
     pub fn zeros(shape: Vec<usize>) -> Self {
@@ -1101,7 +1116,7 @@ where
             input_shape: vec![0],
         }
     }
-    
+
     // Replaces every value of a tensor with the maxpool of its kernel
     pub fn padded_maxpool2d(&self) -> (Tensor<T>, Tensor<T>) {
         let kernel_size = MAXPOOL2D_KERNEL_SIZE;
@@ -1155,7 +1170,7 @@ where
 
     pub fn conv2d(&self, kernels: &Tensor<T>, bias: &Tensor<T>, stride: usize) -> Tensor<T> {
         let (n_size, c_size, h_size, w_size) = self.get4d();
-    let (k_n, k_c, k_h, k_w) = kernels.get4d();
+        let (k_n, k_c, k_h, k_w) = kernels.get4d();
 
         assert!(
             self.get_shape().len() <= 4,
@@ -1355,6 +1370,12 @@ impl PartialEq for Tensor<GoldilocksExt2> {
 }
 
 impl<T: Number> Tensor<T> {
+    pub fn max_value(&self) -> T {
+        self.data.iter().fold(T::MIN, |max, x| max.cmp_max(x))
+    }
+    pub fn min_value(&self) -> T {
+        self.data.iter().fold(T::MAX, |min, x| min.cmp_min(x))
+    }
     pub fn random(shape: Vec<usize>) -> Self {
         Self::random_seed(shape, Some(rand::random::<u64>()))
     }
@@ -1714,15 +1735,15 @@ mod test {
     #[test]
     fn test_tensor_minimal_conv2d() {
         // k_n,k_c,k_h,k_w
-        let conv_shape = vec![2,3,3,3];
+        let conv_shape = vec![2, 3, 3, 3];
         let conv = Tensor::<Element>::random(conv_shape.clone());
         // minimal input shape is 1,k_c,k_h,k_w
-        let input_shape = vec![1,3,3,3];
+        let input_shape = vec![1, 3, 3, 3];
         let input = Tensor::<Element>::random(input_shape.clone());
         // minimal bias shape is k_n
         let bias = Tensor::<Element>::random(vec![2]);
         let output = input.conv2d(&conv, &bias, 1);
-        //assert_eq!(output.get_shape(), vec![2,3,3,3]);
+        // assert_eq!(output.get_shape(), vec![2,3,3,3]);
     }
 
     #[test]

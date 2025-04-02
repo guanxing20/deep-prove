@@ -127,6 +127,63 @@ impl<T: Number> Convolution<T> {
     pub fn filter_size(&self) -> usize {
         self.filter.filter_size()
     }
+
+    /// Returns the min and max output range of the convolution layer for a given input range.
+    /// NOTE: it assumes the weights in float are NOT fft'd
+    pub fn output_range(&self, min_input: T, max_input: T) -> (T, T) {
+        let (k_n, k_c, k_h, k_w) = self.filter.get4d();
+        let x_min = min_input;
+        let x_max = max_input;
+        // min_input = 1,k_c,k_h * k_w
+        // max_input =
+        return {
+            let input_shape = vec![1, k_c, k_h, k_w];
+            let input_n = input_shape.iter().product();
+            let min_input_tensor = Tensor::new(
+                input_shape.clone(),
+                std::iter::repeat(x_min).take(input_n).collect(),
+            );
+            let min_outputt = min_input_tensor.conv2d(&self.filter, &self.bias, 1);
+            let max_input_tensor = Tensor::new(
+                input_shape.clone(),
+                std::iter::repeat(x_max).take(input_n).collect(),
+            );
+            let max_outputt = max_input_tensor.conv2d(&self.filter, &self.bias, 1);
+            // take the smallest and highest value from both runs
+            let min_output = min_outputt.min_value().cmp_min(&max_outputt.min_value());
+            let max_output = min_outputt.max_value().cmp_max(&max_outputt.max_value());
+            (min_output, max_output)
+        };
+
+        // let mut max_max = f32::NEG_INFINITY;
+        // assert!(
+        //     k_n == self.bias.get_shape()[0],
+        //     "bias get shape {} vs k_n{}",
+        //     self.bias.get_shape()[0],
+        //     k_n
+        // );
+        // for feature in 0..k_n {
+        //     let mut output_max_abs = f32::NEG_INFINITY;
+        //     for channel in 0..k_c {
+        //         let mut weight_neg = 0.0;
+        //         let mut weight_pos = 0.0;
+        //         (0..k_h * k_w).map(|ij| {
+        //             let weight = self.filter.get(feature, channel, ij / k_w, ij % k_w);
+        //             if weight < 0.0 {
+        //                 weight_neg += weight;
+        //             } else {
+        //                 weight_pos += weight;
+        //             }
+        //         });
+        //         let output_min = weight_neg * x_min;
+        //         let output_max = weight_pos * x_max;
+        //         output_max_abs = output_max_abs.max(output_min.abs().max(output_max.abs()));
+        //     }
+        //     output_max_abs += self.bias.get_data()[feature];
+        //     max_max = max_max.max(output_max_abs);
+        // }
+        // max_max
+    }
 }
 impl Convolution<f32> {
     /// used to create a convoluation layer with from the raw float weights and bias.
@@ -140,14 +197,14 @@ impl Convolution<f32> {
     }
 
     /// TODO: refactor new_conv to be in convolution.rs and more efficient than cloning
-    pub fn quantize(self, s: ScalingFactor) -> Convolution<Element> {
+    pub fn quantize(self, s: &ScalingFactor) -> Convolution<Element> {
         let quantized_filter = self.filter.quantize(s);
         let fft_filter = Tensor::new_conv(
             quantized_filter.get_shape(),
             self.input_shape_padded.clone(),
             quantized_filter.get_data().to_vec(),
         );
-        let bias = self.bias.quantize(s);
+        let bias = self.bias.quantize(&s);
         Convolution::<Element> {
             filter: fft_filter,
             bias,
@@ -165,49 +222,6 @@ impl Convolution<f32> {
 
     pub fn float_op(&self, input: &Tensor<f32>) -> Tensor<f32> {
         input.conv2d(&self.filter, &self.bias, 1)
-    }
-
-    /// Returns the maximum absolute value that a vector output of this convolution layer can contain.
-    /// NOTE: it assumes the weights in float are NOT fft'd
-    pub fn max_abs_output(&self,input_scaling: ScalingFactor) -> f32 {
-        let (k_n, k_c, k_h, k_w) = self.filter.get4d();
-        let x_min = input_scaling.min();
-        let x_max = input_scaling.max();
-        //min_input = 1,k_c,k_h * k_w
-        //max_input = 
-        return {
-            let input_shape = vec![1,k_c,k_h,k_w];
-            let input_n = input_shape.iter().product();
-            let min_input_tensor = Tensor::new(input_shape.clone(),std::iter::repeat(x_min).take(input_n).collect());
-            let min_output = min_input_tensor.conv2d(&self.filter, &self.bias, 1);
-            let max_input_tensor = Tensor::new(input_shape.clone(),std::iter::repeat(x_max).take(input_n).collect());
-            let max_output = max_input_tensor.conv2d(&self.filter, &self.bias, 1);
-            min_output.max_abs_output().max(max_output.max_abs_output())
-        };
-        
-        let mut max_max = f32::NEG_INFINITY;
-        assert!(k_n == self.bias.get_shape()[0],"bias get shape {} vs k_n{}",self.bias.get_shape()[0],k_n);
-        for feature in 0..k_n {
-            let mut output_max_abs = f32::NEG_INFINITY;
-            for channel in 0..k_c {
-                let mut weight_neg = 0.0;
-                let mut weight_pos = 0.0;
-                (0..k_h * k_w).map(|ij| {
-                    let weight = self.filter.get(feature,channel,ij / k_w, ij % k_w);
-                    if weight < 0.0 {
-                        weight_neg += weight;
-                    } else {
-                        weight_pos += weight;
-                    }
-                });
-                let output_min= weight_neg * x_min;
-                let output_max= weight_pos * x_max;
-                output_max_abs = output_max_abs.max(output_min.abs().max(output_max.abs()));
-            }
-            output_max_abs += self.bias.get_data()[feature];
-            max_max = max_max.max(output_max_abs);
-        }
-        max_max
     }
 }
 

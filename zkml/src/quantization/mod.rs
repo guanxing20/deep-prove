@@ -1,14 +1,20 @@
 //! Module that takes care of (re)quantizing
+mod metadata;
 mod strategy;
 use derive_more::From;
 use ff_ext::ExtensionField;
 use goldilocks::SmallField;
 use itertools::Itertools;
 use once_cell::sync::Lazy;
+use serde::{Deserialize, Serialize};
 use std::env;
 
-use crate::{Element, tensor::Tensor};
-pub use strategy::{AbsoluteMax, ScalingStrategy};
+use crate::{
+    Element,
+    tensor::{Number, Tensor},
+};
+pub use metadata::ModelMetadata;
+pub use strategy::{AbsoluteMax, InferenceObserver, ScalingStrategy};
 
 // Get BIT_LEN from environment variable or use default value
 pub static BIT_LEN: Lazy<usize> = Lazy::new(|| {
@@ -26,7 +32,7 @@ pub const MIN_FLOAT: f32 = -1.0;
 pub const MAX_FLOAT: f32 = 1.0;
 
 /// Symmetric quantization scaling
-#[derive(Debug, Clone, From, Copy)]
+#[derive(Debug, Clone, From, Copy, Serialize, Deserialize)]
 pub struct ScalingFactor {
     abs_max: f32,
 }
@@ -80,7 +86,7 @@ impl ScalingFactor {
 
     /// Take a floating point number and quantize it to an BIT_LEN-bit integer
     pub fn quantize(&self, value: &f32) -> Element {
-        //assert!(
+        // assert!(
         //    *value >= -1.0 && *value <= 1.0,
         //    "Input value must be between -1.0 and 1.0"
         //);
@@ -162,18 +168,16 @@ where
     }
 }
 
-pub fn max_range_from_weight(weight: &f32, input_scaling: ScalingFactor) -> (f32, f32) {
-    let min_input = -input_scaling.abs_max;
-    let max_input = input_scaling.abs_max;
-    let min = if *weight < 0.0 {
-        *weight * min_input
+pub fn max_range_from_weight<T: Number>(weight: &T, min_input: &T, max_input: &T) -> (T, T) {
+    let min = if weight.is_negative() {
+        *weight * *max_input
     } else {
-        *weight * max_input
+        *weight * *min_input
     };
-    let max = if *weight < 0.0 {
-        *weight * min_input
+    let max = if weight.is_negative() {
+        *weight * *min_input
     } else {
-        *weight * max_input
+        *weight * *max_input
     };
     (min, max)
 }

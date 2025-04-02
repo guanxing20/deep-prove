@@ -14,6 +14,7 @@ use itertools::Itertools;
 use multilinear_extensions::mle::IntoMLE;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::ops::{Add, Mul, Sub};
+use tracing::warn;
 use transcript::Transcript;
 
 use crate::{
@@ -120,11 +121,21 @@ impl Requant {
     pub fn apply(&self, e: &Element) -> Element {
         let max_bit = (self.range << 1) as Element;
         let tmp = e + max_bit;
-        assert!(tmp >= 0,"offset is too small: element {} + {} (self.range << 1) = {}", e, self.range << 1,tmp);
+        assert!(
+            tmp >= 0,
+            "offset is too small: element {} + {} (self.range << 1) = {}",
+            e,
+            self.range << 1,
+            tmp
+        );
         let tmp = tmp >> self.right_shift;
         let res = tmp - (max_bit >> self.right_shift);
-        assert!(res >= *quantization::MIN && res <= *quantization::MAX);
-        res
+        if !(res >= *quantization::MIN && res <= *quantization::MAX) {
+            warn!("{} is NOT quantized correctly: {}", e, res);
+            res.clamp(*quantization::MIN, *quantization::MAX)
+        } else {
+            res
+        }
     }
 
     pub fn shape(&self) -> Vec<usize> {

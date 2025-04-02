@@ -1,11 +1,16 @@
 use crate::{
-    commit::same_poly, iop::{context::ContextAux, verifier::Verifier}, layers::{LayerCtx, LayerProof, PolyID}, lookup::{
+    Claim, Prover,
+    commit::same_poly,
+    iop::{context::ContextAux, verifier::Verifier},
+    layers::{LayerCtx, LayerProof, PolyID},
+    lookup::{
         context::TableType,
         logup_gkr::{
             prover::batch_prove as logup_batch_prove, structs::LogUpProof,
             verifier::verify_logup_proof,
         },
-    }, tensor::Number, Claim, Prover
+    },
+    tensor::Number,
 };
 use ff_ext::ExtensionField;
 use gkr::util::ceil_log2;
@@ -252,7 +257,7 @@ mod test {
         );
         assert_eq!(input_mle.num_vars(), output_mle.num_vars());
         assert_eq!(input_mle.num_vars(), Relu::num_vars());
-        let inputs = Tensor::random(vec![10]);
+        let inputs = Tensor::<Element>::random(vec![10]);
         let outputs = relu.op(&inputs);
         assert_eq!(inputs.get_shape(), outputs.get_shape());
         for (input, output) in inputs.get_data().iter().zip(outputs.get_data().iter()) {

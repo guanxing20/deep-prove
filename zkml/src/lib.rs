@@ -13,7 +13,7 @@ pub use iop::{
     prover::Prover,
     verifier::{IO, verify},
 };
-pub use quantization::{AbsoluteMax, ScalingFactor, ScalingStrategy};
+pub use quantization::{ScalingFactor, ScalingStrategy};
 pub mod layers;
 pub mod lookup;
 pub mod model;
@@ -135,14 +135,16 @@ mod test {
     use multilinear_extensions::mle::{IntoMLE, MultilinearExtension};
 
     use crate::{
-        default_transcript,
+        FloatOnnxLoader, default_transcript,
         iop::{
-            prover::Prover, verifier::{verify, IO}, Context
+            Context,
+            prover::Prover,
+            verifier::{IO, verify},
         },
         onnx_parse::ModelType,
         quantization::TensorFielder,
         tensor::Tensor,
-        to_bit_sequence_le, FloatOnnxLoader,
+        to_bit_sequence_le,
     };
     use ff_ext::ff::Field;
 

@@ -146,7 +146,12 @@ impl<T: Number> Layer<T> {
                 format!("RELU: {}", 1 << Relu::num_vars())
             }
             Layer::Requant(info) => {
-                format!("Requant: {}", info.shape()[1])
+                format!(
+                    "Requant: shape: {}, shift: {}, offset: {}",
+                    info.shape()[1],
+                    info.right_shift,
+                    info.range << 1
+                )
             }
             Layer::Pooling(Pooling::Maxpool2D(info)) => format!(
                 "MaxPool2D{{ kernel size: {}, stride: {} }}",
@@ -157,11 +162,11 @@ impl<T: Number> Layer<T> {
 }
 
 impl Layer<f32> {
-    pub fn quantize(self, s: ScalingFactor) -> Layer<Element> {
+    pub fn quantize(self, s: &ScalingFactor) -> Layer<Element> {
         match self {
             Layer::Dense(dense) => Layer::Dense(dense.quantize(s)),
-            Layer::Convolution(conv) => Layer::Convolution(conv.quantize(s)),
-            Layer::SchoolBookConvolution(conv) => Layer::SchoolBookConvolution(conv.quantize(s)),
+            Layer::Convolution(conv) => Layer::Convolution(conv.quantize(&s)),
+            Layer::SchoolBookConvolution(conv) => Layer::SchoolBookConvolution(conv.quantize(&s)),
             Layer::Activation(activation) => Layer::Activation(activation),
             Layer::Requant(requant) => Layer::Requant(requant),
             Layer::Pooling(pooling) => Layer::Pooling(pooling),

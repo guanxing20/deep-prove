@@ -91,7 +91,7 @@ impl<T: Number> Model<T> {
     }
     pub fn input_shape(&self) -> Vec<usize> {
         if let Layer::Dense(mat) = &self.layers[0] {
-            vec![mat.matrix.nrows_2d()]
+            vec![mat.matrix.ncols_2d()]
         } else if matches!(
             &self.layers[0],
             Layer::Convolution(_) | Layer::SchoolBookConvolution(_)
@@ -299,9 +299,16 @@ pub struct InferenceStep<'a, E, F: ExtensionField> {
 #[cfg(test)]
 pub(crate) mod test {
     use crate::{
+        ScalingFactor,
         layers::{
-            activation::{Activation, Relu}, convolution::Convolution, dense::Dense, pooling::{Maxpool2D, Pooling, MAXPOOL2D_KERNEL_SIZE}, requant::Requant, Layer
-        }, quantization, ScalingFactor
+            Layer,
+            activation::{Activation, Relu},
+            convolution::Convolution,
+            dense::Dense,
+            pooling::{MAXPOOL2D_KERNEL_SIZE, Maxpool2D, Pooling},
+            requant::Requant,
+        },
+        quantization,
     };
     use ark_std::rand::{Rng, RngCore, thread_rng};
     use ff_ext::ExtensionField;
@@ -566,7 +573,7 @@ pub(crate) mod test {
         let dense2 = Dense::<Element>::random(vec![7, dense1.ncols()]).pad_next_power_of_two();
         let input = Tensor::<Element>::random(vec![dense1.ncols()]);
         let output1 = dense1.op(&input);
-        let requant= Requant {
+        let requant = Requant {
             right_shift: 10,
             range: output1.get_data().iter().map(|e| e.abs()).max().unwrap() as usize,
             after_range: 1 << *quantization::BIT_LEN,
