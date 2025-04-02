@@ -1181,7 +1181,7 @@ where
             "Supports only at most 4D filters."
         );
         // Validate shapes
-        assert_eq!(c_size, k_c, "Input and kernel channels must match!");
+        assert_eq!(c_size, k_c, "Input {} and kernel {} channels must match!", c_size, k_c);
         assert_eq!(
             bias.shape,
             vec![k_n],

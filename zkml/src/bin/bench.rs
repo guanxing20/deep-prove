@@ -63,6 +63,7 @@ pub fn main() -> anyhow::Result<()> {
 struct InputJSON {
     input_data: Vec<Vec<f32>>,
     output_data: Vec<Vec<f32>>,
+    pytorch_output: Vec<Vec<f32>>,
 }
 
 impl InputJSON {
@@ -79,6 +80,7 @@ impl InputJSON {
     fn truncate(&mut self, num_samples: usize) {
         self.input_data.truncate(num_samples);
         self.output_data.truncate(num_samples);
+        self.pytorch_output.truncate(num_samples);
     }
     // poor's man validation
     fn validate(&self) -> anyhow::Result<()> {
@@ -89,6 +91,7 @@ impl InputJSON {
             .iter()
             .all(|v| v.iter().all(|&x| rrange.contains(&x)));
         assert_eq!(self.input_data.len(), self.output_data.len());
+        assert_eq!(self.input_data.len(), self.pytorch_output.len());
         ensure!(
             input_isreal,
             "can only support real model so far (input at least)"
@@ -108,6 +111,28 @@ impl InputJSON {
             .map(|output| output.into_iter().map(|e| output_sf.quantize(&e)).collect())
             .collect();
         (inputs, outputs)
+    }
+
+    /// Computes the accuracy of pytorch outputs against the expected outputs
+    pub fn compute_pytorch_accuracy(&self) -> f32 {
+        let mut accuracies = Vec::new();
+        
+        for (i, (expected, pytorch_out)) in self.output_data.iter()
+            .zip(self.pytorch_output.iter())
+            .enumerate() 
+        {
+            let accuracy = argmax_compare(expected, pytorch_out);
+            accuracies.push(accuracy);
+            info!(
+                "PyTorch Run {}/{}: Accuracy: {}", 
+                i + 1,
+                self.output_data.len(),
+                if accuracy > 0 { "correct" } else { "incorrect" }
+            );
+        }
+
+        let avg_accuracy = calculate_average_accuracy(&accuracies);
+                avg_accuracy
     }
 }
 
@@ -129,6 +154,9 @@ fn run(args: Args) -> anyhow::Result<()> {
         .build()?;
     info!("[+] Model loaded");
     model.describe();
+    info!("[+] Computing PyTorch accuracy");
+    let num_samples = raw_inputs.output_data.len();
+    let pytorch_accuracy = raw_inputs.compute_pytorch_accuracy();
     info!("[+] Quantizing inputs with strategy: {}", strat_name);
     let (inputs, given_outputs) = raw_inputs.to_elements(&md);
 
@@ -209,9 +237,15 @@ fn run(args: Args) -> anyhow::Result<()> {
     let avg_accuracy = calculate_average_accuracy(&accuracies);
     info!(
         "Average accuracy across {} runs: {:.2}%",
-        args.num_samples,
+        num_samples,
         avg_accuracy * 100.0
     );
+    info!(
+        "Average PyTorch accuracy across {} runs: {:.2}%",
+        num_samples,
+        pytorch_accuracy * 100.0
+    );
+        
 
     Ok(())
 }
