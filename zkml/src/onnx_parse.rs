@@ -32,6 +32,7 @@ pub struct FloatOnnxLoader {
     model_path: String,
     scaling_strategy: Box<dyn ScalingStrategy>,
     model_type: Option<ModelType>,
+    keep_float: bool,
 }
 
 impl FloatOnnxLoader {
@@ -40,6 +41,7 @@ impl FloatOnnxLoader {
             model_path: model_path.to_string(),
             scaling_strategy: Box::new(AbsoluteMax::new()),
             model_type: None,
+            keep_float: false,
         }
     }
     pub fn with_scaling_strategy(mut self, scaling_strategy: Box<dyn ScalingStrategy>) -> Self {
@@ -50,12 +52,21 @@ impl FloatOnnxLoader {
         self.model_type = Some(model_type);
         self
     }
+    pub fn with_keep_float(mut self, keep_float: bool) -> Self {
+        self.keep_float = keep_float;
+        self
+    }
     pub fn build(self) -> Result<(Model<Element>, ModelMetadata)> {
         if let Some(model_type) = self.model_type {
             model_type.validate(&self.model_path)?;
         }
         let float_model = load_float_model(&self.model_path)?;
-        let (quantized_model,md) = self.scaling_strategy.quantize(float_model)?;
+        let mut kept_float = None;
+        if self.keep_float {
+            kept_float= Some(float_model.clone());
+        }
+        let (quantized_model,mut md) = self.scaling_strategy.quantize(float_model)?;
+        md.float_model = kept_float;
         let padded_model = pad_model(quantized_model)?;
         Ok((padded_model,md))
 

@@ -75,7 +75,7 @@ impl ScalingStrategy for InferenceObserver {
         let (input_min, input_max) = tracker.distribution_info(INPUT_TRACKING_ID);
         let input_scaling = ScalingFactor::new(input_min.abs().max(input_max.abs()));
         md.set_input_scaling(input_scaling);
-        let last_input_scaling = input_scaling.clone();
+        let mut last_input_scaling = input_scaling.clone();
         // 2. Create the requant layers from the infered data
         let quantized_layers = model
             .layers
@@ -98,6 +98,7 @@ impl ScalingStrategy for InferenceObserver {
                             after_range: 1 << *quantization::BIT_LEN,
                         };
                         md.set_layers_scaling(id, output_scaling);
+                        last_input_scaling = output_scaling;
                         vec![Layer::Dense(quantized_dense), Layer::Requant(requant)]
                     }
                     Layer::Convolution(conv) => {
@@ -119,6 +120,7 @@ impl ScalingStrategy for InferenceObserver {
                             range: quantized_min.abs() as usize,
                             after_range: 1 << *quantization::BIT_LEN,
                         };
+                        last_input_scaling = output_scaling;
                         vec![Layer::Convolution(quantized_conv), Layer::Requant(requant)]
                     }
                     a => return vec![a.quantize(&last_input_scaling)],
@@ -192,6 +194,7 @@ impl InferenceTracker {
         let mut d: Data<Vec<f64>> = Data::new(self.data[&layer_index].clone());
         let min = d.percentile(5) as f32;
         let max = d.percentile(95) as f32;
+        assert!(min <= max);
         (min, max)
     }
 }

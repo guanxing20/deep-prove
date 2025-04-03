@@ -296,6 +296,33 @@ pub struct InferenceStep<'a, E, F: ExtensionField> {
     pub conv_data: ConvData<F>,
 }
 
+// Add a specific implementation for f32 models
+impl Model<f32> {
+    /// Runs the model in float format and returns the output tensor
+    pub fn run_float(&self, input: Vec<f32>) -> Tensor<f32> {
+        let mut last_output = Tensor::new(self.input_not_padded.clone(), input);
+        
+        for layer in self.layers.iter() {
+            last_output = match layer {
+                Layer::Dense(ref dense) => dense.op(&last_output),
+                Layer::Activation(activation) => activation.op(&last_output),
+                Layer::Convolution(ref conv_pair) => {
+                    last_output.conv2d(&conv_pair.filter, &conv_pair.bias, 1)
+                }
+                Layer::Pooling(info) => info.op(&last_output),
+                Layer::SchoolBookConvolution(_) => {
+                    panic!("SchoolBookConvolution not supported in float mode")
+                }
+                Layer::Requant(_) => {
+                    panic!("Requantization layer not supported in float mode")
+                }
+            };
+        }
+        
+        last_output
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod test {
     use crate::{

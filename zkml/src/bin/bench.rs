@@ -1,3 +1,4 @@
+use zkml::model::Model;
 use std::{
     collections::HashMap,
     fs::{File, OpenOptions},
@@ -145,6 +146,30 @@ const CSV_VERIFYING: &str = "verifying (ms)";
 const CSV_ACCURACY: &str = "accuracy (bool)";
 const CSV_PROOF_SIZE: &str = "proof size (KB)";
 
+/// Runs the model in float format and returns the average accuracy
+fn run_float_model(raw_inputs: &InputJSON, model: &Model<f32>) -> f32 {
+    let mut accuracies = Vec::new();
+    info!("[+] Running model in float format");
+
+    for (i, (input, expected)) in raw_inputs.input_data.iter()
+        .zip(raw_inputs.output_data.iter())
+        .enumerate() 
+    {
+        // Run the model in float mode
+        let output = model.run_float(input.clone());
+        let accuracy = argmax_compare(expected, &output.get_data());
+        accuracies.push(accuracy);
+        info!(
+            "Float Run {}/{}: Accuracy: {}",
+            i + 1,
+            raw_inputs.input_data.len(),
+            if accuracy > 0 { "correct" } else { "incorrect" }
+        );
+    }
+
+    calculate_average_accuracy(&accuracies)
+}
+
 fn run(args: Args) -> anyhow::Result<()> {
     info!("[+] Reading raw input/output from {}", args.io);
     let raw_inputs = InputJSON::from(&args.io, args.num_samples).context("loading input:")?;
@@ -153,9 +178,20 @@ fn run(args: Args) -> anyhow::Result<()> {
     info!("[+] Reading onnx model");
     let (model, md) = FloatOnnxLoader::new(&args.onnx)
         .with_scaling_strategy(strategy)
+        .with_keep_float(true)
         .build()?;
     info!("[+] Model loaded");
     model.describe();
+
+    // Get float accuracy if float model is available
+    let float_accuracy = if let Some(ref float_model) = md.float_model {
+        info!("[+] Running float model");
+        run_float_model(&raw_inputs, float_model)
+    } else {
+        info!("[!] No float model available");
+        0.0
+    };
+
     info!("[+] Computing PyTorch accuracy");
     let num_samples = raw_inputs.output_data.len();
     let pytorch_accuracy = raw_inputs.compute_pytorch_accuracy();
@@ -237,16 +273,15 @@ fn run(args: Args) -> anyhow::Result<()> {
 
     // Calculate and display average accuracy
     let avg_accuracy = calculate_average_accuracy(&accuracies);
+
+    // Single final accuracy comparison
     info!(
-        "Average accuracy across {} runs: {:.2}%",
-        num_samples,
-        avg_accuracy * 100.0
+        "Final accuracy comparison across {} runs:",
+        num_samples
     );
-    info!(
-        "Average PyTorch accuracy across {} runs: {:.2}%",
-        num_samples,
-        pytorch_accuracy * 100.0
-    );
+    info!("ZKML float model accuracy: {:.2}%", float_accuracy * 100.0);
+    info!("ZKML quantized model accuracy: {:.2}%", avg_accuracy * 100.0);
+    info!("PyTorch accuracy: {:.2}%", pytorch_accuracy * 100.0);
 
     Ok(())
 }

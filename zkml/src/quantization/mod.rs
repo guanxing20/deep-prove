@@ -33,6 +33,8 @@ pub const MIN_FLOAT: f32 = -1.0;
 pub const MAX_FLOAT: f32 = 1.0;
 
 /// Symmetric quantization scaling
+/// go from float [-a;a] to int [-2^BIT_LEN;2^BIT_LEN]
+/// S = (a - (-a)) / (2^{BIT_LEN-1}- (-2^{BIT_LEN-1})) = 2a / 2^BIT_LEN
 #[derive(Debug, Clone, From, Copy, Serialize, Deserialize)]
 pub struct ScalingFactor {
     abs_max: f32,

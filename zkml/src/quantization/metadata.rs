@@ -4,14 +4,15 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use crate::{Element, Tensor};
+use crate::{model::Model, Element, Tensor};
 
 use super::ScalingFactor;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct ModelMetadata {
     pub input: ScalingFactor,
     layers_scaling: HashMap<usize, ScalingFactor>,
+    pub float_model: Option<Model<f32>>,
 }
 
 impl ModelMetadata {
@@ -45,6 +46,7 @@ impl MetadataBuilder {
         ModelMetadata {
             input: self.input_scaling.unwrap(),
             layers_scaling: self.layers_scaling,
+            float_model: None,
         }
     }
 }
