@@ -33,9 +33,6 @@ pub struct Convolution<T> {
     pub filter: Tensor<T>,
     /// Same for bias.
     pub bias: Tensor<T>,
-    /// Useful ONLY when loading a convolution from f32 so when we quantize it, we can
-    /// run the fft to get the fft'd weights. The fft needs to run on the padded input shape.
-    input_shape_padded: Vec<usize>,
 }
 
 /// Info about the convolution layer derived during the setup phase
@@ -188,27 +185,22 @@ impl<T: Number> Convolution<T> {
 impl Convolution<f32> {
     /// used to create a convoluation layer with from the raw float weights and bias.
     /// The wieghts are NOT fft'd as they are when the it is being quantized.
-    pub fn new_raw(filter: Tensor<f32>, bias: Tensor<f32>, input_shape_padded: Vec<usize>) -> Self {
+    pub fn new_raw(filter: Tensor<f32>, bias: Tensor<f32>) -> Self {
         Self {
             filter,
             bias,
-            input_shape_padded,
         }
     }
 
+    /// Quantizes the filter and the bias. Note the weights are not yet FFT'd, that happens with new_conv at the padding step
+    /// since the FFT is also making the filter shape == input shape.
     /// TODO: refactor new_conv to be in convolution.rs and more efficient than cloning
     pub fn quantize(self, s: &ScalingFactor) -> Convolution<Element> {
         let quantized_filter = self.filter.quantize(s);
-        let fft_filter = Tensor::new_conv(
-            quantized_filter.get_shape(),
-            self.input_shape_padded.clone(),
-            quantized_filter.get_data().to_vec(),
-        );
         let bias = self.bias.quantize(&s);
         Convolution::<Element> {
-            filter: fft_filter,
+            filter: quantized_filter,
             bias,
-            input_shape_padded: self.input_shape_padded,
         }
     }
 
@@ -230,7 +222,6 @@ impl Convolution<Element> {
         Self {
             filter,
             bias,
-            input_shape_padded: vec![],
         }
     }
 

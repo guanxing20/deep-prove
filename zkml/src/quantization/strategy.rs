@@ -49,13 +49,17 @@ impl ScalingStrategy for InferenceObserver {
         // TODO: integrate that within model.rs in a more elegant way with inference step - currently problematic
         // because of the generics and FFT requirement to take a field
         for (i, input) in self.inputs.iter().enumerate() {
-            let input_tensor = model.load_input_flat(input.clone());
-            ensure!(
-                model.input_shape() == input_tensor.get_shape(),
-                "input shape mismatch: expected {:?}, got {:?}",
-                model.input_shape(),
-                input_tensor.get_shape()
-            );
+            println!("Strategy Raw Input Length: {:?}", input.len());
+            //let input_tensor = model.load_input_flat(input.clone());
+            let input_tensor = Tensor::new(model.input_not_padded.clone(), input.clone());
+            println!("Strategy Raw Input Shape: {:?}", input_tensor.get_shape());
+
+            //ensure!(
+            //    model.input_shape() == input_tensor.get_shape(),
+            //    "input shape mismatch: expected {:?}, got {:?}",
+            //    model.input_shape(),
+            //    input_tensor.get_shape()
+            //);
             let mut last_output = input_tensor;
             tracker.track(INPUT_TRACKING_ID, last_output.clone());
             for (id, layer) in model.layers.iter().enumerate() {
@@ -125,11 +129,15 @@ impl ScalingStrategy for InferenceObserver {
         ))
     }
 }
+
 fn run_layer(layer: &Layer<f32>, input: &Tensor<f32>) -> Tensor<f32> {
     match layer {
         Layer::Dense(ref dense) => dense.op(input),
         Layer::Activation(activation) => activation.op(input),
-        Layer::Convolution(ref conv_pair) => input.conv2d(&conv_pair.filter, &conv_pair.bias, 1),
+        Layer::Convolution(ref conv_pair) => {
+            println!("RUN CONV: input shape {:?}, filter shape {:?}, bias shape {:?} -- filter 4d {:?}", input.get4d(), conv_pair.filter.get_shape(), conv_pair.bias.get_shape(),conv_pair.filter.get4d());
+            input.conv2d(&conv_pair.filter, &conv_pair.bias, 1)
+        }
         Layer::Pooling(info) => info.op(input),
         // Traditional convolution is used for debug purposes. That is because the actual convolution
         // we use relies on the FFT algorithm. This convolution does not have a snark implementation.

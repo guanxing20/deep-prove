@@ -116,15 +116,17 @@ impl InputJSON {
     /// Computes the accuracy of pytorch outputs against the expected outputs
     pub fn compute_pytorch_accuracy(&self) -> f32 {
         let mut accuracies = Vec::new();
-        
-        for (i, (expected, pytorch_out)) in self.output_data.iter()
+
+        for (i, (expected, pytorch_out)) in self
+            .output_data
+            .iter()
             .zip(self.pytorch_output.iter())
-            .enumerate() 
+            .enumerate()
         {
             let accuracy = argmax_compare(expected, pytorch_out);
             accuracies.push(accuracy);
             info!(
-                "PyTorch Run {}/{}: Accuracy: {}", 
+                "PyTorch Run {}/{}: Accuracy: {}",
                 i + 1,
                 self.output_data.len(),
                 if accuracy > 0 { "correct" } else { "incorrect" }
@@ -132,7 +134,7 @@ impl InputJSON {
         }
 
         let avg_accuracy = calculate_average_accuracy(&accuracies);
-                avg_accuracy
+        avg_accuracy
     }
 }
 
@@ -245,7 +247,6 @@ fn run(args: Args) -> anyhow::Result<()> {
         num_samples,
         pytorch_accuracy * 100.0
     );
-        
 
     Ok(())
 }
@@ -287,7 +288,10 @@ impl CSVBencher {
 
     fn check(&self, column: &str) {
         if self.data.contains_key(column) {
-            panic!("CSVBencher only flushes one row at a time for now (key already registered: {})",column);
+            panic!(
+                "CSVBencher only flushes one row at a time for now (key already registered: {})",
+                column
+            );
         }
         if !self.headers.contains(&column.to_string()) {
             panic!("column {} non existing", column);

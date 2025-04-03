@@ -18,6 +18,7 @@ pub mod layers;
 pub mod lookup;
 pub mod model;
 mod onnx_parse;
+pub mod padding;
 pub use onnx_parse::{FloatOnnxLoader, ModelType};
 pub mod tensor;
 pub use tensor::Tensor;

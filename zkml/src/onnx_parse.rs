@@ -1,7 +1,5 @@
 use crate::{
-    Element, ScalingFactor,
-    layers::{convolution::Convolution, dense::Dense},
-    quantization::{AbsoluteMax, ModelMetadata, ScalingStrategy},
+    layers::{convolution::Convolution, dense::Dense}, padding::pad_model, quantization::{AbsoluteMax, ModelMetadata, ScalingStrategy}, Element, ScalingFactor
 };
 use anyhow::{Context, Error, Result, bail, ensure};
 use goldilocks::GoldilocksExt2;
@@ -57,7 +55,10 @@ impl FloatOnnxLoader {
             model_type.validate(&self.model_path)?;
         }
         let float_model = load_float_model(&self.model_path)?;
-        self.scaling_strategy.quantize(float_model)
+        let (quantized_model,md) = self.scaling_strategy.quantize(float_model)?;
+        let padded_model = pad_model(quantized_model)?;
+        Ok((padded_model,md))
+
     }
 }
 // Supported operators
@@ -206,36 +207,25 @@ fn model_input_shape(graph: &GraphProto) -> Vec<usize> {
     input_shape
 }
 
-fn check_filter(filter_shape: &[usize]) -> Result<bool> {
-    let result = true;
-    if !(filter_shape.len() == 4) {
-        return Err(Error::msg(format!("Filter should be 4D tensor.")));
-    }
-    if !(filter_shape[2] == filter_shape[3]) {
-        return Err(Error::msg(format!("Filter should be square.")));
-    }
-    Ok(result)
+pub fn check_filter(filter_shape: &[usize]) -> Result<()> {
+    ensure!(filter_shape.len() == 4, "Filter should be 4D tensor.");
+    ensure!(filter_shape[2] == filter_shape[3], "Filter should be square.");
+    Ok(())
 }
 
-fn check_cnn_input(input_shape: &[usize]) -> Result<bool> {
-    let result = true;
-    if !(input_shape.len() == 3) {
-        return Err(Error::msg(format!("Input should be 3D tensor.")));
-    }
-    if !(input_shape[1] == input_shape[2]) {
-        return Err(Error::msg(format!("Input should be square.")));
-    }
-    Ok(result)
+pub fn check_cnn_input(input_shape: &[usize]) -> Result<()> {
+    ensure!(input_shape.len() == 3, "input should be 3d tensor");
+    ensure!(input_shape[1] == input_shape[2], "input should be square");
+    Ok(())
 }
 
 /// Assumes stride=1, padding=0, and dilation=1
 /// https://pytorch.org/docs/stable/generated/torch.nn.Conv2d.html
-fn conv2d_shape(input_shape: &[usize], filter_shape: &[usize]) -> Vec<usize> {
+pub fn conv2d_shape(input_shape: &[usize], filter_shape: &[usize]) -> Result<Vec<usize>> {
     let result = check_filter(filter_shape);
     assert!(result.is_ok(), "conv2d: Failed {:?}", result.unwrap_err());
 
-    let result = check_cnn_input(input_shape);
-    assert!(result.is_ok(), "conv2d: Failed {:?}", result.unwrap_err());
+    check_cnn_input(input_shape).context("conv2d: invalid input shape")?;
 
     let stride = 1usize;
     let padding = 0usize;
@@ -244,18 +234,13 @@ fn conv2d_shape(input_shape: &[usize], filter_shape: &[usize]) -> Vec<usize> {
     let h_in = input_shape[2];
     let kernel = filter_shape[2];
     let h_out = (h_in + 2 * padding - dilation * (kernel - 1) - 1) / stride + 1;
-    vec![filter_shape[0], h_out, h_out]
+    Ok(vec![filter_shape[0], h_out, h_out])
 }
 
 /// Assumes kernel=2, stride=2, padding=0, and dilation=1
 /// https://pytorch.org/docs/stable/generated/torch.nn.MaxPool2d.html
-fn maxpool2d_shape(input_shape: &[usize]) -> Vec<usize> {
-    let result = check_cnn_input(input_shape);
-    assert!(
-        result.is_ok(),
-        "maxpool2d: Failed {:?}",
-        result.unwrap_err()
-    );
+pub fn maxpool2d_shape(input_shape: &[usize]) -> Result<Vec<usize>> {
+    check_cnn_input(input_shape).context("maxpool2d: invalid input shape")?;
 
     let stride = 2usize;
     let padding = 0usize;
@@ -265,7 +250,7 @@ fn maxpool2d_shape(input_shape: &[usize]) -> Vec<usize> {
     let d1 = input_shape[0];
     let d2 = (input_shape[1] + 2 * padding - dilation * (kernel - 1) - 1) / stride + 1;
 
-    vec![d1, d2, d2]
+    Ok(vec![d1, d2, d2])
 }
 
 /// Enum representing the different types of models that can be loaded
@@ -328,6 +313,7 @@ pub fn load_float_model(filepath: &str) -> Result<Model<f32>> {
         input_shape[0] == 1,
         "First dimension of the CNNs or MLP's input should 1."
     );
+    /// We force the input shape to be for a single inference and not a batch inference.
     input_shape.remove(0);
     if model_type == ModelType::CNN {
         assert!(input_shape.len() == 3);
@@ -337,12 +323,12 @@ pub fn load_float_model(filepath: &str) -> Result<Model<f32>> {
 
     let mut ignore_garbage_pad: Option<(Vec<usize>, Vec<usize>)> = None;
     let mut input_shape_og = input_shape.clone();
-    let mut input_shape_padded = input_shape
-        .iter()
-        .map(|i| i.next_power_of_two())
-        .collect_vec();
-    debug!("Input shape: {:?}", input_shape);
-    debug!("Padded input shape: {:?}", input_shape_padded);
+    //let mut input_shape_padded = input_shape
+    //    .iter()
+    //    .map(|i| i.next_power_of_two())
+    //    .collect_vec();
+    println!("Input shape: {:?}", input_shape);
+    //println!("Padded input shape: {:?}", input_shape_padded);
     let mut initializers: HashMap<String, Tensor> = HashMap::new();
     for item in graph.initializer {
         let dt = tract_onnx::pb::tensor_proto::DataType::from_i32(item.data_type)
@@ -372,49 +358,51 @@ pub fn load_float_model(filepath: &str) -> Result<Model<f32>> {
                     bias.get_data().len(),
                     nrows
                 );
-                assert!(input_shape_padded.iter().all(|d| d.is_power_of_two()));
-                assert!(input_shape_padded.len() == 1);
+                //assert!(input_shape_padded.iter().all(|d| d.is_power_of_two()));
+                //assert!(input_shape_padded.len() == 1);
 
                 let mut new_cols = weights.ncols_2d();
-                if weights.ncols_2d() != input_shape_padded[0] {
-                    if weights.ncols_2d() < input_shape_padded[0] {
-                        new_cols = input_shape_padded[0];
-                    } else {
-                        // If we have too many columns, we can't shrink without losing information
-                        panic!(
-                            "Matrix has more columns ({}) than previous layer output size ({}).
-                            Cannot shrink without losing information.",
-                            weights.ncols_2d(),
-                            input_shape_padded[0]
-                        );
-                    }
-                }
+                //if weights.ncols_2d() != input_shape_padded[0] {
+                //    if weights.ncols_2d() < input_shape_padded[0] {
+                //        new_cols = input_shape_padded[0];
+                //    } else {
+                //        // If we have too many columns, we can't shrink without losing information
+                //        panic!(
+                //            "Matrix has more columns ({}) than previous layer output size ({}).
+                //            Cannot shrink without losing information.",
+                //            weights.ncols_2d(),
+                //            input_shape_padded[0]
+                //        );
+                //    }
+                //}
 
-                let ncols = new_cols.next_power_of_two();
-                let nrows = weights.nrows_2d().next_power_of_two();
+                //let ncols = new_cols.next_power_of_two();
+                //let nrows = weights.nrows_2d().next_power_of_two();
+                 let ncols = new_cols;
+                 let nrows = weights.nrows_2d();
                 // Pad to power of two dimensions
 
-                if let Some(ref conv_shapes) = ignore_garbage_pad.clone() {
-                    let conv_shape_og = conv_shapes.0.clone();
-                    let conv_shape_pad = conv_shapes.1.clone();
-                    weights = weights.pad_matrix_to_ignore_garbage(
-                        &conv_shape_og,
-                        &conv_shape_pad,
-                        &vec![nrows, ncols],
-                    );
-                    ignore_garbage_pad = None;
-                } else {
-                    weights.reshape_to_fit_inplace_2d(vec![nrows, ncols]);
-                }
+                //if let Some(ref conv_shapes) = ignore_garbage_pad.clone() {
+                //    let conv_shape_og = conv_shapes.0.clone();
+                //    let conv_shape_pad = conv_shapes.1.clone();
+                //    weights = weights.pad_matrix_to_ignore_garbage(
+                //        &conv_shape_og,
+                //        &conv_shape_pad,
+                //        &vec![nrows, ncols],
+                //    );
+                //    ignore_garbage_pad = None;
+                //} else {
+                //    weights.reshape_to_fit_inplace_2d(vec![nrows, ncols]);
+                //}
 
-                let bias = bias.pad_1d(nrows);
-                input_shape_padded = vec![nrows];
+                //let bias = bias.pad_1d(nrows);
+                //input_shape_padded = vec![nrows];
 
                 debug!("layer idx {} -> final shape {:?}", i, weights.get_shape());
                 layers.push(Layer::Dense(Dense::new_from_weights(weights, bias)));
             }
             op if ACTIVATION.contains(&op) => {
-                assert!(input_shape_padded.iter().all(|d| d.is_power_of_two()));
+                //assert!(input_shape_padded.iter().all(|d| d.is_power_of_two()));
                 let layer = Layer::Activation(Activation::Relu(Relu::new()));
                 layers.push(layer);
             }
@@ -425,7 +413,7 @@ pub fn load_float_model(filepath: &str) -> Result<Model<f32>> {
                     mut weights,
                     mut bias,
                 } = fetch_weight_and_bias(node, &initializers)?;
-                input_shape_og = conv2d_shape(&input_shape_og, &weights.get_shape());
+                input_shape_og = conv2d_shape(&input_shape_og, &weights.get_shape())?;
                 let weight_shape = weights.get_shape();
                 // Perform basic sanity checks on the tensor dimensions
                 let shape_test = check_filter(&weight_shape);
@@ -436,22 +424,22 @@ pub fn load_float_model(filepath: &str) -> Result<Model<f32>> {
                 );
 
                 // Pad the tensors to the next power of two.
-                weights = weights.pad_next_power_of_two();
-                bias = bias.pad_next_power_of_two();
+                //weights = weights.pad_next_power_of_two();
+                //bias = bias.pad_next_power_of_two();
 
                 // Make sure that input shape is already padded and is well formed
-                assert!(input_shape_padded.iter().all(|d| d.is_power_of_two()));
-                assert!(input_shape_padded.len() == 3);
+                //assert!(input_shape_padded.iter().all(|d| d.is_power_of_two()));
+                //assert!(input_shape_padded.len() == 3);
 
                 // Since we are doing an FFT based conv, we need to pad the last two dimensions of the filter to match the input.
-                let weight_shape = weights.get_shape();
-                let (filter_height, filter_weight) = (weight_shape[2], weight_shape[3]);
-                let (input_height, input_weight) = (input_shape_padded[1], input_shape_padded[2]);
+                //let weight_shape = weights.get_shape();
+                //let (filter_height, filter_weight) = (weight_shape[2], weight_shape[3]);
+                //let (input_height, input_weight) = (input_shape_padded[1], input_shape_padded[2]);
 
-                assert!(
-                    filter_height <= input_height && filter_weight <= input_weight,
-                    "Filter dimensions have to be smaller than input dimensions"
-                );
+                //assert!(
+                //    filter_height <= input_height && filter_weight <= input_weight,
+                //    "Filter dimensions have to be smaller than input dimensions"
+                //);
 
                 // weight = weight.pad_last_two_dimensions(vec![input_height, input_weight]);
 
@@ -471,43 +459,42 @@ pub fn load_float_model(filepath: &str) -> Result<Model<f32>> {
                 let layer = Layer::Convolution(Convolution::new_raw(
                     weights,
                     bias,
-                    input_shape_padded.clone(),
                 ));
                 // let layer = Layer::SchoolBookConvolution(Convolution::new(weight, _bias));
 
                 layers.push(layer);
 
-                let output_shape = conv2d_shape(&input_shape_padded, &dims);
-                input_shape_padded = output_shape
-                    .iter()
-                    .map(|i| i.next_power_of_two())
-                    .collect_vec();
+                //let output_shape = conv2d_shape(&input_shape_padded, &dims)?;
+                //input_shape_padded = output_shape
+                //    .iter()
+                //    .map(|i| i.next_power_of_two())
+                //    .collect_vec();
                 debug!("EXTRACTIONG conv2d time: {:?}", now.elapsed());
             }
             op if DOWNSAMPLING.contains(&op) => {
-                input_shape_og = maxpool2d_shape(&input_shape_og);
+                input_shape_og = maxpool2d_shape(&input_shape_og)?;
                 // Make sure that input shape is already padded and is well formed
-                assert!(input_shape_padded.iter().all(|d| d.is_power_of_two()));
+                //assert!(input_shape_padded.iter().all(|d| d.is_power_of_two()));
 
                 let _ = fetch_maxpool_attributes(node)?;
                 let layer = Layer::Pooling(Pooling::Maxpool2D(Maxpool2D::default()));
                 layers.push(layer);
-                input_shape_padded = maxpool2d_shape(&input_shape_padded);
+                //input_shape_padded = maxpool2d_shape(&input_shape_padded)?;
             }
             op if RESHAPE.contains(&op) => {
-                ignore_garbage_pad = Some((input_shape_og.clone(), input_shape_padded.clone()));
+                //ignore_garbage_pad = Some((input_shape_og.clone(), input_shape_padded.clone()));
 
                 input_shape_og = vec![input_shape_og.iter().product()];
-                assert!(input_shape_padded.iter().all(|d| d.is_power_of_two()));
-                input_shape_padded = vec![input_shape_padded.iter().product()];
+                //assert!(input_shape_padded.iter().all(|d| d.is_power_of_two()));
+                //input_shape_padded = vec![input_shape_padded.iter().product()];
             }
             _ => bail!("Unsupported operation"),
         };
-        debug!(
-            "{}. {}'s output shape: {:?}. {:?}",
+        println!(
+            "{}. {}'s output shape: {:?}",
             i + 1,
             node.op_type.as_str(),
-            input_shape_padded,
+            //input_shape_padded,
             input_shape_og
         );
     }
@@ -516,6 +503,7 @@ pub fn load_float_model(filepath: &str) -> Result<Model<f32>> {
 
     // Create and return the model
     let mut model = Model::new();
+    // TODO: change to og for reading without padding
     model.set_input_shape(input_shape);
     for layer in layers {
         debug!("Added the layer: {}", layer.describe());
