@@ -413,6 +413,8 @@ pub fn load_float_model(filepath: &str) -> Result<Model<f32>> {
                     mut weights,
                     mut bias,
                 } = fetch_weight_and_bias(node, &initializers)?;
+                println!("RUN CONV: input shape {:?} - og {:?} ", input_shape, input_shape_og);
+                println!("RUN CONV: filter shape {:?}, bias shape {:?} -- filter 4d {:?}", weights.get_shape(), bias.get_shape(),weights.get4d());
                 input_shape_og = conv2d_shape(&input_shape_og, &weights.get_shape())?;
                 let weight_shape = weights.get_shape();
                 // Perform basic sanity checks on the tensor dimensions
@@ -422,6 +424,7 @@ pub fn load_float_model(filepath: &str) -> Result<Model<f32>> {
                     weight_shape[0] == bias.get_shape()[0],
                     "Bias length doesn't match filter shape"
                 );
+
 
                 // Pad the tensors to the next power of two.
                 //weights = weights.pad_next_power_of_two();
