@@ -113,7 +113,11 @@ fn pad_dense(mut d: Dense<Element>, si: &mut ShapeInfo) -> Result<Dense<Element>
         nrows
     );
     assert!(si.input_shape_padded.iter().all(|d| d.is_power_of_two()));
-    assert!(si.input_shape_padded.len() == 1);
+    /// NOTE: this eventually should be handled by a reshape layer
+    if si.input_shape_padded.len() != 1 {
+        si.input_shape_padded = vec![si.input_shape_padded.iter().product()];
+        si.input_shape_og = vec![si.input_shape_og.iter().product()];
+    }
     let mut new_cols = d.matrix.ncols_2d();
     if d.matrix.ncols_2d() != si.input_shape_padded[0] {
         if d.matrix.ncols_2d() < si.input_shape_padded[0] {

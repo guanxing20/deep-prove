@@ -1,12 +1,7 @@
 use core::f32;
 
 use crate::{
-    Claim, Prover,
-    commit::{compute_betas_eval, identity_eval},
-    iop::{context::ContextAux, verifier::Verifier},
-    layers::{LayerProof, PolyID},
-    quantization::{ScalingFactor, max_range_from_weight},
-    tensor::{ConvData, Number, get_root_of_unity},
+    commit::{compute_betas_eval, identity_eval}, iop::{context::ContextAux, verifier::Verifier}, layers::{LayerProof, PolyID}, quantization::{self, max_range_from_weight, ScalingFactor}, tensor::{get_root_of_unity, ConvData, Number}, Claim, Prover
 };
 use anyhow::Context;
 use ff_ext::ExtensionField;
@@ -14,10 +9,11 @@ use multilinear_extensions::{
     mle::{IntoMLE, MultilinearExtension},
     virtual_poly::{VPAuxInfo, VirtualPolynomial},
 };
-use rayon::iter::IntoParallelRefIterator;
+use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sumcheck::structs::{IOPProof, IOPProverState, IOPVerifierState};
 use tracing::instrument;
+use tract_onnx::tract_core::ops::matmul::quant;
 use transcript::Transcript;
 
 use crate::{Element, tensor::Tensor};
@@ -125,10 +121,78 @@ impl<T: Number> Convolution<T> {
         self.filter.filter_size()
     }
 
+   }
+impl Convolution<f32> {
+    /// used to create a convoluation layer with from the raw float weights and bias.
+    /// The wieghts are NOT fft'd as they are when the it is being quantized.
+    pub fn new_raw(filter: Tensor<f32>, bias: Tensor<f32>) -> Self {
+        Self {
+            filter,
+            bias,
+        }
+    }
+
+    /// Quantizes the filter and the bias. Note the weights are not yet FFT'd, that happens with new_conv at the padding step
+    /// since the FFT is also making the filter shape == input shape.
+    /// TODO: refactor new_conv to be in convolution.rs and more efficient than cloning
+    pub fn quantize(self, s: &ScalingFactor) -> Convolution<Element> {
+        let quantized_filter = self.filter.quantize(s);
+        let bias = self.bias.quantize(&s);
+        Convolution::<Element> {
+            filter: quantized_filter,
+            bias,
+        }
+    }
+
+    pub fn op<E: ExtensionField>(&self, input: &Tensor<f32>) -> Tensor<f32> {
+        input.conv2d(&self.filter, &self.bias, 1)
+    }
+
+    pub fn max_abs_weight(&self) -> f32 {
+        self.filter.max_abs_output().max(self.bias.max_abs_output())
+    }
+
+    pub fn float_op(&self, input: &Tensor<f32>) -> Tensor<f32> {
+        input.conv2d(&self.filter, &self.bias, 1)
+    }
+}
+
+impl Convolution<Element> {
+    pub fn new(filter: Tensor<Element>, bias: Tensor<Element>) -> Self {
+        Self {
+            filter,
+            bias,
+        }
+    }
+
+    pub fn op<E: ExtensionField>(&self, input: &Tensor<Element>) -> (Tensor<Element>, ConvData<E>) {
+        let (output, proving_data) = self.filter.fft_conv(input);
+        (self.add_bias(&output), proving_data)
+    }
+
     /// Returns the min and max output range of the convolution layer for a given input range.
     /// NOTE: it assumes the weights in float are NOT fft'd
-    pub fn output_range(&self, min_input: T, max_input: T) -> (T, T) {
+    pub fn output_range(&self, min_input: Element, max_input: Element) -> (Element, Element) {
         let (k_n, k_c, k_h, k_w) = self.filter.get4d();
+        let (global_min,global_max) = (Element::MAX,Element::MIN);
+        // iterate over output channels and take the min/max of all of it
+        return (0..k_n).into_iter().map(|output| {
+            let (mut filter_min,mut filter_max) = (0,0);
+            // iterate over input channels and sum up
+            for input in 0..k_c {
+                for h in 0..k_h {
+                    for w in 0..k_w {
+                        let (ind_min,ind_max) = quantization::max_range_from_weight(&self.filter.get(output,input,h,w), &min_input, &max_input);
+                        filter_min += ind_min;
+                        filter_max += ind_max;
+                    }
+                }
+            }
+            (filter_min,filter_max)
+        }).fold((global_min,global_max),|(global_min,global_max),(local_min,local_max)| {
+            (global_min.cmp_min(&local_min),global_max.cmp_max(&local_max))
+        });
+
         let x_min = min_input;
         let x_max = max_input;
         // min_input = 1,k_c,k_h * k_w
@@ -182,54 +246,6 @@ impl<T: Number> Convolution<T> {
         //     max_max = max_max.max(output_max_abs);
         // }
         // max_max
-    }
-}
-impl Convolution<f32> {
-    /// used to create a convoluation layer with from the raw float weights and bias.
-    /// The wieghts are NOT fft'd as they are when the it is being quantized.
-    pub fn new_raw(filter: Tensor<f32>, bias: Tensor<f32>) -> Self {
-        Self {
-            filter,
-            bias,
-        }
-    }
-
-    /// Quantizes the filter and the bias. Note the weights are not yet FFT'd, that happens with new_conv at the padding step
-    /// since the FFT is also making the filter shape == input shape.
-    /// TODO: refactor new_conv to be in convolution.rs and more efficient than cloning
-    pub fn quantize(self, s: &ScalingFactor) -> Convolution<Element> {
-        let quantized_filter = self.filter.quantize(s);
-        let bias = self.bias.quantize(&s);
-        Convolution::<Element> {
-            filter: quantized_filter,
-            bias,
-        }
-    }
-
-    pub fn op<E: ExtensionField>(&self, input: &Tensor<f32>) -> Tensor<f32> {
-        input.conv2d(&self.filter, &self.bias, 1)
-    }
-
-    pub fn max_abs_weight(&self) -> f32 {
-        self.filter.max_abs_output().max(self.bias.max_abs_output())
-    }
-
-    pub fn float_op(&self, input: &Tensor<f32>) -> Tensor<f32> {
-        input.conv2d(&self.filter, &self.bias, 1)
-    }
-}
-
-impl Convolution<Element> {
-    pub fn new(filter: Tensor<Element>, bias: Tensor<Element>) -> Self {
-        Self {
-            filter,
-            bias,
-        }
-    }
-
-    pub fn op<E: ExtensionField>(&self, input: &Tensor<Element>) -> (Tensor<Element>, ConvData<E>) {
-        let (output, proving_data) = self.filter.fft_conv(input);
-        (self.add_bias(&output), proving_data)
     }
 
     pub(crate) fn step_info<E: ExtensionField>(

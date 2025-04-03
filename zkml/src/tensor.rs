@@ -627,6 +627,10 @@ impl<T> Tensor<T>
 where
     T: Number,
 {
+    pub fn reshape(mut self, new_shape: Vec<usize>) -> Tensor<T> {
+        self.shape = new_shape;
+        self
+    }
     pub fn max_abs_output(&self) -> T {
         self.data
             .iter()

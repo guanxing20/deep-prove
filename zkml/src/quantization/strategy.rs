@@ -19,7 +19,7 @@ use super::ScalingFactor;
 /// to quantize the model, one scaling factor per layer.
 pub trait ScalingStrategy: std::fmt::Debug {
     fn quantize(&self, model: Model<f32>) -> Result<(Model<Element>, ModelMetadata)>;
-    fn name(&self) -> &str;
+    fn name(&self) -> String;
 }
 
 /// Quantization strategy that observes the inference of the model with different inputs and uses the
@@ -38,8 +38,8 @@ impl InferenceObserver {
 
 const INPUT_TRACKING_ID: usize = 10_000;
 impl ScalingStrategy for InferenceObserver {
-    fn name(&self) -> &str {
-        "inference"
+    fn name(&self) -> String{
+        format!("inference [{},{}]",*quantization::MIN,*quantization::MAX)
     }
     fn quantize(&self, model: Model<f32>) -> Result<(Model<Element>, ModelMetadata)> {
         let mut tracker = InferenceTracker::new();
@@ -105,6 +105,10 @@ impl ScalingStrategy for InferenceObserver {
                         let quantized_conv = conv.quantize(&model_scaling);
                         let (min, max) = tracker.distribution_info(id);
                         let output_scaling = ScalingFactor::new(min.abs().max(max.abs()));
+                        {
+                            let (obs_quant_min,obs_quant_max) = (output_scaling.quantize(&min),output_scaling.quantize(&max));
+                            println!("InferenceObserver: CONV layer {:?}, obs_quant_min {:?}, obs_quant_max {:?}", id, obs_quant_min, obs_quant_max);
+                        }
                         let shift = last_input_scaling.shift(&model_scaling, &output_scaling);
                         let (quantized_min, _quantized_max) =
                             quantized_conv.output_range(*quantization::MIN, *quantization::MAX);
@@ -204,8 +208,8 @@ impl AbsoluteMax {
     }
 }
 impl ScalingStrategy for AbsoluteMax {
-    fn name(&self) -> &str {
-        "absolute_max"
+    fn name(&self) -> String {
+        "absolute_max".to_string()
     }
     fn quantize(&self, model: Model<f32>) -> Result<(Model<Element>, ModelMetadata)> {
         let mut last_input_scaling_factor = if let Some(ref input) = self.0 {
@@ -236,15 +240,17 @@ impl ScalingStrategy for AbsoluteMax {
                     Layer::Dense(d) => {
                         let max_weight = d.max_abs_weight();
                         let model_scaling = ScalingFactor::new(max_weight);
-                        let (min_output,max_output) = d.output_range(-last_input_scaling_factor.abs_max,last_input_scaling_factor.abs_max);
+                        //let (min_output,max_output) = d.output_range(-last_input_scaling_factor.abs_max,last_input_scaling_factor.abs_max);
                         let quantized_dense= d.quantize(&model_scaling);
                         let (quant_min_output,_quant_max_output) = quantized_dense.output_range(*quantization::MIN,*quantization::MAX);
-                        let abs_max = min_output.abs().max(max_output.abs());
-                        let output_scaling = ScalingFactor::new(abs_max);
+                        //let abs_max = min_output.abs().max(max_output.abs());
+                        //let output_scaling = ScalingFactor::new(abs_max);
+                        // TODO: remove this is broken
+                        let output_scaling = ScalingFactor::default();
                         last_input_scaling_factor = output_scaling;
                         md.set_layers_scaling(id, output_scaling);
                         let shift = last_input_scaling_factor.shift(&model_scaling, &output_scaling);
-                        println!("Scaling: AbsoluteMax: CONV max_weight {:?}, max_output: {:?} - adding requant", max_weight, max_output);
+                        println!("Scaling: AbsoluteMax: CONV max_weight {:?}, max_output: {:?} - adding requant", max_weight, 1.0);
                         let requant = Requant {
                             right_shift: shift,
                             range: quant_min_output.abs() as usize,
@@ -256,15 +262,17 @@ impl ScalingStrategy for AbsoluteMax {
                     Layer::Convolution(d) => {
                         let max_weight = d.max_abs_weight();
                         let model_scaling = ScalingFactor::new(max_weight);
-                        let (min_output,max_output) = d.output_range(-last_input_scaling_factor.abs_max,last_input_scaling_factor.abs_max);
+                        //let (min_output,max_output) = d.output_range(-last_input_scaling_factor.abs_max,last_input_scaling_factor.abs_max);
                         let quantized_conv= d.quantize(&model_scaling);
                         let (quant_min_output,_quant_max_output) = quantized_conv.output_range(*quantization::MIN,*quantization::MAX);
-                        let abs_max = min_output.abs().max(max_output.abs());
-                        let output_scaling = ScalingFactor::new(abs_max);
+                        //let abs_max = min_output.abs().max(max_output.abs());
+                        //let output_scaling = ScalingFactor::new(abs_max);
+                        // TODO: remove this is broken
+                        let output_scaling = ScalingFactor::default();
                         last_input_scaling_factor = output_scaling;
                         md.set_layers_scaling(id, output_scaling);
                         let shift = last_input_scaling_factor.shift(&model_scaling, &output_scaling);
-                        println!("Scaling: AbsoluteMax: CONV max_weight {:?}, max_output: {:?} - adding requant", max_weight, max_output);
+                        println!("Scaling: AbsoluteMax: CONV max_weight {:?}, max_output: {:?} - adding requant", max_weight, 1.0);
                         let requant = Requant {
                             right_shift: shift,
                             range: quant_min_output.abs() as usize,

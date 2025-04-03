@@ -68,7 +68,7 @@ impl Requant {
         Self {
             right_shift,
             range: min_value,
-            after_range: 1 << *quantization::BIT_LEN,
+            after_range: *quantization::RANGE as usize,
         }
     }
     pub fn op(&self, input: &crate::tensor::Tensor<Element>) -> crate::tensor::Tensor<Element> {
@@ -406,7 +406,7 @@ impl RequantCtx {
         // The first claim needs to be shifted down as we add a value to make sure that all its evals are in the range 0..1 << BIT_LEn
         let corrected_claim = Claim::<E>::new(
             point.clone(),
-            first_claim.eval - E::from(1 << (*quantization::BIT_LEN - 1)),
+            first_claim.eval - E::from((*quantization::RANGE/2) as u64),
         );
         sp_verifier.add_claim(corrected_claim)?;
 

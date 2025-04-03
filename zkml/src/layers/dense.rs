@@ -82,42 +82,7 @@ impl<T: Number> Dense<T> {
         Self { matrix, bias }
     }
 
-    /// Returns the (min,max) output range of the dense layer for a given input range.
-    pub fn output_range(&self, min_input: T, max_input: T) -> (T, T) {
-        // return {
-        //    let ncols = self.matrix.ncols_2d();
-        //    let min_input_tensor = Tensor::new(vec![ncols],std::iter::repeat(input_scaling.min()).take(ncols).collect());
-        //    let max_input_tensor = Tensor::new(vec![ncols],std::iter::repeat(input_scaling.max()).take(ncols).collect());
-        //    let min_output = self.matrix.matvec(&min_input_tensor).add(&self.bias);
-        //    let max_output = self.matrix.matvec(&max_input_tensor).add(&self.bias);
-        //    min_output.max_abs_output().max(max_output.max_abs_output())
-        //};
-        let ncols = self.matrix.ncols_2d();
-        self.matrix
-            .get_data()
-            .iter()
-            .chunks(ncols)
-            .into_iter()
-            .enumerate()
-            .map(|(i, row)| {
-                let row_range = row
-                    .map(|w| quantization::max_range_from_weight(w, &min_input, &max_input))
-                    .fold((T::default(), T::default()), |(min, max), (wmin, wmax)| {
-                        (min + wmin, max + wmax)
-                    });
-                // add the bias rescaled to the same scale as the model
-                let bias_weight = &self.bias.get_data()[i];
-                let min_out = row_range.0 + *bias_weight;
-                let max_out = row_range.1 + *bias_weight;
-                (min_out, max_out)
-            })
-            .fold(
-                (T::MAX, T::MIN),
-                |(global_min, global_max), (curr_min, curr_max)| {
-                    (global_min.cmp_min(&curr_min), global_max.cmp_max(&curr_max))
-                },
-            )
-    }
+    
 }
 
 impl Dense<f32> {
@@ -141,6 +106,50 @@ impl Dense<f32> {
 }
 
 impl Dense<Element> {
+    /// Returns the (min,max) output range of the dense layer for a given input range.
+    pub fn output_range(&self, min_input: Element, max_input: Element) -> (Element, Element) {
+        // formula is 2^{2 * BIT_LEN + log(c) + 1} where c is the number of columns and +1 because of the bias
+        let ncols = self.matrix.ncols_2d() as u32;
+        let power = (2 * (*quantization::BIT_LEN as u32) + ncols.ilog2() + 1);
+        println!(" DENSE POWER {:?} - quantization::BIT_LEN {:?}, ncols.log2() {:?}",power,*quantization::BIT_LEN,ncols.ilog2());
+        let min = -(2u64.pow(power as u32) as Element);
+        println!(" DENSE POWER 2 {:?}",power);
+        let max = 2u64.pow(power as u32) as Element;
+        return (min,max);
+        // return {
+        //    let ncols = self.matrix.ncols_2d();
+        //    let min_input_tensor = Tensor::new(vec![ncols],std::iter::repeat(input_scaling.min()).take(ncols).collect());
+        //    let max_input_tensor = Tensor::new(vec![ncols],std::iter::repeat(input_scaling.max()).take(ncols).collect());
+        //    let min_output = self.matrix.matvec(&min_input_tensor).add(&self.bias);
+        //    let max_output = self.matrix.matvec(&max_input_tensor).add(&self.bias);
+        //    min_output.max_abs_output().max(max_output.max_abs_output())
+        //};
+        //let ncols = self.matrix.ncols_2d();
+        //self.matrix
+        //    .get_data()
+        //    .iter()
+        //    .chunks(ncols)
+        //    .into_iter()
+        //    .enumerate()
+        //    .map(|(i, row)| {
+        //        let row_range = row
+        //            .map(|w| quantization::max_range_from_weight(w, &min_input, &max_input))
+        //            .fold((T::default(), T::default()), |(min, max), (wmin, wmax)| {
+        //                (min + wmin, max + wmax)
+        //            });
+        //        // add the bias rescaled to the same scale as the model
+        //        let bias_weight = &self.bias.get_data()[i];
+        //        let min_out = row_range.0 + *bias_weight;
+        //        let max_out = row_range.1 + *bias_weight;
+        //        (min_out, max_out)
+        //    })
+        //    .fold(
+        //        (T::MAX, T::MIN),
+        //        |(global_min, global_max), (curr_min, curr_max)| {
+        //            (global_min.cmp_min(&curr_min), global_max.cmp_max(&curr_max))
+        //        },
+        //    )
+    }
     pub fn prove_step<'b, E, T>(
         &self,
         prover: &mut Prover<E, T>,

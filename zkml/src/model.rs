@@ -319,6 +319,7 @@ pub(crate) mod test {
         virtual_poly::VirtualPolynomial,
     };
     use sumcheck::structs::{IOPProverState, IOPVerifierState};
+    use tract_onnx::tract_core::ops::matmul::quant;
 
     use crate::{
         Element, default_transcript,
@@ -576,7 +577,7 @@ pub(crate) mod test {
         let requant = Requant {
             right_shift: 10,
             range: output1.get_data().iter().map(|e| e.abs()).max().unwrap() as usize,
-            after_range: 1 << *quantization::BIT_LEN,
+            after_range: *quantization::RANGE as usize,
         };
         let requantized_output1 = requant.op(&output1);
         let final_output = dense2.op(&requantized_output1);

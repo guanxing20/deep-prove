@@ -27,6 +27,7 @@ pub static BIT_LEN: Lazy<usize> = Lazy::new(|| {
 /// symmetric quantization range
 pub static MIN: Lazy<Element> = Lazy::new(|| -(1 << (*BIT_LEN - 1)) + 1);
 pub static MAX: Lazy<Element> = Lazy::new(|| (1 << (*BIT_LEN - 1)) - 1);
+pub static RANGE: Lazy<Element> = Lazy::new(|| *MAX - *MIN);
 pub static ZERO: Lazy<Element> = Lazy::new(|| 0);
 pub const MIN_FLOAT: f32 = -1.0;
 pub const MAX_FLOAT: f32 = 1.0;
