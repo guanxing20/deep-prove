@@ -147,10 +147,10 @@ impl<T: Number> Layer<T> {
             }
             Layer::Requant(info) => {
                 format!(
-                    "Requant: shape: {}, shift: {}, offset: {}",
+                    "Requant: shape: {}, shift: {}, offset: 2^{}",
                     info.shape()[1],
                     info.right_shift,
-                    info.range << 1
+                    (info.range << 1).ilog2() as usize,
                 )
             }
             Layer::Pooling(Pooling::Maxpool2D(info)) => format!(

@@ -49,10 +49,8 @@ impl ScalingStrategy for InferenceObserver {
         // TODO: integrate that within model.rs in a more elegant way with inference step - currently problematic
         // because of the generics and FFT requirement to take a field
         for (i, input) in self.inputs.iter().enumerate() {
-            println!("Strategy Raw Input Length: {:?}", input.len());
             //let input_tensor = model.load_input_flat(input.clone());
             let input_tensor = Tensor::new(model.input_not_padded.clone(), input.clone());
-            println!("Strategy Raw Input Shape: {:?}", input_tensor.get_shape());
 
             //ensure!(
             //    model.input_shape() == input_tensor.get_shape(),
@@ -63,11 +61,11 @@ impl ScalingStrategy for InferenceObserver {
             let mut last_output = input_tensor;
             tracker.track(INPUT_TRACKING_ID, last_output.clone());
             for (id, layer) in model.layers.iter().enumerate() {
-                debug!(
-                    "Inference Observer: inference run #{}: running layer {}",
-                    i,
-                    layer.describe()
-                );
+                //debug!(
+                //    "Inference Observer: inference run #{}: running layer {}",
+                //    i,
+                //    layer.describe()
+                //);
                 last_output = run_layer(layer, &last_output);
                 tracker.track(id, last_output.clone());
             }
@@ -96,7 +94,7 @@ impl ScalingStrategy for InferenceObserver {
                         let shift = last_input_scaling.shift(&model_scaling, &output_scaling);
                         let requant = Requant {
                             right_shift: shift,
-                            range: quantized_min as usize,
+                            range: quantized_min.abs() as usize,
                             after_range: 1 << *quantization::BIT_LEN,
                         };
                         md.set_layers_scaling(id, output_scaling);
@@ -107,18 +105,19 @@ impl ScalingStrategy for InferenceObserver {
                         let quantized_conv = conv.quantize(&model_scaling);
                         let (min, max) = tracker.distribution_info(id);
                         let output_scaling = ScalingFactor::new(min.abs().max(max.abs()));
+                        let shift = last_input_scaling.shift(&model_scaling, &output_scaling);
                         let (quantized_min, _quantized_max) =
                             quantized_conv.output_range(*quantization::MIN, *quantization::MAX);
-                        let shift = last_input_scaling.shift(&model_scaling, &output_scaling);
+                        println!("InferenceObserver: quantized_min {:?}, quantized_max {:?}", quantized_min, _quantized_max);
                         md.set_layers_scaling(id, output_scaling);
                         let requant = Requant {
                             right_shift: shift,
-                            range: quantized_min as usize,
+                            range: quantized_min.abs() as usize,
                             after_range: 1 << *quantization::BIT_LEN,
                         };
                         vec![Layer::Convolution(quantized_conv), Layer::Requant(requant)]
                     }
-                    _ => vec![],
+                    a => return vec![a.quantize(&last_input_scaling)],
                 }
             })
             .flatten()
@@ -135,21 +134,21 @@ fn run_layer(layer: &Layer<f32>, input: &Tensor<f32>) -> Tensor<f32> {
         Layer::Dense(ref dense) => dense.op(input),
         Layer::Activation(activation) => activation.op(input),
         Layer::Convolution(ref conv_pair) => {
-            println!("RUN CONV: input shape {:?} (4d {:?}), filter shape {:?}, bias shape {:?} -- filter 4d {:?}", input.get_shape(),input.get4d(), conv_pair.filter.get_shape(), conv_pair.bias.get_shape(),conv_pair.filter.get4d());
-            if input.get_shape().len() == 3 {
-                Tensor::new(input.get_shape(),input.get_data().to_vec());
-                let input_shape_prod = input.get_shape().iter().product::<usize>();
-                assert_eq!(input_shape_prod,input.get_data().len());
-                let augmented_shape = vec![1, input.get_shape()[0], input.get_shape()[1], input.get_shape()[2]];
-                let new_input_shape_prod = augmented_shape.iter().product::<usize>();
-                assert_eq!(new_input_shape_prod,input_shape_prod,"augmented input shape {:?} vs original shape {:?}",augmented_shape,input.get_shape());
-                assert_eq!(augmented_shape.iter().product::<usize>(),input.get_data().len());
-                println!("\t Extending input shape to 4d to {:?}",augmented_shape);
-                let conv_input = Tensor::new(augmented_shape, input.get_data().to_vec());
-                conv_input.conv2d(&conv_pair.filter, &conv_pair.bias, 1)
-            } else {
+            //println!("RUN CONV: input shape {:?} (4d {:?}), filter shape {:?}, bias shape {:?} -- filter 4d {:?}", input.get_shape(),input.get4d(), conv_pair.filter.get_shape(), conv_pair.bias.get_shape(),conv_pair.filter.get4d());
+            //if input.get_shape().len() == 3 {
+            //    Tensor::new(input.get_shape(),input.get_data().to_vec());
+            //    let input_shape_prod = input.get_shape().iter().product::<usize>();
+            //    assert_eq!(input_shape_prod,input.get_data().len());
+            //    let augmented_shape = vec![1, input.get_shape()[0], input.get_shape()[1], input.get_shape()[2]];
+            //    let new_input_shape_prod = augmented_shape.iter().product::<usize>();
+            //    assert_eq!(new_input_shape_prod,input_shape_prod,"augmented input shape {:?} vs original shape {:?}",augmented_shape,input.get_shape());
+            //    assert_eq!(augmented_shape.iter().product::<usize>(),input.get_data().len());
+            //    println!("\t Extending input shape to 4d to {:?}",augmented_shape);
+            //    let conv_input = Tensor::new(augmented_shape, input.get_data().to_vec());
+            //    conv_input.conv2d(&conv_pair.filter, &conv_pair.bias, 1)
+            //} else {
                 input.conv2d(&conv_pair.filter, &conv_pair.bias, 1)
-            }
+            //}
         }
         Layer::Pooling(info) => info.op(input),
         // Traditional convolution is used for debug purposes. That is because the actual convolution
@@ -248,7 +247,7 @@ impl ScalingStrategy for AbsoluteMax {
                         println!("Scaling: AbsoluteMax: CONV max_weight {:?}, max_output: {:?} - adding requant", max_weight, max_output);
                         let requant = Requant {
                             right_shift: shift,
-                            range: quant_min_output as usize,
+                            range: quant_min_output.abs() as usize,
                             after_range: 1 << *quantization::BIT_LEN,
                         };
                         vec![Layer::Dense(quantized_dense), Layer::Requant(requant)]
@@ -268,7 +267,7 @@ impl ScalingStrategy for AbsoluteMax {
                         println!("Scaling: AbsoluteMax: CONV max_weight {:?}, max_output: {:?} - adding requant", max_weight, max_output);
                         let requant = Requant {
                             right_shift: shift,
-                            range: quant_min_output as usize,
+                            range: quant_min_output.abs() as usize,
                             after_range: 1 << *quantization::BIT_LEN,
                         };
                         vec![Layer::Convolution(quantized_conv), Layer::Requant(requant)]

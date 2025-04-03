@@ -146,6 +146,8 @@ impl<T: Number> Convolution<T> {
                 std::iter::repeat(x_max).take(input_n).collect(),
             );
             let max_outputt = max_input_tensor.conv2d(&self.filter, &self.bias, 1);
+            println!("CONV: min_min_outputt {:?}, min_max_outputt {:?}", min_outputt.min_value(), min_outputt.max_value());
+            println!("CONV: max_min_outputt {:?}, max_max_outputt {:?}", max_outputt.min_value(), max_outputt.max_value());
             // take the smallest and highest value from both runs
             let min_output = min_outputt.min_value().cmp_min(&max_outputt.min_value());
             let max_output = min_outputt.max_value().cmp_max(&max_outputt.max_value());
