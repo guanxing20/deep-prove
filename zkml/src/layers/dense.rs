@@ -15,7 +15,7 @@ use multilinear_extensions::{
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sumcheck::structs::{IOPProof, IOPProverState, IOPVerifierState};
-use tracing::trace;
+use tracing::{trace, warn};
 use transcript::Transcript;
 
 use crate::{Element, tensor::Tensor};
@@ -70,7 +70,10 @@ impl<T: Number> Dense<T> {
     pub fn op(&self, input: &Tensor<T>) -> Tensor<T> {
         if input.get_shape().len() != 1 {
             let flat_input = input.flatten();
-            self.matrix.matvec(&flat_input).add(&self.bias)
+            println!("DENSE flat_input shape: {:?}", flat_input.get_shape());
+            println!("DENSE matrix shape: {:?}", self.matrix.get_shape());
+            let matvec = self.matrix.matvec(&flat_input);
+            matvec.add(&self.bias)
         } else {
             self.matrix.matvec(input).add(&self.bias)
         }
@@ -101,6 +104,12 @@ impl Dense<f32> {
 
     /// TODO: compute two different scaling factors for weights and bias
     pub fn max_abs_weight(&self) -> f32 {
+        let max_weight = self.matrix.max_abs_output();
+        let max_bias = self.bias.max_abs_output();
+        let distance = (max_weight - max_bias).abs() / max_weight;
+        if distance > 0.1 {
+            warn!("max_abs_weight DENSE: distance between max_weight and max_bias is too large: {:.2}%", distance * 100.0);
+        }
         self.matrix.max_abs_output().max(self.bias.max_abs_output())
     }
 }

@@ -181,6 +181,7 @@ class Net(nn.Module):
         # Default values
         c1, c2 = 6, 16
         fc1, fc2, fc3 = 120, 84, 10
+        use_bias = True
         
         if target_params:
             # Adjust parameters iteratively to fit within target
@@ -192,12 +193,12 @@ class Net(nn.Module):
             final_params = estimate_params(c1, c2, fc1, fc2, fc3)
             assert abs(final_params - target_params) / target_params <= 0.05, "Final params exceed 5% tolerance"
         
-        self.conv1 = nn.Conv2d(3, c1, 5)
+        self.conv1 = nn.Conv2d(3, c1, 5,bias=use_bias)
         self.pool = nn.MaxPool2d(2, 2)
-        self.conv2 = nn.Conv2d(c1, c2, 5)
-        self.fc1 = nn.Linear(c2 * 5 * 5, fc1)
-        self.fc2 = nn.Linear(fc1, fc2)
-        self.fc3 = nn.Linear(fc2, fc3)
+        self.conv2 = nn.Conv2d(c1, c2, 5,bias=use_bias)
+        self.fc1 = nn.Linear(c2 * 5 * 5, fc1,bias=use_bias)
+        self.fc2 = nn.Linear(fc1, fc2,bias=use_bias)
+        self.fc3 = nn.Linear(fc2, fc3, bias=use_bias)
     
     def forward(self, x):
         x = self.pool(F.relu(self.conv1(x)))

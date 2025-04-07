@@ -36,7 +36,7 @@ enum RequantResult {
 /// Information about a requantization step:
 /// * what is the range of the input data
 /// * what should be the shift to get back data in range within QuantInteger range
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Copy, PartialOrd, Ord, Hash)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Copy, PartialOrd)]
 pub struct Requant {
     // what is the shift that needs to be applied to requantize input number to the correct range of QuantInteger.
     pub right_shift: usize,
@@ -48,6 +48,8 @@ pub struct Requant {
     pub range: usize,
     /// The range we want the values to be in post requantizing
     pub after_range: usize,
+    /// TEST
+    pub multiplier: f32,
 }
 
 /// Info related to the lookup protocol necessary to requantize
@@ -70,14 +72,16 @@ where
     pub(crate) lookup: LogUpProof<E>,
 }
 impl Requant {
-    pub fn new(min_value: usize, right_shift: usize) -> Self {
-        Self {
-            right_shift,
-            range: min_value,
-            after_range: *quantization::RANGE as usize,
-        }
-    }
+    //pub fn new(min_value: usize, right_shift: usize) -> Self {
+    //    Self {
+    //        right_shift,
+    //        range: min_value,
+    //        after_range: *quantization::RANGE as usize,
+    //        multiplier: 1.0,
+    //    }
+    //}
     pub fn op(&self, input: &crate::tensor::Tensor<Element>) -> crate::tensor::Tensor<Element> {
+
         //println!(
         //    "BEFORE REQUANT: {:?}",
         //    &input.get_data().iter().take(30).collect_vec()
@@ -93,13 +97,14 @@ impl Requant {
         let d = Data::new(res.iter().map(|e| *e as f64).collect_vec());
         let stats = (d.mean().unwrap(),d.variance().unwrap());
         println!(
-            "AFTER REQUANT: shift {} : {:.2} % OUT OF RANGE (over total {})-> stats mean {:?} var {:?} -> {:?}",
+            "AFTER REQUANT: shift {} : {:.2} % OUT OF RANGE (over total {})-> stats mean {:?} var {:?} \n\t->{:?}\n\t->{:?}",
             self.right_shift,
             not_ok_count as f32 / res.len() as f32 * 100.0,
             res.len(),
             stats.0,
             stats.1,
-            &input.get_data().iter().zip(res.iter()).take(10).map(|(a,b)| (a,b)).collect_vec()
+            &input.get_data()[..10.min(input.get_data().len())],
+            &res[..10.min(res.len())],
         );
         crate::tensor::Tensor::<Element>::new(input.get_shape(), res)
     }
@@ -138,6 +143,12 @@ impl Requant {
     /// target bit width while preserving the relative magnitudes.
     #[inline(always)]
     pub fn apply(&self, e: &Element) -> RequantResult {
+        let res = (*e as f64 * self.multiplier as f64).round() as Element;
+        if !(res >= *quantization::MIN && res <= *quantization::MAX) {
+            return RequantResult::OutOfRange(res.clamp(*quantization::MIN, *quantization::MAX));
+        } else {
+            return RequantResult::Ok(res);
+        }
         let max_bit = (self.range << 1) as Element;
         let tmp = e + max_bit;
         assert!(

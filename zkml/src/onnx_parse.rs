@@ -350,16 +350,19 @@ pub fn load_float_model(filepath: &str) -> Result<Model<f32>> {
         let key = item.name.to_string();
         initializers.insert(key, value);
     }
-
+    println!("Initializers: TENSOR NAMES: {:?}", initializers.keys().collect_vec());
     let mut layers: Vec<Layer<f32>> = Vec::with_capacity(graph.node.len());
     // we need to keep track of the last shape because when we pad to next power of two one layer, we need to make sure
     // the next layer's expected input matches.
     info!("load_model:BEFORE loop of graph nodes extraction");
     for (i, node) in graph.node.iter().enumerate() {
+        println!("NODE: {:?}", node.op_type.as_str());
         match node.op_type.as_str() {
             op if LINEAR_ALG.contains(&op) => {
                 let WeightBiasInfo { mut weights, bias } =
                     fetch_weight_and_bias(node, &initializers)?;
+                println!("DENSE weights shape: {:?}", weights.get_shape());
+                println!("DENSE MATRIX: {:?}", weights.get_data());
                 ensure!(bias.get_shape().len() == 1, "bias is not a vector");
                 input_shape_og = vec![weights.get_shape()[0]];
                 let nrows = weights.get_shape()[0];
@@ -369,6 +372,7 @@ pub fn load_float_model(filepath: &str) -> Result<Model<f32>> {
                     bias.get_data().len(),
                     nrows
                 );
+                ensure!(bias.get_shape()[0] == nrows, "bias length {} does not match matrix width {}", bias.get_shape()[0], nrows);
                 //assert!(input_shape_padded.iter().all(|d| d.is_power_of_two()));
                 //assert!(input_shape_padded.len() == 1);
 
@@ -537,16 +541,24 @@ fn extract_tensor_f32_data(
     initializers: &HashMap<String, Tensor>,
 ) -> Result<Option<(Vec<f32>, Vec<usize>)>> {
     ensure!(weight_or_bias == "weight" || weight_or_bias == "bias");
+    let selector = match weight_or_bias {
+        "weight" => vec!["weight","MatMul"],
+        "bias" => vec!["bias"],
+        _ => bail!("Invalid weight_or_bias: {}", weight_or_bias),
+    };
+    let is_good_selector = |name: &str| -> bool {
+        selector.iter().any(|s| name.contains(s))
+    };
 
     // Handle multipliers (alpha/beta) from Gemm operations
     let mut alpha_or_beta: f32 = 1.0;
-    if node.op_type == "Gemm" {
+    if node.op_type == "Gemm" || node.op_type == "MatMul" {
         let result = node
             .attribute
             .iter()
             .filter(|x| {
                 x.name.contains(match weight_or_bias {
-                    "weight" => "alpha",
+                    "weight" | "MatMul" => "alpha",
                     _ => "beta",
                 })
             })
@@ -562,9 +574,13 @@ fn extract_tensor_f32_data(
     let tensor_vec = node
         .input
         .iter()
-        .filter(|x| x.contains(weight_or_bias))
+        .filter(|x| is_good_selector(x))
         .filter_map(|key| initializers.get(key).cloned())
         .collect_vec();
+
+    println!("node input: {:?} - match {:?}-> tensor_vec len() {:?}", 
+            node.input, 
+            node.input.iter().map(|name| initializers.get(name)).collect::<Vec<_>>(),tensor_vec.len());
 
     // If no matching tensor found, return None
     if tensor_vec.is_empty() {
@@ -573,14 +589,32 @@ fn extract_tensor_f32_data(
 
     // Get the tensor data
     let tensor_t = &tensor_vec[0];
-    let tensor_shape = tensor_t.shape().to_vec();
+    let mut tensor_shape = tensor_t.shape().to_vec();
+    let mut tensor_data = tensor_t.as_slice::<f32>().unwrap().to_vec();
+
+    if node.op_type == "MatMul" && weight_or_bias == "weight" {
+        tensor_shape.reverse();
+        let (m, n) = (tensor_shape[0], tensor_shape[1]);
+        let mut transposed_data = vec![0.0; tensor_data.len()];
+        
+        // Transpose the data matrix
+        for i in 0..m {
+            for j in 0..n {
+                transposed_data[i * n + j] = tensor_data[j * m + i];
+            }
+        }
+        tensor_data = transposed_data;
+    }
     // Apply alpha/beta multiplier
-    let tensor_t_f32 = tensor_t
-        .as_slice::<f32>()
-        .unwrap()
-        .into_iter()
-        .map(|x| x * alpha_or_beta)
-        .collect_vec();
+   // let tensor_t_f32 = tensor_t
+   //     .as_slice::<f32>()
+   //     .unwrap()
+   //     .into_iter()
+   //     .map(|x| x * alpha_or_beta)
+   //     .collect_vec();
+    // Apply alpha/beta multiplier
+    let tensor_t_f32 = tensor_data.into_iter().map(|x| x * alpha_or_beta).collect();
+
 
     Ok(Some((tensor_t_f32, tensor_shape)))
 }
@@ -601,7 +635,10 @@ fn fetch_weight_and_bias(
     };
     let (bias, bias_shape) = match extract_tensor_f32_data("bias", node, initializers)? {
         Some(data) => data,
-        None => bail!("No bias tensor found for node {}", node.name),
+        None => {
+            warn!("No bias tensor found for node {}", node.name);
+            (vec![0.0; shape[0]],vec![shape[0]])
+        }
     };
 
     let weights = crate::Tensor::new(shape, data);

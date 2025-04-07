@@ -37,57 +37,55 @@ pub const MAX_FLOAT: f32 = 1.0;
 /// S = (a - (-a)) / (2^{BIT_LEN-1}- (-2^{BIT_LEN-1})) = 2a / 2^BIT_LEN
 #[derive(Debug, Clone, From, Copy, Serialize, Deserialize)]
 pub struct ScalingFactor {
-    abs_max: f32,
+    min: f32,
+    max: f32,
 }
 
 impl ScalingFactor {
-    pub fn new(abs_max: f32) -> Self {
-        Self { abs_max }
+    pub fn from_absolute_max(abs_max: f32) -> Self {
+        Self { min: -(abs_max.abs()), max: abs_max.abs() }
     }
     pub fn from_tensor<T: MinMax>(t: &Tensor<T>) -> Self {
         let max_abs = t
             .get_data()
             .iter()
             .fold(T::zero(), |a, b| a.cmp_max(b.absolute_value()));
-        Self {
-            abs_max: max_abs.to_f32(),
-        }
+        Self::from_absolute_max(max_abs.to_f32())
     }
 
     pub fn from_span(min: f32, max: f32) -> Self {
-        let abs_max = min.abs().max(max.abs());
-        Self { abs_max }
+        Self {
+            min: min,
+            max: max
+        }
     }
 
     pub fn min(&self) -> f32 {
-        -self.abs_max
+        self.min
     }
 
     pub fn max(&self) -> f32 {
-        self.abs_max
+        self.max
     }
 
-    fn scale(&self) -> f32 {
-        (self.abs_max - (-self.abs_max)) / (*MAX - *MIN) as f32
+    pub fn scale(&self) -> f32 {
+        (self.max - (-self.min)) / (*MAX - *MIN) as f32
     }
+    /// M = S1 * S2 / S3
+    pub fn m(&self, s2: &Self, s3: &Self) -> f32 {
+        self.scale() * s2.scale() / s3.scale()
+    }
+
 
     /// Derives the right shift to apply to values to requantize them
-    /// S_i = (a_i - b_i) / 2^Q = 2^k_i / 2^Q
-    /// So S1 * S2 / S3 = 2^k1 * 2^k2 * 2^Q / [2^k3 * 2^Q * 2^Q]
-    ///                 = 2^(k1 + k2 - k3 - Q)
-    ///                 = 2^{-n} where n = k3 + Q - k1 - k2
+    /// M = S1 * S2 / S3 = 2^-n * eps
     /// n is the number of bits to shift right
     pub fn shift(&self, s2: &Self, s3: &Self) -> usize {
-        let full = self.scale() * s2.scale() / s3.scale();
-        assert!(
-            full >= 0.0 && full <= 1.0,
-            "Full is not in the range [0, 1]. This should not happen."
-        );
-        let exp = (-full.log2()).ceil() as usize;
-        exp
+        (-self.m(s2, s3).log2()).ceil() as usize
     }
 
     /// Take a floating point number and quantize it to an BIT_LEN-bit integer
+    /// S = (a - (-a)) / (2^{BIT_LEN-1}- (-2^{BIT_LEN-1})) = 2a / 2^BIT_LEN
     pub fn quantize(&self, value: &f32) -> Element {
         // assert!(
         //    *value >= -1.0 && *value <= 1.0,
@@ -104,7 +102,10 @@ impl ScalingFactor {
 
 impl Default for ScalingFactor {
     fn default() -> Self {
-        Self::from_span(-1.0, 1.0)
+        Self {
+            min: -1.0, 
+            max: 1.0
+        }
     }
 }
 

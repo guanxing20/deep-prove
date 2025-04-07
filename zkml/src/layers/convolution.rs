@@ -12,7 +12,7 @@ use multilinear_extensions::{
 use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sumcheck::structs::{IOPProof, IOPProverState, IOPVerifierState};
-use tracing::instrument;
+use tracing::{instrument, warn};
 use tract_onnx::tract_core::ops::matmul::quant;
 use transcript::Transcript;
 
@@ -149,6 +149,12 @@ impl Convolution<f32> {
     }
 
     pub fn max_abs_weight(&self) -> f32 {
+        let max_weight = self.filter.max_abs_output();
+        let max_bias = self.bias.max_abs_output();
+        let distance = (max_weight - max_bias).abs() / max_weight;
+        if distance > 0.1 {
+            warn!("max_abs_weight CONV: distance between max_weight and max_bias is too large: {:.2}%", distance * 100.0);
+        }
         self.filter.max_abs_output().max(self.bias.max_abs_output())
     }
 
