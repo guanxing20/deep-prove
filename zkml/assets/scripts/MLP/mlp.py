@@ -309,59 +309,60 @@ if args.distribution:
 
 # Replace the DataLoader and evaluation sections with:
 
-def evaluate(model, criterion, data_loader):
+def evaluate_accuracy(model, test_X, test_y, num_samples):
     model.eval()
     correct = 0
     total = 0
+    # Limit num_samples to the actual size of test data
+    num_samples = min(num_samples, len(test_X))
     with torch.no_grad():
-        for data in data_loader:
-            images, labels = data
-            outputs = model(images)
-            _, predicted = torch.max(outputs.data, 1)
-            total += labels.size(0)
-            correct += (predicted == labels).sum().item()
+        for i in range(num_samples):
+            x = test_X[i]
+            true_label = test_y[i].item()
+            output = model(x.unsqueeze(0)).squeeze(0)
+            predicted = torch.argmax(output).item()
+            if predicted == true_label:
+                correct += 1
+            total += 1
     return 100 * correct / total
 
-# Create test loader
-test_loader = torch.utils.data.DataLoader(
-    list(zip(test_X, test_y)), shuffle=False)
-
-print("\n🔍 Starting quantization process...")
-model.eval()
-
-# Quantization configuration
-from torch.ao.quantization import MinMaxObserver
-myconfig = torch.ao.quantization.qconfig.QConfig(
-    activation=MinMaxObserver.with_args(dtype=torch.quint8, qscheme=torch.per_tensor_symmetric),
-    weight=MinMaxObserver.with_args(dtype=torch.qint8, qscheme=torch.per_tensor_symmetric))
-model.qconfig = myconfig
-print("📊 Quantization config:", model.qconfig)
-
-# Prepare and calibrate
-torch.ao.quantization.prepare(model, inplace=True)
-print("Post Training Quantization Prepare: Inserting Observers")
-
-# Calibrate
-evaluate(model, loss_fn, test_loader)
-print("Post Training Quantization: Calibration done")
-print(model)  # This will print the model with observers and their collected statistics
-
-# Convert to quantized model
-torch.ao.quantization.convert(model, inplace=True)
-
-# Print quantization parameters
-print("\nQuantized model parameters:")
-for name, module in model.named_modules():
-    if isinstance(module, torch.ao.nn.quantized.Linear):
-        print(f"\n{name}:")
-        print(f"  Weight Scale: {module.weight().q_scale():.6f}")
-        print(f"  Weight Zero point: {module.weight().q_zero_point()}")
-        print(f"  Output Scale: {module.scale:.6f}")
-        print(f"  Output Zero point: {module.zero_point}")
-
-# Evaluate quantized model
-print(f"\nEvaluation accuracy on {args.num_samples} samples: ", end='')
-eval_loader = torch.utils.data.DataLoader(
-    list(zip(test_X[:args.num_samples], test_y[:args.num_samples])), shuffle=False)
-accuracy = evaluate(model, loss_fn, eval_loader)
+# Replace the final evaluation with:
+actual_samples = min(args.num_samples, len(test_X))
+print(f"\nEvaluation accuracy on {actual_samples} samples: ", end='')
+accuracy = evaluate_accuracy(model, test_X, test_y, actual_samples)
 print(f"{accuracy:.2f}%")
+
+# Add after the accuracy evaluation
+
+# Verify accuracy consistency with JSON output
+print("\nVerifying accuracy consistency...")
+try:
+    with open(data_path, 'r') as f:
+        json_data = json.load(f)
+    
+    json_correct = 0
+    json_total = 0
+    
+    for truth, pred in zip(json_data['output_data'], json_data['pytorch_output']):
+        # Get predicted class from model output
+        pred_class = max(range(len(pred)), key=lambda i: pred[i])
+        # Get true class from one-hot encoded truth
+        true_class = truth.index(1.0)
+        
+        if pred_class == true_class:
+            json_correct += 1
+        json_total += 1
+        print(f"Run {json_total}: {pred_class == true_class}\n\t truth {truth}\n\t pytorch {pred}")
+    
+    json_accuracy = 100 * json_correct / json_total
+    
+    print(f"Accuracy from JSON file: {json_accuracy:.2f}%")
+    
+    # Compare rounded accuracies
+    if round(json_accuracy) != round(accuracy):
+        print(f"⚠️  WARNING: Accuracy mismatch!")
+        print(f"    Direct evaluation: {round(accuracy)}%")
+        print(f"    JSON file evaluation: {round(json_accuracy)}%")
+        print(f"    This suggests an inconsistency in the evaluation process.")
+except Exception as e:
+    print(f"Error verifying accuracy consistency: {e}")

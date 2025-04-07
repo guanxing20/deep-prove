@@ -126,10 +126,11 @@ impl InputJSON {
         {
             let accuracy = argmax_compare(expected, pytorch_out);
             accuracies.push(accuracy);
-            info!(
-                "PyTorch Run {}/{}: Accuracy: {}",
+            println!(
+                "PyTorch Run {}/{}: \n\t truth {:?} \n\t pytorch {:?}\n\t-> Accuracy: {}",
                 i + 1,
                 self.output_data.len(),
+                expected, pytorch_out,
                 if accuracy > 0 { "correct" } else { "incorrect" }
             );
         }
@@ -294,7 +295,6 @@ fn argmax_compare<A: PartialOrd, B: PartialOrd>(
     let compare_size = std::cmp::min(given_output.len(), computed_output.len());
     let a_max = argmax(&given_output[..compare_size]);
     let b_max = argmax(&computed_output[..compare_size]);
-    info!("Accuracy: {}", if a_max == b_max { 1 } else { 0 });
     if a_max == b_max { 1 } else { 0 }
 }
 

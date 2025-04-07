@@ -122,10 +122,22 @@ impl<T: Transcript<E>, E: ExtensionField> VectorTranscript<E> for T {
 }
 
 pub fn argmax<T: PartialOrd>(v: &[T]) -> Option<usize> {
-    v.iter()
-        .enumerate()
-        .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap()) // Unwrap is safe if T implements PartialOrd properly
-        .map(|(idx, _)| idx)
+    if v.is_empty() {
+        return None;
+    }
+    
+    let mut max_index = 0;
+    let mut max_value = &v[0];
+    
+    for (i, value) in v.iter().enumerate().skip(1) {
+        // Only update if strictly greater, ensuring we take the first maximum in ties
+        if value > max_value {
+            max_index = i;
+            max_value = value;
+        }
+    }
+    
+    Some(max_index)
 }
 
 #[cfg(test)]
