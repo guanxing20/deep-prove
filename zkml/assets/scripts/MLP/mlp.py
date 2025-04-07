@@ -16,6 +16,11 @@ from sklearn.preprocessing import MinMaxScaler, StandardScaler
 import argparse
 from pathlib import Path
 import torch.optim as optim
+from torch.ao.quantization import QuantStub, DeQuantStub
+import math  # Add to imports at top
+
+print(torch.backends.quantized.supported_engines)
+torch.backends.quantized.engine = 'qnnpack'
 
 parser = argparse.ArgumentParser(description="mlp generator --num-dense and --layer-width")
 parser.add_argument("--num-dense", type=int, required=True, help="Number of dense layers")
@@ -23,6 +28,7 @@ parser.add_argument("--layer-width", type=int, required=True, help="Width of eac
 parser.add_argument("--export", type=Path, default=Path('bench'), help="Directory to export the model to (default: bench)")
 parser.add_argument("--num-samples", type=int, default=100, help="Number of test samples to export")
 parser.add_argument("--distribution", action="store_true", help="Show distribution of model weights")
+parser.add_argument("--no-relu", action="store_true", help="Disable ReLU activation functions")
 
 args = parser.parse_args()
 print(f"num_dense: {args.num_dense}, layer_width: {args.layer_width}")
@@ -41,25 +47,38 @@ print("Loaded iris data")
 
 
 class MLP(nn.Module):
-    def __init__(self, num_dense, layer_width):
+    def __init__(self, num_dense, layer_width, quantize=False, use_relu=True):
         super(MLP, self).__init__()
+        self.quantize = quantize
+        self.use_relu = use_relu
+        if quantize:
+            self.quant = QuantStub()
+            self.dequant = DeQuantStub()
+        
         layers = []
         input_size = 4  # Assuming input size is 4 for the Iris dataset
         for _ in range(num_dense):
             layers.append(nn.Linear(input_size, layer_width, bias=True))
-            layers.append(nn.ReLU())
+            if use_relu:
+                layers.append(nn.ReLU())
             input_size = layer_width
         layers.append(nn.Linear(layer_width, 3, bias=True))  # Assuming 3 output classes
-        layers.append(nn.ReLU())
+        if use_relu:
+            layers.append(nn.ReLU())
         self.layers = nn.ModuleList(layers)
 
     def forward(self, x):
+        if self.quantize:
+            x = self.quant(x)
         for layer in self.layers:
             x = layer(x)
+        if self.quantize:
+            x = self.dequant(x)
         return x
 
-# Create model
-model = MLP(num_dense=args.num_dense, layer_width=args.layer_width)
+# Modify the model creation line to enable quantization
+model = MLP(num_dense=args.num_dense, layer_width=args.layer_width, 
+           quantize=True, use_relu=False)
 
 # Extract input features
 X = dataset[dataset.columns[0:4]].values
@@ -287,3 +306,62 @@ if args.distribution:
     print("Generating weight distribution plot...")
     plot_weight_distribution(model, test_X)
     print("Weight distribution plot saved as 'weight_distribution.png'")
+
+# Replace the DataLoader and evaluation sections with:
+
+def evaluate(model, criterion, data_loader):
+    model.eval()
+    correct = 0
+    total = 0
+    with torch.no_grad():
+        for data in data_loader:
+            images, labels = data
+            outputs = model(images)
+            _, predicted = torch.max(outputs.data, 1)
+            total += labels.size(0)
+            correct += (predicted == labels).sum().item()
+    return 100 * correct / total
+
+# Create test loader
+test_loader = torch.utils.data.DataLoader(
+    list(zip(test_X, test_y)), shuffle=False)
+
+print("\n🔍 Starting quantization process...")
+model.eval()
+
+# Quantization configuration
+from torch.ao.quantization import MinMaxObserver
+myconfig = torch.ao.quantization.qconfig.QConfig(
+    activation=MinMaxObserver.with_args(dtype=torch.quint8, qscheme=torch.per_tensor_symmetric),
+    weight=MinMaxObserver.with_args(dtype=torch.qint8, qscheme=torch.per_tensor_symmetric))
+model.qconfig = myconfig
+print("📊 Quantization config:", model.qconfig)
+
+# Prepare and calibrate
+torch.ao.quantization.prepare(model, inplace=True)
+print("Post Training Quantization Prepare: Inserting Observers")
+
+# Calibrate
+evaluate(model, loss_fn, test_loader)
+print("Post Training Quantization: Calibration done")
+print(model)  # This will print the model with observers and their collected statistics
+
+# Convert to quantized model
+torch.ao.quantization.convert(model, inplace=True)
+
+# Print quantization parameters
+print("\nQuantized model parameters:")
+for name, module in model.named_modules():
+    if isinstance(module, torch.ao.nn.quantized.Linear):
+        print(f"\n{name}:")
+        print(f"  Weight Scale: {module.weight().q_scale():.6f}")
+        print(f"  Weight Zero point: {module.weight().q_zero_point()}")
+        print(f"  Output Scale: {module.scale:.6f}")
+        print(f"  Output Zero point: {module.zero_point}")
+
+# Evaluate quantized model
+print(f"\nEvaluation accuracy on {args.num_samples} samples: ", end='')
+eval_loader = torch.utils.data.DataLoader(
+    list(zip(test_X[:args.num_samples], test_y[:args.num_samples])), shuffle=False)
+accuracy = evaluate(model, loss_fn, eval_loader)
+print(f"{accuracy:.2f}%")

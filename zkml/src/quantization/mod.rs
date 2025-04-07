@@ -69,7 +69,7 @@ impl ScalingFactor {
     }
 
     pub fn scale(&self) -> f32 {
-        (self.max - (-self.min)) / (*MAX - *MIN) as f32
+        (self.max - self.min) / (*MAX - *MIN) as f32
     }
     /// M = S1 * S2 / S3
     pub fn m(&self, s2: &Self, s3: &Self) -> f32 {

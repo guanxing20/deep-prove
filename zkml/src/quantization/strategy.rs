@@ -8,7 +8,7 @@ use crate::{
     quantization,
 };
 use anyhow::{Result, bail, ensure};
-use statrs::statistics::{Data, Distribution, OrderStatistics};
+use statrs::statistics::{Data, Distribution, Max, Min, OrderStatistics};
 use tracing::{debug, info, warn};
 use tract_onnx::tract_core::ops::matmul::quant;
 
@@ -87,10 +87,10 @@ impl ScalingStrategy for InferenceObserver {
                         let model_scaling = ScalingFactor::from_absolute_max(dense.max_abs_weight());
                         let (min, max) = tracker.distribution_info(id);
                         let output_scaling = ScalingFactor::from_absolute_max(min.abs().max(max.abs()));
-                        let scale = last_input_scaling.scale() * model_scaling.scale() / output_scaling.scale();
+                        let scale = last_input_scaling.m(&model_scaling, &output_scaling);
                         println!("InferenceObserver: DENSE {} layer model max weight abs {:?}", id, dense.max_abs_weight());
                         println!("InferenceObserver: DENSE {} layer output range [{:?}, {:?}]", id, min,max);
-                        println!("InferenceObserver: DENSE {} layer scales:  input {}, model {}, output {} -> scale {}", id, last_input_scaling.scale(), model_scaling.scale(), output_scaling.scale(), scale);
+                        println!("InferenceObserver: DENSE {} layer scales: input {:?}, model {:?}, output {:?} -> scale {:?}", id, last_input_scaling.scale(), model_scaling.scale(), output_scaling.scale(), scale);
                         let shift = last_input_scaling.shift(&model_scaling, &output_scaling);
                         let quantized_dense = dense.quantize(&model_scaling);
                         let (quantized_min, _quantized_max) =
@@ -112,7 +112,7 @@ impl ScalingStrategy for InferenceObserver {
                         let scale = last_input_scaling.scale() * model_scaling.scale() / output_scaling.scale();
                         println!("InferenceObserver: CONV {} layer model max weight abs {:?}", id, conv.max_abs_weight());
                         println!("InferenceObserver: CONV {} layer output range [{:?}, {:?}]", id, min,max);
-                        println!("InferenceObserver: CONV {} layer scales:  input {:.2}, model {:.2}, output {:.2} -> scale {:.2}", id, last_input_scaling.scale(), model_scaling.scale(), output_scaling.scale(), scale);
+                        println!("InferenceObserver: CONV {} layer scales: input {:?}, model {:?}, output {:?} -> scale {:?}", id, last_input_scaling.scale(), model_scaling.scale(), output_scaling.scale(), scale);
                         let quantized_conv = conv.quantize(&model_scaling);
                         let shift = last_input_scaling.shift(&model_scaling, &output_scaling);
                         let (quantized_min, _quantized_max) =
@@ -205,12 +205,12 @@ impl InferenceTracker {
         let min = d.percentile(5) as f32;
         let max = d.percentile(95) as f32;
         assert!(min <= max);
-        (min, max)
+        //(min, max)
+        (d.min() as f32, d.max() as f32)
         //let mean = d.mean().unwrap();
         //let std_dev = d.std_dev().unwrap();
         //let upper_bound = mean + 3.0 * std_dev;
         //let lower_bound = mean - 3.0 * std_dev;
-        ////(min, max)
         //(lower_bound as f32, upper_bound as f32)
     }
 }
