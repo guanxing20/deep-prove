@@ -78,7 +78,7 @@ class MLP(nn.Module):
 
 # Modify the model creation line to enable quantization
 model = MLP(num_dense=args.num_dense, layer_width=args.layer_width, 
-           quantize=True, use_relu=False)
+           quantize=True, use_relu=True)
 
 # Extract input features
 X = dataset[dataset.columns[0:4]].values

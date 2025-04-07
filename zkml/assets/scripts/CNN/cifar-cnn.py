@@ -684,6 +684,21 @@ torch.ao.quantization.convert(net, inplace=True)
 # modules may not be calibrated.
 print('Post Training Quantization: Convert done', net)
 
+print("\nQuantized model parameters:")
+for name, module in net.named_modules():
+    if isinstance(module, torch.ao.nn.quantized.Conv2d):
+        print(f"\n{name}:")
+        print(f"  Weight Scale: {module.weight().q_scale():.6f}")
+        print(f"  Weight Zero point: {module.weight().q_zero_point()}")
+        print(f"  Output Scale: {module.scale:.6f}")
+        print(f"  Output Zero point: {module.zero_point}")
+    elif isinstance(module, torch.ao.nn.quantized.Linear):
+        print(f"\n{name}:")
+        print(f"  Weight Scale: {module.weight().q_scale():.6f}")
+        print(f"  Weight Zero point: {module.weight().q_zero_point()}")
+        print(f"  Output Scale: {module.scale:.6f}")
+        print(f"  Output Zero point: {module.zero_point}")
+
 num_eval_batches = 1000
 top1, top5 = evaluate(net, criterion, testloader, neval_batches=num_eval_batches)
 print('Evaluation accuracy on %d images, %2.2f'%(num_eval_batches, top1.avg))
