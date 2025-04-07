@@ -67,7 +67,8 @@ import os
 import json
 import argparse
 from pathlib import Path
-
+print(torch.backends.quantized.supported_engines)
+torch.backends.quantized.engine = 'qnnpack'
 # Add argument parser similar to mlp.py
 parser = argparse.ArgumentParser(description="CIFAR10 CNN with ONNX export")
 parser.add_argument("--export", type=Path, default=Path('bench'), 
@@ -165,6 +166,7 @@ print(' '.join(f'{classes[labels[j]]:5s}' for j in range(batch_size)))
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.ao.quantization import QuantStub, DeQuantStub
 
 def estimate_params(c1, c2, fc1, fc2, fc3):
     conv1_params = (3 * 5 * 5 + 1) * c1
@@ -195,18 +197,23 @@ class Net(nn.Module):
         
         self.conv1 = nn.Conv2d(3, c1, 5,bias=use_bias)
         self.pool = nn.MaxPool2d(2, 2)
-        self.conv2 = nn.Conv2d(c1, c2, 5,bias=use_bias)
-        self.fc1 = nn.Linear(c2 * 5 * 5, fc1,bias=use_bias)
-        self.fc2 = nn.Linear(fc1, fc2,bias=use_bias)
-        self.fc3 = nn.Linear(fc2, fc3, bias=use_bias)
+        self.conv2 = nn.Conv2d(c1, c2, 5)
+        self.fc1 = nn.Linear(c2 * 5 * 5, fc1)
+        self.fc2 = nn.Linear(fc1, fc2)
+        self.fc3 = nn.Linear(fc2, fc3)
+        self.quant = QuantStub()
+        self.dequant = DeQuantStub()
     
     def forward(self, x):
+        x = self.quant(x)
         x = self.pool(F.relu(self.conv1(x)))
         x = self.pool(F.relu(self.conv2(x)))
         x = torch.flatten(x, 1)
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
         x = self.fc3(x)
+        x = self.dequant(x)
+
         return x
 
 
@@ -362,21 +369,24 @@ print('Predicted: ', ' '.join(f'{classes[predicted[j]]:5s}'
 #
 # Let us look at how the network performs on the whole dataset.
 
-correct = 0
-total = 0
-# since we're not training, we don't need to calculate the gradients for our outputs
-with torch.no_grad():
-    for data in testloader:
-        images, labels = data
-        # calculate outputs by running images through the network
-        outputs = net(images)
-        # the class with the highest energy is what we choose as prediction
-        _, predicted = torch.max(outputs, 1)
-        total += labels.size(0)
-        correct += (predicted == labels).sum().item()
+def compute_accuracy(model, data_loader):
+    correct = 0
+    total = 0
+    # since we're not training, we don't need to calculate the gradients for our outputs
+    with torch.no_grad():
+        for data in data_loader:
+            images, labels = data
+            # calculate outputs by running images through the network
+            outputs = model(images)
+            # the class with the highest energy is what we choose as prediction
+            _, predicted = torch.max(outputs, 1)
+            total += labels.size(0)
+            correct += (predicted == labels).sum().item()
 
-print(
-    f'Accuracy of the network on the 10000 test images: {100 * correct // total} %')
+    print(
+        f'Accuracy of the network on the 10000 test images: {100 * correct // total} %')
+
+compute_accuracy(net, testloader)
 
 ########################################################################
 # That looks way better than chance, which is 10% accuracy (randomly picking
@@ -581,3 +591,100 @@ if args.distribution:
     print("Generating weight distribution plot...")
     plot_weight_distribution(net)
     print("Weight distribution plot saved as 'weight_distribution.png'")
+
+## calibration and quantization
+
+class AverageMeter(object):
+    """Computes and stores the average and current value"""
+    def __init__(self, name, fmt=':f'):
+        self.name = name
+        self.fmt = fmt
+        self.reset()
+
+    def reset(self):
+        self.val = 0
+        self.avg = 0
+        self.sum = 0
+        self.count = 0
+
+    def update(self, val, n=1):
+        self.val = val
+        self.sum += val * n
+        self.count += n
+        self.avg = self.sum / self.count
+
+    def __str__(self):
+        fmtstr = '{name} {val' + self.fmt + '} ({avg' + self.fmt + '})'
+        return fmtstr.format(**self.__dict__)
+
+
+def topk_accuracy(output, target, topk=(1,)):
+    """Computes the accuracy over the k top predictions for the specified values of k"""
+    with torch.no_grad():
+        maxk = max(topk)
+        batch_size = target.size(0)
+
+        _, pred = output.topk(maxk, 1, True, True)
+        pred = pred.t()
+        correct = pred.eq(target.view(1, -1).expand_as(pred))
+
+        res = []
+        for k in topk:
+            correct_k = correct[:k].reshape(-1).float().sum(0, keepdim=True)
+            res.append(correct_k.mul_(100.0 / batch_size))
+        return res
+
+
+def evaluate(model, criterion, data_loader, neval_batches):
+    model.eval()
+    top1 = AverageMeter('Acc@1', ':6.2f')
+    top5 = AverageMeter('Acc@5', ':6.2f')
+    cnt = 0
+    with torch.no_grad():
+        for image, target in data_loader:
+            output = model(image)
+            loss = criterion(output, target)
+            cnt += 1
+            acc1, acc5 = topk_accuracy(output, target, topk=(1, 5))
+            print('.', end = '')
+            top1.update(acc1[0], image.size(0))
+            top5.update(acc5[0], image.size(0))
+            if cnt >= neval_batches:
+                 return top1, top5
+
+    return top1, top5
+
+num_calibration_batches = 32
+
+net.eval()
+
+
+# Specify quantization configuration
+# Start with simple min/max range estimation and per-tensor quantization of weights
+from torch.ao.quantization import MinMaxObserver
+myconfig = torch.ao.quantization.qconfig.QConfig(
+    activation=MinMaxObserver.with_args(dtype=torch.quint8, qscheme=torch.per_tensor_symmetric),
+    weight=MinMaxObserver.with_args(dtype=torch.qint8, qscheme=torch.per_tensor_symmetric))
+net.qconfig = myconfig
+print(net.qconfig)
+torch.ao.quantization.prepare(net, inplace=True)
+print("model prepared", net)
+
+# Calibrate first
+print('Post Training Quantization Prepare: Inserting Observers')
+
+# Calibrate with the training set
+evaluate(net, criterion, testloader, neval_batches=num_calibration_batches)
+print('Post Training Quantization: Calibration done', net)
+
+# Convert to quantized model
+torch.ao.quantization.convert(net, inplace=True)
+# You may see a user warning about needing to calibrate the model. This warning can be safely ignored.
+# This warning occurs because not all modules are run in each model runs, so some
+# modules may not be calibrated.
+print('Post Training Quantization: Convert done', net)
+
+num_eval_batches = 1000
+top1, top5 = evaluate(net, criterion, testloader, neval_batches=num_eval_batches)
+print('Evaluation accuracy on %d images, %2.2f'%(num_eval_batches, top1.avg))
+compute_accuracy(net, testloader)

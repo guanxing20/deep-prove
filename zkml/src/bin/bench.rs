@@ -205,6 +205,7 @@ fn run(args: Args) -> anyhow::Result<()> {
     let setup_time = now.elapsed().as_millis();
     info!("STEP: {} took {}ms", CSV_SETUP, setup_time);
 
+    //return Ok(());
     // Collect accuracies for final average
     let mut accuracies = Vec::new();
 

@@ -361,8 +361,8 @@ pub fn load_float_model(filepath: &str) -> Result<Model<f32>> {
             op if LINEAR_ALG.contains(&op) => {
                 let WeightBiasInfo { mut weights, bias } =
                     fetch_weight_and_bias(node, &initializers)?;
-                println!("DENSE weights shape: {:?}", weights.get_shape());
-                println!("DENSE MATRIX: {:?}", weights.get_data());
+                //println!("DENSE weights shape: {:?}", weights.get_shape());
+                //println!("DENSE MATRIX: {:?}", weights.get_data());
                 ensure!(bias.get_shape().len() == 1, "bias is not a vector");
                 input_shape_og = vec![weights.get_shape()[0]];
                 let nrows = weights.get_shape()[0];

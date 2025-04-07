@@ -70,8 +70,6 @@ impl<T: Number> Dense<T> {
     pub fn op(&self, input: &Tensor<T>) -> Tensor<T> {
         if input.get_shape().len() != 1 {
             let flat_input = input.flatten();
-            println!("DENSE flat_input shape: {:?}", flat_input.get_shape());
-            println!("DENSE matrix shape: {:?}", self.matrix.get_shape());
             let matvec = self.matrix.matvec(&flat_input);
             matvec.add(&self.bias)
         } else {

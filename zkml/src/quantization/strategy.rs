@@ -85,18 +85,21 @@ impl ScalingStrategy for InferenceObserver {
                 match layer {
                     Layer::Dense(dense) => {
                         let model_scaling = ScalingFactor::from_absolute_max(dense.max_abs_weight());
-                        let quantized_dense = dense.quantize(&model_scaling);
                         let (min, max) = tracker.distribution_info(id);
-                        // since we are doing symmetric scaling
                         let output_scaling = ScalingFactor::from_absolute_max(min.abs().max(max.abs()));
+                        let scale = last_input_scaling.scale() * model_scaling.scale() / output_scaling.scale();
+                        println!("InferenceObserver: DENSE {} layer model max weight abs {:?}", id, dense.max_abs_weight());
+                        println!("InferenceObserver: DENSE {} layer output range [{:?}, {:?}]", id, min,max);
+                        println!("InferenceObserver: DENSE {} layer scales:  input {}, model {}, output {} -> scale {}", id, last_input_scaling.scale(), model_scaling.scale(), output_scaling.scale(), scale);
+                        let shift = last_input_scaling.shift(&model_scaling, &output_scaling);
+                        let quantized_dense = dense.quantize(&model_scaling);
                         let (quantized_min, _quantized_max) =
                             quantized_dense.output_range(*quantization::MIN, *quantization::MAX);
-                        let shift = last_input_scaling.shift(&model_scaling, &output_scaling);
                         let requant = Requant {
                             right_shift: shift,
                             range: quantized_min.abs() as usize,
                             after_range: 1 << *quantization::BIT_LEN,
-                            multiplier: last_input_scaling.m(&model_scaling, &output_scaling),
+                            multiplier: scale,
                         };
                         md.set_layers_scaling(id, output_scaling);
                         last_input_scaling = output_scaling;
@@ -104,23 +107,22 @@ impl ScalingStrategy for InferenceObserver {
                     }
                     Layer::Convolution(conv) => {
                         let model_scaling = ScalingFactor::from_absolute_max(conv.max_abs_weight());
-                        let quantized_conv = conv.quantize(&model_scaling);
                         let (min, max) = tracker.distribution_info(id);
                         let output_scaling = ScalingFactor::from_absolute_max(min.abs().max(max.abs()));
-                        {
-                            let (obs_quant_min,obs_quant_max) = (output_scaling.quantize(&min),output_scaling.quantize(&max));
-                            println!("InferenceObserver: CONV layer {:?}, obs_quant_min {:?}, obs_quant_max {:?}", id, obs_quant_min, obs_quant_max);
-                        }
+                        let scale = last_input_scaling.scale() * model_scaling.scale() / output_scaling.scale();
+                        println!("InferenceObserver: CONV {} layer model max weight abs {:?}", id, conv.max_abs_weight());
+                        println!("InferenceObserver: CONV {} layer output range [{:?}, {:?}]", id, min,max);
+                        println!("InferenceObserver: CONV {} layer scales:  input {:.2}, model {:.2}, output {:.2} -> scale {:.2}", id, last_input_scaling.scale(), model_scaling.scale(), output_scaling.scale(), scale);
+                        let quantized_conv = conv.quantize(&model_scaling);
                         let shift = last_input_scaling.shift(&model_scaling, &output_scaling);
                         let (quantized_min, _quantized_max) =
                             quantized_conv.output_range(*quantization::MIN, *quantization::MAX);
-                        println!("InferenceObserver: quantized_min {:?}, quantized_max {:?}", quantized_min, _quantized_max);
                         md.set_layers_scaling(id, output_scaling);
                         let requant = Requant {
                             right_shift: shift,
                             range: quantized_min.abs() as usize,
                             after_range: 1 << *quantization::BIT_LEN,
-                            multiplier: last_input_scaling.m(&model_scaling, &output_scaling),
+                            multiplier: scale,
                         };
                         last_input_scaling = output_scaling;
                         vec![Layer::Convolution(quantized_conv), Layer::Requant(requant)]
@@ -272,7 +274,7 @@ impl ScalingStrategy for AbsoluteMax {
                             right_shift: shift,
                             range: quant_min_output.abs() as usize,
                             after_range: 1 << *quantization::BIT_LEN,
-                            multiplier: last_input_scaling_factor.m(&model_scaling, &output_scaling),
+                            multiplier: 1.0,
                         };
                         vec![Layer::Dense(quantized_dense), Layer::Requant(requant)]
 
@@ -295,7 +297,7 @@ impl ScalingStrategy for AbsoluteMax {
                             right_shift: shift,
                             range: quant_min_output.abs() as usize,
                             after_range: 1 << *quantization::BIT_LEN,
-                            multiplier: last_input_scaling_factor.m(&model_scaling, &output_scaling),
+                            multiplier: 1.0,
                         };
                         vec![Layer::Convolution(quantized_conv), Layer::Requant(requant)]
                     }

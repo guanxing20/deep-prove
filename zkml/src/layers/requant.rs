@@ -72,14 +72,14 @@ where
     pub(crate) lookup: LogUpProof<E>,
 }
 impl Requant {
-    //pub fn new(min_value: usize, right_shift: usize) -> Self {
-    //    Self {
-    //        right_shift,
-    //        range: min_value,
-    //        after_range: *quantization::RANGE as usize,
-    //        multiplier: 1.0,
-    //    }
-    //}
+    pub fn new(min_value: usize, right_shift: usize, multiplier: f32) -> Self {
+        Self {
+            right_shift,
+            range: min_value,
+            after_range: *quantization::RANGE as usize,
+            multiplier: multiplier,
+        }
+    }
     pub fn op(&self, input: &crate::tensor::Tensor<Element>) -> crate::tensor::Tensor<Element> {
 
         //println!(
