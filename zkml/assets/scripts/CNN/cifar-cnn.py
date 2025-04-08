@@ -169,16 +169,17 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.ao.quantization import QuantStub, DeQuantStub
 
-def estimate_params(c1, c2, fc1, fc2, fc3):
-    conv1_params = (3 * 5 * 5 + 1) * c1
-    conv2_params = (c1 * 5 * 5 + 1) * c2
-    fc1_params = (c2 * 5 * 5 + 1) * fc1
-    fc2_params = (fc1 + 1) * fc2
-    fc3_params = (fc2 + 1) * fc3
+def estimate_params(c1, c2, fc1, fc2, fc3, use_bias=True):
+    bias_term = 1 if use_bias else 0
+    conv1_params = (3 * 5 * 5 + bias_term) * c1
+    conv2_params = (c1 * 5 * 5 + bias_term) * c2
+    fc1_params = (c2 * 5 * 5 + bias_term) * fc1
+    fc2_params = (fc1 + bias_term) * fc2
+    fc3_params = (fc2 + bias_term) * fc3
     return conv1_params + conv2_params + fc1_params + fc2_params + fc3_params
 
 class Net(nn.Module):
-    def __init__(self, target_params=None):
+    def __init__(self, target_params=None, use_bias=True):
         super().__init__()
         
         # Default values
@@ -187,20 +188,21 @@ class Net(nn.Module):
         
         if target_params:
             # Adjust parameters iteratively to fit within target
-            scale = (target_params / estimate_params(c1, c2, fc1, fc2, fc3)) ** 0.5
+            scale = (target_params / estimate_params(c1, c2, fc1, fc2, fc3, use_bias=use_bias)) ** 0.5
             c1, c2 = int(c1 * scale), int(c2 * scale)
             fc1, fc2 = int(fc1 * scale), int(fc2 * scale)
             
             # Recalculate to get final parameter count
-            final_params = estimate_params(c1, c2, fc1, fc2, fc3)
+            final_params = estimate_params(c1, c2, fc1, fc2, fc3, use_bias=use_bias)
             assert abs(final_params - target_params) / target_params <= 0.05, "Final params exceed 5% tolerance"
         
-        self.conv1 = nn.Conv2d(3, c1, 5)
+        # Create layers with or without bias based on use_bias parameter
+        self.conv1 = nn.Conv2d(3, c1, 5, bias=use_bias)
         self.pool = nn.MaxPool2d(2, 2)
-        self.conv2 = nn.Conv2d(c1, c2, 5)
-        self.fc1 = nn.Linear(c2 * 5 * 5, fc1)
-        self.fc2 = nn.Linear(fc1, fc2)
-        self.fc3 = nn.Linear(fc2, fc3)
+        self.conv2 = nn.Conv2d(c1, c2, 5, bias=use_bias)
+        self.fc1 = nn.Linear(c2 * 5 * 5, fc1, bias=use_bias)
+        self.fc2 = nn.Linear(fc1, fc2, bias=use_bias)
+        self.fc3 = nn.Linear(fc2, fc3, bias=use_bias)
         self.quant = QuantStub()
         self.dequant = DeQuantStub()
     
@@ -213,7 +215,6 @@ class Net(nn.Module):
         x = F.relu(self.fc2(x))
         x = self.fc3(x)
         x = self.dequant(x)
-
         return x
 
 
@@ -236,26 +237,28 @@ class Net(nn.Module):
 #        x = self.fc3(x)
 #        return x
 
-
+with_bias = False
 if args.num_params:
     print(f"🏗️ Initializing neural network with target parameter count: {args.num_params:,}...")
     try:
-        net = Net(target_params=args.num_params)
+        net = Net(target_params=args.num_params, use_bias=with_bias)
         total_params = sum(p.numel() for p in net.parameters())
         print(f"✅ Model created with {total_params:,} parameters")
         print(f"   Conv1: {net.conv1.out_channels} channels")
         print(f"   Conv2: {net.conv2.out_channels} channels")
         print(f"   FC1: {net.fc1.out_features} features")
         print(f"   FC2: {net.fc2.out_features} features")
+        print(f"   Using bias: {not args.no_bias}")
     except AssertionError as e:
         print(f"❌ Error: {e}")
         print(f"Using default model instead.")
-        net = Net()  # Use default parameters
+        net = Net(use_bias=with_bias)  # Use default parameters
 else:
     print("🏗️ Initializing default neural network...")
-    net = Net()  # Use the default parameters
+    net = Net(use_bias=with_bias)  # Use the default parameters
     total_params = sum(p.numel() for p in net.parameters())
     print(f"✅ Default model created with {total_params:,} parameters")
+    print(f"   Using bias: {not args.no_bias}")
 
 # Add after class definition
 print("🏗️ Initializing neural network...")
@@ -726,3 +729,81 @@ print(f'Model evaluation: {json_model_top1.avg:.2f}% | JSON file: {json_accuracy
 
 # Existing accuracy computation on full test set
 #compute_accuracy(net, testloader)
+
+# Print quantization parameters of the model
+print("\n📊 Quantization Parameters:")
+
+# Print detailed quantization info
+print("\n🔍 Model Quantization Details:")
+for name, module in net.named_modules():
+    # Check for packed parameters (common in quantized modules)
+    if hasattr(module, '_packed_params'):
+        print(f"\n🧰 Packed Module: {name}")
+        
+        # Try to extract packed parameters information
+        if hasattr(module._packed_params, 'unpack'):
+            try:
+                # For some modules like Conv2d, we can unpack to get scales
+                unpacked = module._packed_params.unpack()
+                if len(unpacked) > 2:  # Usually (weight, bias, scale, zero_point)
+                    print(f"  Unpacked weight scale: {unpacked[2]}")
+                    if len(unpacked) > 3:
+                        print(f"  Unpacked zero point: {unpacked[3]}")
+            except:
+                print(f"  Unable to unpack parameters for {name}")
+    
+    # Try to access quantization scheme and parameters
+    if hasattr(module, 'qscheme'):
+        print(f"\n📐 Module with qscheme: {name}")
+        print(f"  Quantization scheme: {module.qscheme()}")
+
+# Print state dict items that might contain quantization info
+print("\n📝 State Dict Quantization Parameters:")
+for key, value in net.state_dict().items():
+    if 'scale' in key or 'zero_point' in key:
+        print(f"  {key}: {value}")
+
+# Print overall model quant config
+if hasattr(net, 'qconfig'):
+    print("\n⚙️ Model Quantization Config:")
+    print(f"  {net.qconfig}")
+
+# More detailed inspection of quantization parameters
+print("\n🔬 Detailed Quantization Parameters:")
+
+# Try to access quantization scales through different methods
+for name, module in net.named_modules():
+    if hasattr(module, '_packed_params'):
+        print(f"\n📦 Module: {name}")
+        
+        # Print all attribute names to help debug
+        # print(f"  Available attributes: {dir(module)}")
+        
+        # Try to access scale directly
+        if hasattr(module, 'scale'):
+            print(f"  Module scale: {module.scale}")
+        if hasattr(module, 'zero_point'):
+            print(f"  Module zero point: {module.zero_point}")
+            
+        # For quantized linear/conv modules
+        if hasattr(module, 'weight'):
+            if hasattr(module.weight(), 'q_scale'):
+                print(f"  Weight q_scale: {module.weight().q_scale()}")
+            if hasattr(module.weight(), 'q_zero_point'):
+                print(f"  Weight q_zero_point: {module.weight().q_zero_point()}")
+        
+        # Try to get the quantization parameters from state dict
+        for param_name, param in module.state_dict().items():
+            if 'scale' in param_name or 'zero_point' in param_name:
+                print(f"  {param_name}: {param}")
+
+# Print input/output quantization info
+print("\n🔢 Input/Output Quantization:")
+if hasattr(net.quant, 'scale'):
+    print(f"  Input scale: {net.quant.scale}")
+if hasattr(net.quant, 'zero_point'):
+    print(f"  Input zero point: {net.quant.zero_point}")
+if hasattr(net.dequant, 'scale'):
+    print(f"  Output scale: {net.dequant.scale}")
+if hasattr(net.dequant, 'zero_point'):
+    print(f"  Output zero point: {net.dequant.zero_point}")

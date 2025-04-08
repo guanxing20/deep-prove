@@ -155,7 +155,7 @@ impl Convolution<f32> {
         if distance > 0.1 {
             warn!("max_abs_weight CONV: distance between max_weight and max_bias is too large: {:.2}%", distance * 100.0);
         }
-        self.filter.max_abs_output().max(self.bias.max_abs_output())
+        self.filter.max_abs_output()//.max(self.bias.max_abs_output())
     }
 
     pub fn float_op(&self, input: &Tensor<f32>) -> Tensor<f32> {
