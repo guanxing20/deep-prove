@@ -51,7 +51,6 @@ impl ScalingStrategy for InferenceObserver {
         for (i, input) in self.inputs.iter().enumerate() {
             //let input_tensor = model.load_input_flat(input.clone());
             let input_tensor = Tensor::new(model.input_not_padded.clone(), input.clone());
-
             //ensure!(
             //    model.input_shape() == input_tensor.get_shape(),
             //    "input shape mismatch: expected {:?}, got {:?}",
@@ -105,7 +104,7 @@ impl ScalingStrategy for InferenceObserver {
                         last_input_scaling = output_scaling;
                         vec![Layer::Dense(quantized_dense), Layer::Requant(requant)]
                     }
-                    Layer::Convolution(conv) => {
+                    Layer::SchoolBookConvolution(conv) => {
                         let model_scaling = ScalingFactor::from_absolute_max(conv.max_abs_weight());
                         let (min, max) = tracker.distribution_info(id);
                         let output_scaling = ScalingFactor::from_absolute_max(min.abs().max(max.abs()));
@@ -169,10 +168,8 @@ fn run_layer(layer: &Layer<f32>, input: &Tensor<f32>) -> Tensor<f32> {
         Layer::Pooling(info) => info.op(input),
         // Traditional convolution is used for debug purposes. That is because the actual convolution
         // we use relies on the FFT algorithm. This convolution does not have a snark implementation.
-        Layer::SchoolBookConvolution(_) => {
-            panic!(
-                "InferenceObserver: schoolbook convolution found while observing inference on float !?"
-            );
+        Layer::SchoolBookConvolution(ref conv_pair) => {
+                input.conv2d(&conv_pair.filter, &conv_pair.bias, 1)
         }
         Layer::Requant(_) => {
             panic!(

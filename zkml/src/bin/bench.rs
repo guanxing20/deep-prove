@@ -1,4 +1,4 @@
-use zkml::model::Model;
+use zkml::{model::Model, Tensor};
 use std::{
     collections::HashMap,
     fs::{File, OpenOptions},
@@ -202,7 +202,11 @@ fn run(args: Args) -> anyhow::Result<()> {
     // Generate context once and measure the time
     info!("[+] Generating context for proving");
     let now = time::Instant::now();
-    let ctx = Context::<F>::generate(&model, None).expect("unable to generate context");
+    let ctx = if !args.skip_proving {
+        Some(Context::<F>::generate(&model, None).expect("unable to generate context"))
+    } else {
+        None
+    };
     let setup_time = now.elapsed().as_millis();
     info!("STEP: {} took {}ms", CSV_SETUP, setup_time);
 
@@ -227,7 +231,8 @@ fn run(args: Args) -> anyhow::Result<()> {
         // Store the setup time in the bencher (without re-running setup)
         bencher.set(CSV_SETUP, setup_time);
 
-        let input_tensor = model.load_input_flat(input);
+        //let input_tensor = model.load_input_flat(input);
+        let input_tensor : Tensor<Element> = Tensor::new(model.input_not_padded.clone(), input);
 
         info!("[+] Running inference");
         let trace = bencher.r(CSV_INFERENCE, || model.run(input_tensor.clone()));
@@ -251,7 +256,7 @@ fn run(args: Args) -> anyhow::Result<()> {
         }
         info!("[+] Running prover");
         let mut prover_transcript = default_transcript();
-        let prover = Prover::<_, _>::new(&ctx, &mut prover_transcript);
+        let prover = Prover::<_, _>::new(&ctx.as_ref().clone().unwrap(), &mut prover_transcript);
         let proof = bencher.r(CSV_PROVING, move || {
             prover.prove(trace).expect("unable to generate proof")
         });
@@ -265,7 +270,7 @@ fn run(args: Args) -> anyhow::Result<()> {
         let mut verifier_transcript = default_transcript();
         let io = IO::new(input_tensor.to_fields(), output.to_fields());
         bencher.r(CSV_VERIFYING, || {
-            verify::<_, _>(ctx.clone(), proof, io, &mut verifier_transcript).expect("invalid proof")
+            verify::<_, _>(ctx.clone().unwrap(), proof, io, &mut verifier_transcript).expect("invalid proof")
         });
         info!("[+] Verify proof: valid");
 
