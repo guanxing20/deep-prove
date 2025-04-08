@@ -755,7 +755,9 @@ mod test {
             ),
             bias.clone(),
         );
-        let (fft_output, _proving_data) = fft_conv.op::<GoldilocksExt2>(&input);
+        let mut fft_input = input.clone();
+        fft_input.pad_to_shape(input_shape_padded.clone());
+        let (fft_output, _proving_data) = fft_conv.op::<GoldilocksExt2>(&fft_input);
 
         input_shape_og = conv2d_shape(&input_shape_og, &filter.get_shape());
         input_shape_padded = conv2d_shape(&input_shape_padded, &dims).next_power_of_two();
@@ -792,6 +794,8 @@ mod test {
         let fft_bias = bias.clone().pad_1d(new_rows);
         let fft_dense = Dense::new(fft_weight.clone(), fft_bias.clone());
         println!("-- new_rows : {}, new_cols : {}",new_rows, new_cols);
+        println!("weight.get_shape() : {:?}",weight.get_shape());
+        println!("bias.get_shape() : {:?}",bias.get_shape());
         println!("fft_input.get_shape() : {:?}",fft_output.get_shape());
         println!("fft_weight.get_shape() : {:?}",fft_weight.get_shape());
         println!("fft_bias.get_shape() : {:?}",fft_bias.get_shape());
