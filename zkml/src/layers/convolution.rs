@@ -770,7 +770,34 @@ mod test {
         input_shape_og = maxpool2d_shape(&input_shape_og);
         input_shape_padded = maxpool2d_shape(&input_shape_padded);
 
-       // now dense layer - first there is a "reshape" that flattens the input
+        // again another conv
+        let filter = Tensor::new(vec![k_w,k_x,n_w,n_w],random_vector_quant(k_w * k_x * n_w * n_w));
+        let bias = Tensor::new(vec![k_w], random_vector_quant(k_w));
+        let output = output.conv2d(&filter, &bias, 1);
+        let dims = filter.get_shape();
+        let fft_conv = Convolution::new(
+            Tensor::new_conv(
+               dims.clone(),
+                input_shape_padded.clone(),
+                filter.get_data().to_vec(),
+            ),
+            bias.clone(),
+        );
+        let mut fft_input = fft_output;
+        fft_input.pad_to_shape(input_shape_padded.clone());
+        let (fft_output, _proving_data) = fft_conv.op::<GoldilocksExt2>(&fft_input);
+
+        input_shape_og = conv2d_shape(&input_shape_og, &filter.get_shape());
+        input_shape_padded = conv2d_shape(&input_shape_padded, &dims).next_power_of_two(); 
+
+        // make a pooled output
+        let pool = Pooling::Maxpool2D(Maxpool2D::default());
+        let output = pool.op(&output);
+        let fft_output = pool.op(&fft_output);
+        input_shape_og = maxpool2d_shape(&input_shape_og);
+        input_shape_padded = maxpool2d_shape(&input_shape_padded);
+
+        // now dense layer - first there is a "reshape" that flattens the input
         let ignore_garbage_pad = (input_shape_og.clone(), input_shape_padded.clone());
         input_shape_og = vec![input_shape_og.iter().product()];
         input_shape_padded = vec![input_shape_padded.iter().product()];
