@@ -69,7 +69,7 @@ import argparse
 from pathlib import Path
 from torch.utils.data import Subset
 print(torch.backends.quantized.supported_engines)
-torch.backends.quantized.engine = 'qnnpack'  # Try fbgemm instead of qnnpack
+#torch.backends.quantized.engine = 'qnnpack'
 # Add argument parser similar to mlp.py
 parser = argparse.ArgumentParser(description="CIFAR10 CNN with ONNX export")
 parser.add_argument("--export", type=Path, default=Path('bench'), 
@@ -635,6 +635,86 @@ def topk_accuracy(output, target, topk=(1,)):
         return res
 
 
+def compare_accuracy(model, criterion, json_path):
+    """
+    Evaluate model on inputs from JSON file and compare with stored outputs
+    Returns accuracies from both live model predictions and stored predictions
+    """
+    model.eval()
+    print("\nEvaluating model on JSON inputs...")
+    
+    try:
+        with open(json_path, 'r') as f:
+            data = json.load(f)
+            
+        input_data = data['input_data']
+        truth_data = data['output_data']
+        stored_outputs = data['pytorch_output']
+        
+        total_samples = len(input_data)
+        model_correct = 0
+        stored_correct = 0
+        
+        # Process in batches to avoid memory issues
+        batch_size = 100
+        
+        for i in range(0, total_samples, batch_size):
+            end_idx = min(i + batch_size, total_samples)
+            batch_inputs = input_data[i:end_idx]
+            batch_truth = truth_data[i:end_idx]
+            batch_stored = stored_outputs[i:end_idx]
+            
+            # Convert inputs to tensor and reshape for model
+            input_tensor = torch.tensor([inp for inp in batch_inputs])
+            input_tensor = input_tensor.reshape(-1, 3, 32, 32)
+            
+            # Get true labels from one-hot encoded truth
+            true_labels = [t.index(1.0) for t in batch_truth]
+            
+            # Get predictions from stored outputs
+            stored_preds = [max(range(len(out)), key=lambda i: out[i]) 
+                          for out in batch_stored]
+            
+            # Get live model predictions
+            with torch.no_grad():
+                model_output = model(input_tensor)
+                _, model_preds = torch.max(model_output, 1)
+                
+            # Update accuracy counters
+            model_correct += sum(pred.item() == true 
+                               for pred, true in zip(model_preds, true_labels))
+            stored_correct += sum(pred == true 
+                                for pred, true in zip(stored_preds, true_labels))
+            
+            # Print progress
+            print(f"Processed {end_idx}/{total_samples} samples", end='\r')
+            
+        # Calculate accuracies
+        model_accuracy = 100 * model_correct / total_samples
+        stored_accuracy = 100 * stored_correct / total_samples
+        
+        print(f"\n\nAccuracy Comparison:")
+        print(f"Live model accuracy: {model_accuracy:.2f}%")
+        print(f"Stored predictions accuracy: {stored_accuracy:.2f}%")
+        
+        if abs(model_accuracy - stored_accuracy) > 0.01:  # Allow for minor floating point differences
+            print(f"\n⚠️  WARNING: Accuracy mismatch detected!")
+            print(f"    Difference: {abs(model_accuracy - stored_accuracy):.2f}%")
+        else:
+            print(f"\n✅ Model consistency verified: accuracies match")
+            
+        return model_accuracy, stored_accuracy
+            
+    except Exception as e:
+        print(f"Error during evaluation: {e}")
+        return None, None
+
+# Replace the evaluation section with:
+json_path = args.export / "input.json"
+model_acc, stored_acc = compare_accuracy(net, criterion, json_path)
+if model_acc is not None:
+    print(f"\nFinal evaluation complete on {args.num_samples} samples")
+
 def evaluate(model, criterion, data_loader, neval_batches):
     model.eval()
     top1 = AverageMeter('Acc@1', ':6.2f')
@@ -654,8 +734,6 @@ def evaluate(model, criterion, data_loader, neval_batches):
 
     return top1, top5
 
-num_calibration_batches = 32
-
 net.eval()
 
 
@@ -674,7 +752,11 @@ print("model prepared", net)
 print('Post Training Quantization Prepare: Inserting Observers')
 
 # Calibrate with the training set
-evaluate(net, criterion, testloader, neval_batches=num_calibration_batches)
+# Create a subset of test data with exactly the same samples used in the JSON
+json_sample_dataset = Subset(testset, sample_indices)
+json_sample_loader = torch.utils.data.DataLoader(json_sample_dataset, batch_size=batch_size, shuffle=False)
+num_calibration_batches = len(json_sample_loader)
+evaluate(net, criterion, json_sample_loader, neval_batches=num_calibration_batches)
 print('Post Training Quantization: Calibration done', net)
 
 # Convert to quantized model
@@ -688,10 +770,6 @@ print('Post Training Quantization: Convert done', net)
 # top1, top5 = evaluate(net, criterion, testloader, neval_batches=num_eval_batches)
 # print('Evaluation accuracy on %d images, %2.2f'%(num_eval_batches, top1.avg))
 # compute_accuracy(net, testloader)
-
-# Create a subset of test data with exactly the same samples used in the JSON
-json_sample_dataset = Subset(testset, sample_indices)
-json_sample_loader = torch.utils.data.DataLoader(json_sample_dataset, batch_size=batch_size, shuffle=False)
 
 print(f'\nEvaluating accuracy on the same {len(sample_indices)} samples used in the JSON file...')
 json_model_top1, json_model_top5 = evaluate(net, criterion, json_sample_loader, neval_batches=len(json_sample_loader))
@@ -724,4 +802,4 @@ print(f'\nComparison: Model evaluation vs JSON file accuracy')
 print(f'Model evaluation: {json_model_top1.avg:.2f}% | JSON file: {json_accuracy:.2f}%')
 
 # Existing accuracy computation on full test set
-#compute_accuracy(net, testloader)
+compute_accuracy(net, testloader)
