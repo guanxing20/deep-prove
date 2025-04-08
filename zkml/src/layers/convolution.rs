@@ -728,6 +728,44 @@ mod test {
     }
 
     #[test]
+    pub fn test_conv_fft_vs_naive() {
+        let n_w = 1 << 2;
+        let k_w = 1 << 0;
+        let n_x = 1 << 3;
+        let k_x = 1 << 0;
+        let mut in_dimensions: Vec<Vec<usize>> =
+            vec![vec![k_x, n_x, n_x], vec![16, 29, 29], vec![4, 26, 26]];
+       
+        for i in 0..in_dimensions.len() {
+            for j in 0..in_dimensions[0].len() {
+                in_dimensions[i][j] = (in_dimensions[i][j]).next_power_of_two();
+            }
+        } 
+
+        let filter = Tensor::new(vec![k_w,k_x,n_w,n_w],random_vector_quant(k_w * k_x * n_w * n_w));
+        let bias = Tensor::new(vec![k_w], random_vector_quant(k_w));
+        let input = Tensor::new(
+                vec![k_x, n_x, n_x],
+                random_vector_quant(k_x * n_x * n_x),
+            );
+
+        let output = input.conv2d(&filter, &bias, 1);
+
+        let fft_filter = Tensor::new_conv(filter.get_shape(),in_dimensions[0].clone(),filter.get_data().to_vec());
+        let fft_conv = Convolution::new(
+            Tensor::new_conv(
+                vec![k_w, k_x, n_w, n_w],
+                in_dimensions[0].clone(),
+                filter.get_data().to_vec(),
+            ),
+            bias.clone(),
+        );
+        let (fft_output, _proving_data) = fft_conv.op::<GoldilocksExt2>(&input);
+        assert_eq!(fft_output.get_data(),output.get_data());
+        assert_eq!(fft_output.get_shape(),output.get_shape());
+    }
+
+    #[test]
     pub fn test_quantization() {
         let n_w = 1 << 2;
         let k_w = 1 << 0;
