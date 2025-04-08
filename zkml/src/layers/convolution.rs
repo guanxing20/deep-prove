@@ -735,19 +735,11 @@ mod test {
         let k_w = 1 << 0;
         let n_x = 1 << 3;
         let k_x = 1 << 0;
-        let mut in_dimensions: Vec<Vec<usize>> =
-            vec![vec![k_x, n_x, n_x], vec![16, 29, 29], vec![4, 26, 26]];
-       
-        for i in 0..in_dimensions.len() {
-            for j in 0..in_dimensions[0].len() {
-                in_dimensions[i][j] = (in_dimensions[i][j]).next_power_of_two();
-            }
-        } 
 
-        let filter = Tensor::new(vec![k_w,k_x,n_w,n_w],random_vector_quant(k_w * k_x * n_w * n_w));
-        let bias = Tensor::new(vec![k_w], random_vector_quant(k_w));
         let mut input_shape_og = vec![k_x, n_x, n_x];
         let mut input_shape_padded = input_shape_og.next_power_of_two();
+        let filter = Tensor::new(vec![k_w,k_x,n_w,n_w],random_vector_quant(k_w * k_x * n_w * n_w));
+        let bias = Tensor::new(vec![k_w], random_vector_quant(k_w));
         let input = Tensor::new(
                 input_shape_og.clone(),
                 random_vector_quant(k_x * n_x * n_x),
@@ -789,18 +781,20 @@ mod test {
         let new_rows = nrows.next_power_of_two();
         let conv_shape_og = ignore_garbage_pad.0.clone();
         let conv_shape_pad = ignore_garbage_pad.1.clone();
+        let dense = Dense::new(weight.clone(), bias.clone());
+        let dense_output = dense.op(&output);
+
         let fft_weight= weight.pad_matrix_to_ignore_garbage(
                 &conv_shape_og,
                 &conv_shape_pad,
                 &vec![new_rows, new_cols],
         );
         let fft_bias = bias.clone().pad_1d(new_rows);
-        let dense = Dense::new(weight, bias);
-        let dense_output = dense.op(&output);
+        let fft_dense = Dense::new(fft_weight.clone(), fft_bias.clone());
+        println!("-- new_rows : {}, new_cols : {}",new_rows, new_cols);
         println!("fft_input.get_shape() : {:?}",fft_output.get_shape());
         println!("fft_weight.get_shape() : {:?}",fft_weight.get_shape());
         println!("fft_bias.get_shape() : {:?}",fft_bias.get_shape());
-        let fft_dense = Dense::new(fft_weight, fft_bias);
         let fft_dense_output = fft_dense.op(&fft_output);
         //assert_eq!(dense_output.get_data(), fft_dense_output.get_data());
     }
