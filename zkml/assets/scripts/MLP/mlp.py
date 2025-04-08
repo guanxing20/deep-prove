@@ -59,11 +59,12 @@ print("Loaded iris data")
 class MLP(nn.Module):
     def __init__(self, num_dense, layer_width, quantize=False, use_relu=True):
         super(MLP, self).__init__()
+        if quantize:
+            self.quant = QuantStub()
         self.quantize = quantize
         self.use_relu = use_relu
         self.useBias = True
         if quantize:
-            self.quant = QuantStub()
             self.dequant = DeQuantStub()
 
         layers = []
@@ -447,6 +448,80 @@ def evaluate(model, input, target, neval_batches):
     return top1
 
 
+def print_model_io(model, sample_input):
+    inputs_by_layer = {}
+    outputs_by_layer = {}
+
+    def hook_fn(layer, inp, out):
+        inputs_by_layer[layer] = inp[0].detach()  # Input
+        outputs_by_layer[layer] = out.detach()    # Output
+
+    hooks = []
+
+    std_layers = (nn.Conv2d, nn.Linear)
+    quantized_layers = (torch.nn.quantized.Conv2d, torch.nn.quantized.Linear)
+    for layer in model.modules():
+        if isinstance(layer, std_layers) or isinstance(layer, quantized_layers):
+            hooks.append(layer.register_forward_hook(hook_fn))
+
+    model.eval()
+    with torch.no_grad():
+        _ = model(sample_input)
+
+    for i, layer in enumerate(model.modules()):
+        if isinstance(layer, std_layers) or isinstance(layer, quantized_layers):
+            layer_name = f"Layer {i} - {layer.__class__.__name__}"
+            print(f"→ {layer_name}")
+
+            # Input
+            if isinstance(layer, quantized_layers):
+                print("  Input:", inputs_by_layer.get(layer).int_repr())
+                print("  Input scale:", inputs_by_layer.get(layer).q_scale())
+            else:
+                print("  Input:", inputs_by_layer.get(layer))
+
+            # Weights
+            if hasattr(layer, "weight"):
+                try:
+                    weight = layer.weight() if callable(layer.weight) else layer.weight.data
+                except Exception:
+                    weight = layer._weight_bias()[0]
+                print("  Weights:")
+
+                if isinstance(layer, quantized_layers):
+                    print(weight.int_repr())
+                    if hasattr(weight, 'q_scale'):
+                        print("  Weight scale:", weight.q_scale())
+                    if hasattr(weight, 'q_zero_point'):
+                        print("  Weight zero_point:", weight.q_zero_point())
+                else:
+                    print(weight)
+            # Bias
+            if hasattr(layer, "bias") and layer.bias is not None:
+                try:
+                    bias = layer.bias() if callable(layer.bias) else layer.bias.data
+                except Exception:
+                    bias = layer._weight_bias()[1]
+                print("  Bias:")
+                print(bias)
+
+            # Output
+            if isinstance(layer, quantized_layers):
+                print("  Output:", outputs_by_layer.get(layer).int_repr())
+                print("  Output scale:", outputs_by_layer.get(layer).q_scale())
+            else:
+                print("  Output:", outputs_by_layer.get(layer))
+
+            print("—" * 60)
+
+        for h in hooks:
+            h.remove()
+
+
+sample_input = test_X[0].clone().detach().float().unsqueeze(0)
+
+print_model_io(model, sample_input)
+
 model.eval()
 
 
@@ -521,3 +596,5 @@ print(
 # Existing accuracy computation on full test set
 accuracy = evaluate_accuracy(model, test_X, test_y, actual_samples)
 print(f"{accuracy:.2f}%")
+
+print_model_io(model, sample_input)
