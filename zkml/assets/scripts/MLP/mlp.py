@@ -17,6 +17,7 @@ import argparse
 from pathlib import Path
 import torch.optim as optim
 from torch.ao.quantization import QuantStub, DeQuantStub
+from torch.utils.data import Subset
 import math  # Add to imports at top
 
 print(torch.backends.quantized.supported_engines)
@@ -51,6 +52,7 @@ class MLP(nn.Module):
         super(MLP, self).__init__()
         self.quantize = quantize
         self.use_relu = use_relu
+        self.useBias = True
         if quantize:
             self.quant = QuantStub()
             self.dequant = DeQuantStub()
@@ -58,11 +60,11 @@ class MLP(nn.Module):
         layers = []
         input_size = 4  # Assuming input size is 4 for the Iris dataset
         for _ in range(num_dense):
-            layers.append(nn.Linear(input_size, layer_width, bias=True))
+            layers.append(nn.Linear(input_size, layer_width, bias=self.useBias))
             if use_relu:
                 layers.append(nn.ReLU())
             input_size = layer_width
-        layers.append(nn.Linear(layer_width, 3, bias=True))  # Assuming 3 output classes
+        layers.append(nn.Linear(layer_width, 3, bias=self.useBias))  # Assuming 3 output classes
         if use_relu:
             layers.append(nn.ReLU())
         self.layers = nn.ModuleList(layers)
@@ -210,9 +212,10 @@ def tensor_to_vecvec(tensor):
 for i, layer in enumerate(model.layers):
     if isinstance(layer, nn.Linear):
         weight_matrix = layer.weight.data
-        bias_vector = layer.bias.data
         print(f"Layer {i} weight matrix dimensions: {weight_matrix.size()}")
-        print(f"Layer {i} bias vector dimensions: {bias_vector.size()}")
+        if model.useBias:
+            bias_vector = layer.bias.data
+            print(f"Layer {i} bias vector dimensions: {bias_vector.size()}")
 
 def plot_weight_distribution(model, test_X):
     """Plot the distribution of weights, biases, and test inputs."""
@@ -366,3 +369,122 @@ try:
         print(f"    This suggests an inconsistency in the evaluation process.")
 except Exception as e:
     print(f"Error verifying accuracy consistency: {e}")
+
+## calibration and quantization
+
+class AverageMeter(object):
+    """Computes and stores the average and current value"""
+    def __init__(self, name, fmt=':f'):
+        self.name = name
+        self.fmt = fmt
+        self.reset()
+
+    def reset(self):
+        self.val = 0
+        self.avg = 0
+        self.sum = 0
+        self.count = 0
+
+    def update(self, val, n=1):
+        self.val = val
+        self.sum += val * n
+        self.count += n
+        self.avg = self.sum / self.count
+
+    def __str__(self):
+        fmtstr = '{name} {val' + self.fmt + '} ({avg' + self.fmt + '})'
+        return fmtstr.format(**self.__dict__)
+
+
+def evaluate(model, input, target, neval_batches):
+    model.eval()
+    top1 = AverageMeter('Acc@1', ':6.2f')
+    cnt = 0
+    num_samples = len(test_X)
+    with torch.no_grad():
+        for i in range(num_samples):
+            x = test_X[i]
+            true_label = test_y[i].item()
+            output = model(x.unsqueeze(0)).squeeze(0)
+            predicted = torch.argmax(output).item()
+            correct = 0
+            if predicted == true_label:
+                correct += 100
+            cnt += 1
+            print('.', end = '')
+            top1.update(correct)
+            if cnt >= neval_batches:
+                 return top1
+
+    return top1
+
+model.eval()
+
+
+# Specify quantization configuration
+# Start with simple min/max range estimation and per-tensor quantization of weights
+from torch.ao.quantization import MinMaxObserver
+myconfig = torch.ao.quantization.qconfig.QConfig(
+    activation=MinMaxObserver.with_args(dtype=torch.quint8, qscheme=torch.per_tensor_symmetric),
+    weight=MinMaxObserver.with_args(dtype=torch.qint8, qscheme=torch.per_tensor_symmetric))
+model.qconfig = myconfig
+print(model.qconfig)
+torch.ao.quantization.prepare(model, inplace=True)
+print("model prepared", model)
+
+# Calibrate first
+print('Post Training Quantization Prepare: Inserting Observers')
+
+# Calibrate with the training set
+# Create a subset of test data with exactly the same samples used in the JSON
+json_sample_loader = torch.utils.data.DataLoader(test_X, batch_size=1, shuffle=False)
+num_calibration_batches = len(test_X)
+evaluate(model, test_X, test_y, neval_batches=num_calibration_batches)
+print('Post Training Quantization: Calibration done',model)
+
+# Convert to quantized model
+torch.ao.quantization.convert(model, inplace=True)
+# You may see a user warning about needing to calibrate the model. This warning can be safely ignored.
+# This warning occurs because not all modules are run in each model runs, so some
+# modules may not be calibrated.
+print('Post Training Quantization: Convert done', model)
+
+
+# num_eval_batches = 1000
+# top1, top5 = evaluate(net, criterion, testloader, neval_batches=num_eval_batches)
+# print('Evaluation accuracy on %d images, %2.2f'%(num_eval_batches, top1.avg))
+# compute_accuracy(net, testloader)
+
+print(f'\nEvaluating accuracy on the same {len(test_X)} samples used in the JSON file...')
+json_model_top1 = evaluate(model, test_X, test_y, neval_batches=len(test_X))
+print(f'Model evaluation accuracy on {len(test_X)} JSON samples: {json_model_top1.avg:.2f}%')
+
+# 2. Compute accuracy directly from the JSON file
+input_path = args.export / "input.json"
+with open(input_path, 'r') as f:
+    json_data = json.load(f)
+
+# Calculate accuracy from the saved outputs in JSON
+correct_json = 0
+total_json = len(json_data["pytorch_output"])
+for i in range(total_json):
+    # Get prediction from pytorch output in JSON
+    json_output = json_data["pytorch_output"][i]
+    _, predicted_json = torch.max(torch.tensor(json_output), 0)
+    
+    # Get ground truth from one-hot encoded output
+    true_label = json_data["output_data"][i].index(1.0)
+    
+    if predicted_json.item() == true_label:
+        correct_json += 1
+
+json_accuracy = 100 * correct_json / total_json
+print(f'JSON file accuracy on {total_json} samples: {json_accuracy:.2f}%')
+
+# Compare the two
+print(f'\nComparison: Model evaluation vs JSON file accuracy')
+print(f'Model evaluation: {json_model_top1.avg:.2f}% | JSON file: {json_accuracy:.2f}%')
+
+# Existing accuracy computation on full test set
+accuracy = evaluate_accuracy(model, test_X, test_y, actual_samples)
+print(f"{accuracy:.2f}%")
