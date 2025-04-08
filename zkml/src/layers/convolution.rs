@@ -779,8 +779,12 @@ mod test {
         let ncols = input_shape_og[0];
         let weight = Tensor::random(vec![nrows,ncols]);
         let bias = Tensor::random(vec![nrows]);
-        let new_cols = ncols.next_power_of_two();
+        let mut new_cols = ncols.next_power_of_two();
         let new_rows = nrows.next_power_of_two();
+        if new_cols < input_shape_padded[0] {
+            // must make sure that we can apply the input to this padded dense
+            new_cols = input_shape_padded[0];
+        }
         let conv_shape_og = ignore_garbage_pad.0.clone();
         let conv_shape_pad = ignore_garbage_pad.1.clone();
         let dense = Dense::new(weight.clone(), bias.clone());
@@ -800,7 +804,7 @@ mod test {
         println!("fft_weight.get_shape() : {:?}",fft_weight.get_shape());
         println!("fft_bias.get_shape() : {:?}",fft_bias.get_shape());
         let fft_dense_output = fft_dense.op(&fft_output);
-        //assert_eq!(dense_output.get_data(), fft_dense_output.get_data());
+        assert_eq!(dense_output.get_data(), fft_dense_output.get_data());
     }
 
     #[test]
