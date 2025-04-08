@@ -55,6 +55,7 @@ We will do the following steps in order:
 
 Using ``torchvision``, it's extremely easy to load CIFAR10.
 """
+import sys
 from torch.ao.quantization import MinMaxObserver
 from torch.ao.quantization import QuantStub, DeQuantStub
 import torch.optim as optim
@@ -201,13 +202,13 @@ class Net(nn.Module):
                 target_params <= 0.05, "Final params exceed 5% tolerance"
 
         # Create layers with or without bias based on use_bias parameter
+        self.quant = QuantStub()
         self.conv1 = nn.Conv2d(3, c1, 5, bias=use_bias)
         self.pool = nn.MaxPool2d(2, 2)
         self.conv2 = nn.Conv2d(c1, c2, 5, bias=use_bias)
         self.fc1 = nn.Linear(c2 * 5 * 5, fc1, bias=use_bias)
         self.fc2 = nn.Linear(fc1, fc2, bias=use_bias)
         self.fc3 = nn.Linear(fc2, fc3, bias=use_bias)
-        self.quant = QuantStub()
         self.dequant = DeQuantStub()
 
     def forward(self, x):
@@ -757,6 +758,81 @@ def evaluate(model, criterion, data_loader, neval_batches):
     return top1, top5
 
 
+def print_model_io(model, sample_input):
+    inputs_by_layer = {}
+    outputs_by_layer = {}
+
+    def hook_fn(layer, inp, out):
+        inputs_by_layer[layer] = inp[0].detach()  # Input
+        outputs_by_layer[layer] = out.detach()    # Output
+
+    hooks = []
+
+    std_layers = (nn.Conv2d, nn.Linear)
+    quantized_layers = (torch.nn.quantized.Conv2d, torch.nn.quantized.Linear)
+    for layer in model.modules():
+        if isinstance(layer, std_layers) or isinstance(layer, quantized_layers):
+            hooks.append(layer.register_forward_hook(hook_fn))
+
+    model.eval()
+    with torch.no_grad():
+        _ = model(sample_input)
+
+    for i, layer in enumerate(model.modules()):
+        if isinstance(layer, std_layers) or isinstance(layer, quantized_layers):
+            layer_name = f"Layer {i} - {layer.__class__.__name__}"
+            print(f"→ {layer_name}")
+
+            # Input
+            if isinstance(layer, quantized_layers):
+                print("  Input:", inputs_by_layer.get(layer).int_repr())
+                print("  Input scale:", inputs_by_layer.get(layer).q_scale())
+            else:
+                print("  Input:", inputs_by_layer.get(layer))
+
+            # Weights
+            if hasattr(layer, "weight"):
+                try:
+                    weight = layer.weight() if callable(layer.weight) else layer.weight.data
+                except Exception:
+                    weight = layer._weight_bias()[0]
+                print("  Weights:")
+
+                if isinstance(layer, quantized_layers):
+                    print(weight.int_repr())
+                    if hasattr(weight, 'q_scale'):
+                        print("  Weight scale:", weight.q_scale())
+                    if hasattr(weight, 'q_zero_point'):
+                        print("  Weight zero_point:", weight.q_zero_point())
+                else:
+                    print(weight)
+            # Bias
+            if hasattr(layer, "bias") and layer.bias is not None:
+                try:
+                    bias = layer.bias() if callable(layer.bias) else layer.bias.data
+                except Exception:
+                    bias = layer._weight_bias()[1]
+                print("  Bias:")
+                print(bias)
+
+            # Output
+            if isinstance(layer, quantized_layers):
+                print("  Output:", outputs_by_layer.get(layer).int_repr())
+                print("  Output scale:", outputs_by_layer.get(layer).q_scale())
+            else:
+                print("  Output:", outputs_by_layer.get(layer))
+
+            print("—" * 60)
+
+        for h in hooks:
+            h.remove()
+
+
+dataiter = iter(trainloader)
+sample_input, sample_label = next(dataiter)
+
+print_model_io(net, sample_input)
+
 net.eval()
 
 
@@ -921,3 +997,5 @@ if hasattr(net.dequant, 'scale'):
 if hasattr(net.dequant, 'zero_point'):
     print(f"  Output zero point: {net.dequant.zero_point}")
 # compute_accuracy(net, testloader)
+
+print_model_io(net, sample_input)
