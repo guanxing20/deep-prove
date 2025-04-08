@@ -768,7 +768,7 @@ where
         let (m, n) = (self.shape[0], self.shape[1]);
         let vec_len = vector.shape[0];
 
-        assert!(n == vec_len, "Matrix columns must match vector size.");
+        assert_eq!(n, vec_len, "Matrix columns must match vector size.");
 
         let mut result = Tensor::zeros(vec![m]);
 

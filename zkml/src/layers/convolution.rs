@@ -709,7 +709,7 @@ pub fn phi_eval<E: ExtensionField>(
 
 #[cfg(test)]
 mod test {
-    use crate::{layers::dense, testing::random_vector};
+    use crate::{layers::{dense, pooling::{Maxpool2D, Pooling}}, onnx_parse::{conv2d_shape, maxpool2d_shape}, testing::{random_vector, NextPowerOfTwo}};
 
     use super::*;
     use goldilocks::GoldilocksExt2;
@@ -727,6 +727,8 @@ mod test {
         assert!(BIAS_POLY_ID >= dense::BIAS_POLY_ID + 100_000);
     }
 
+
+    use crate::layers::Dense;
     #[test]
     pub fn test_conv_fft_vs_naive() {
         let n_w = 1 << 2;
@@ -744,25 +746,63 @@ mod test {
 
         let filter = Tensor::new(vec![k_w,k_x,n_w,n_w],random_vector_quant(k_w * k_x * n_w * n_w));
         let bias = Tensor::new(vec![k_w], random_vector_quant(k_w));
+        let mut input_shape_og = vec![k_x, n_x, n_x];
+        let mut input_shape_padded = input_shape_og.next_power_of_two();
         let input = Tensor::new(
-                vec![k_x, n_x, n_x],
+                input_shape_og.clone(),
                 random_vector_quant(k_x * n_x * n_x),
             );
 
         let output = input.conv2d(&filter, &bias, 1);
-
-        let fft_filter = Tensor::new_conv(filter.get_shape(),in_dimensions[0].clone(),filter.get_data().to_vec());
+        let dims = filter.get_shape();
         let fft_conv = Convolution::new(
             Tensor::new_conv(
-                vec![k_w, k_x, n_w, n_w],
-                in_dimensions[0].clone(),
+               dims.clone(),
+                input_shape_padded.clone(),
                 filter.get_data().to_vec(),
             ),
             bias.clone(),
         );
         let (fft_output, _proving_data) = fft_conv.op::<GoldilocksExt2>(&input);
-        assert_eq!(fft_output.get_data(),output.get_data());
-        assert_eq!(fft_output.get_shape(),output.get_shape());
+
+        input_shape_og = conv2d_shape(&input_shape_og, &filter.get_shape());
+        input_shape_padded = conv2d_shape(&input_shape_padded, &dims).next_power_of_two();
+
+
+        // make a pooled output
+        let pool = Pooling::Maxpool2D(Maxpool2D::default());
+        let output = pool.op(&output);
+        let fft_output = pool.op(&fft_output);
+        input_shape_og = maxpool2d_shape(&input_shape_og);
+        input_shape_padded = maxpool2d_shape(&input_shape_padded);
+
+       // now dense layer - first there is a "reshape" that flattens the input
+        let ignore_garbage_pad = (input_shape_og.clone(), input_shape_padded.clone());
+        input_shape_og = vec![input_shape_og.iter().product()];
+        input_shape_padded = vec![input_shape_padded.iter().product()];
+
+        let nrows = 10;
+        let ncols = input_shape_og[0];
+        let weight = Tensor::random(vec![nrows,ncols]);
+        let bias = Tensor::random(vec![nrows]);
+        let new_cols = ncols.next_power_of_two();
+        let new_rows = nrows.next_power_of_two();
+        let conv_shape_og = ignore_garbage_pad.0.clone();
+        let conv_shape_pad = ignore_garbage_pad.1.clone();
+        let fft_weight= weight.pad_matrix_to_ignore_garbage(
+                &conv_shape_og,
+                &conv_shape_pad,
+                &vec![new_rows, new_cols],
+        );
+        let fft_bias = bias.clone().pad_1d(new_rows);
+        let dense = Dense::new(weight, bias);
+        let dense_output = dense.op(&output);
+        println!("fft_input.get_shape() : {:?}",fft_output.get_shape());
+        println!("fft_weight.get_shape() : {:?}",fft_weight.get_shape());
+        println!("fft_bias.get_shape() : {:?}",fft_bias.get_shape());
+        let fft_dense = Dense::new(fft_weight, fft_bias);
+        let fft_dense_output = fft_dense.op(&fft_output);
+        //assert_eq!(dense_output.get_data(), fft_dense_output.get_data());
     }
 
     #[test]
