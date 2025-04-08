@@ -670,11 +670,20 @@ print(net.qconfig)
 torch.ao.quantization.prepare(net, inplace=True)
 print("model prepared", net)
 
+# num_eval_batches = 1000
+# top1, top5 = evaluate(net, criterion, testloader, neval_batches=num_eval_batches)
+# print('Evaluation accuracy on %d images, %2.2f'%(num_eval_batches, top1.avg))
+# compute_accuracy(net, testloader)
+
+# Create a subset of test data with exactly the same samples used in the JSON
+json_sample_dataset = Subset(testset, sample_indices)
+json_sample_loader = torch.utils.data.DataLoader(json_sample_dataset, batch_size=batch_size, shuffle=False)
 # Calibrate first
 print('Post Training Quantization Prepare: Inserting Observers')
 
 # Calibrate with the training set
-evaluate(net, criterion, testloader, neval_batches=num_calibration_batches)
+#evaluate(net, criterion, testloader, neval_batches=num_calibration_batches)
+evaluate(net, criterion, json_sample_loader, neval_batches=num_calibration_batches)
 print('Post Training Quantization: Calibration done', net)
 
 # Convert to quantized model
@@ -684,14 +693,6 @@ torch.ao.quantization.convert(net, inplace=True)
 # modules may not be calibrated.
 print('Post Training Quantization: Convert done', net)
 
-# num_eval_batches = 1000
-# top1, top5 = evaluate(net, criterion, testloader, neval_batches=num_eval_batches)
-# print('Evaluation accuracy on %d images, %2.2f'%(num_eval_batches, top1.avg))
-# compute_accuracy(net, testloader)
-
-# Create a subset of test data with exactly the same samples used in the JSON
-json_sample_dataset = Subset(testset, sample_indices)
-json_sample_loader = torch.utils.data.DataLoader(json_sample_dataset, batch_size=batch_size, shuffle=False)
 
 print(f'\nEvaluating accuracy on the same {len(sample_indices)} samples used in the JSON file...')
 json_model_top1, json_model_top5 = evaluate(net, criterion, json_sample_loader, neval_batches=len(json_sample_loader))
