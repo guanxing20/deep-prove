@@ -684,18 +684,44 @@ torch.ao.quantization.convert(net, inplace=True)
 # modules may not be calibrated.
 print('Post Training Quantization: Convert done', net)
 
-num_eval_batches = 1000
-top1, top5 = evaluate(net, criterion, testloader, neval_batches=num_eval_batches)
-print('Evaluation accuracy on %d images, %2.2f'%(num_eval_batches, top1.avg))
-compute_accuracy(net, testloader)
+# num_eval_batches = 1000
+# top1, top5 = evaluate(net, criterion, testloader, neval_batches=num_eval_batches)
+# print('Evaluation accuracy on %d images, %2.2f'%(num_eval_batches, top1.avg))
+# compute_accuracy(net, testloader)
 
 # Create a subset of test data with exactly the same samples used in the JSON
 json_sample_dataset = Subset(testset, sample_indices)
 json_sample_loader = torch.utils.data.DataLoader(json_sample_dataset, batch_size=batch_size, shuffle=False)
 
 print(f'\nEvaluating accuracy on the same {len(sample_indices)} samples used in the JSON file...')
-top1, top5 = evaluate(net, criterion, json_sample_loader, neval_batches=len(json_sample_loader))
-print(f'Evaluation accuracy on {len(sample_indices)} JSON samples: {top1.avg:.2f}%')
+json_model_top1, json_model_top5 = evaluate(net, criterion, json_sample_loader, neval_batches=len(json_sample_loader))
+print(f'Model evaluation accuracy on {len(sample_indices)} JSON samples: {json_model_top1.avg:.2f}%')
 
-# Existing accuracy computation
-compute_accuracy(net, testloader)
+# 2. Compute accuracy directly from the JSON file
+input_path = args.export / "input.json"
+with open(input_path, 'r') as f:
+    json_data = json.load(f)
+
+# Calculate accuracy from the saved outputs in JSON
+correct_json = 0
+total_json = len(json_data["pytorch_output"])
+for i in range(total_json):
+    # Get prediction from pytorch output in JSON
+    json_output = json_data["pytorch_output"][i]
+    _, predicted_json = torch.max(torch.tensor(json_output), 0)
+    
+    # Get ground truth from one-hot encoded output
+    true_label = json_data["output_data"][i].index(1.0)
+    
+    if predicted_json.item() == true_label:
+        correct_json += 1
+
+json_accuracy = 100 * correct_json / total_json
+print(f'JSON file accuracy on {total_json} samples: {json_accuracy:.2f}%')
+
+# Compare the two
+print(f'\nComparison: Model evaluation vs JSON file accuracy')
+print(f'Model evaluation: {json_model_top1.avg:.2f}% | JSON file: {json_accuracy:.2f}%')
+
+# Existing accuracy computation on full test set
+#compute_accuracy(net, testloader)
