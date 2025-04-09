@@ -762,6 +762,7 @@ mod test {
         input_shape_og = conv2d_shape(&input_shape_og, &filter.get_shape());
         input_shape_padded = conv2d_shape(&input_shape_padded, &dims).next_power_of_two();
 
+
         // add a RELU layer
         let relu = Activation::Relu(Relu::new());
         let output = relu.op(&output);
@@ -843,6 +844,7 @@ mod test {
         println!("fft_input.get_shape() : {:?}",fft_output.get_shape());
         println!("fft_weight.get_shape() : {:?}",fft_weight.get_shape());
         println!("fft_bias.get_shape() : {:?}",fft_bias.get_shape());
+        println!("output shape : {:?} - product {}",output.get_shape(),output.get_shape().iter().product::<usize>());
         let fft_dense_output = fft_dense.op(&fft_output);
         assert_eq!(dense_output.get_data()[..weight.nrows_2d()], fft_dense_output.get_data()[..weight.nrows_2d()]);
     }
