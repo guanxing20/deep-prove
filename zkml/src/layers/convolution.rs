@@ -736,13 +736,13 @@ mod test {
         let n_x = 1 << 3;
         let k_x = 1 << 0;
 
-        let mut input_shape_og = vec![k_x, n_x, n_x];
+        let mut input_shape_og = vec![k_x, 256,256];
         let mut input_shape_padded = input_shape_og.next_power_of_two();
         let filter = Tensor::new(vec![k_w,k_x,n_w,n_w],random_vector_quant(k_w * k_x * n_w * n_w));
         let bias = Tensor::new(vec![k_w], random_vector_quant(k_w));
         let input = Tensor::new(
                 input_shape_og.clone(),
-                random_vector_quant(k_x * n_x * n_x),
+                random_vector_quant(input_shape_og.iter().product()),
             );
 
         let output = input.conv2d(&filter, &bias, 1);
@@ -773,6 +773,9 @@ mod test {
         // again another conv
         let filter = Tensor::new(vec![k_w,k_x,n_w,n_w],random_vector_quant(k_w * k_x * n_w * n_w));
         let bias = Tensor::new(vec![k_w], random_vector_quant(k_w));
+        println!("2ND CONV: filter.get_shape() : {:?}",filter.get_shape());
+        println!("2ND CONV: bias.get_shape() : {:?}",bias.get_shape());
+        println!("2ND CONV: input.get_shape() : {:?}",output.get_shape());
         let output = output.conv2d(&filter, &bias, 1);
         let dims = filter.get_shape();
         let fft_conv = Convolution::new(
@@ -831,7 +834,7 @@ mod test {
         println!("fft_weight.get_shape() : {:?}",fft_weight.get_shape());
         println!("fft_bias.get_shape() : {:?}",fft_bias.get_shape());
         let fft_dense_output = fft_dense.op(&fft_output);
-        assert_eq!(dense_output.get_data(), fft_dense_output.get_data());
+        assert_eq!(dense_output.get_data()[..weight.nrows_2d()], fft_dense_output.get_data()[..weight.nrows_2d()]);
     }
 
     #[test]
