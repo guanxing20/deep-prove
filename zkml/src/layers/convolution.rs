@@ -709,7 +709,7 @@ pub fn phi_eval<E: ExtensionField>(
 
 #[cfg(test)]
 mod test {
-    use crate::{layers::{dense, pooling::{Maxpool2D, Pooling}}, onnx_parse::{conv2d_shape, maxpool2d_shape}, testing::{random_vector, NextPowerOfTwo}};
+    use crate::{layers::{activation::{Activation, Relu}, dense, pooling::{Maxpool2D, Pooling}}, onnx_parse::{conv2d_shape, maxpool2d_shape}, testing::{random_vector, NextPowerOfTwo}};
 
     use super::*;
     use goldilocks::GoldilocksExt2;
@@ -762,6 +762,11 @@ mod test {
         input_shape_og = conv2d_shape(&input_shape_og, &filter.get_shape());
         input_shape_padded = conv2d_shape(&input_shape_padded, &dims).next_power_of_two();
 
+        // add a RELU layer
+        let relu = Activation::Relu(Relu::new());
+        let output = relu.op(&output);
+        let fft_output = relu.op(&fft_output);
+
 
         // make a pooled output
         let pool = Pooling::Maxpool2D(Maxpool2D::default());
@@ -792,6 +797,11 @@ mod test {
 
         input_shape_og = conv2d_shape(&input_shape_og, &filter.get_shape());
         input_shape_padded = conv2d_shape(&input_shape_padded, &dims).next_power_of_two(); 
+        
+        /// Add another RELU 
+        let relu = Activation::Relu(Relu::new());
+        let output = relu.op(&output);
+        let fft_output = relu.op(&fft_output);
 
         // make a pooled output
         let pool = Pooling::Maxpool2D(Maxpool2D::default());
