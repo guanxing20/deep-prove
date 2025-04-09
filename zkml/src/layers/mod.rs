@@ -25,6 +25,7 @@ use ff_ext::ExtensionField;
 use pooling::{PoolingCtx, PoolingProof};
 use requant::RequantCtx;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use sha2::Sha256;
 #[derive(Clone, Debug)]
 pub enum Layer<T> {
     Dense(Dense<T>),
@@ -215,14 +216,22 @@ impl Layer<Element> {
         };
         match output {
             LayerOutput::NormalOut(ref output) => {
-                println!("Layer::{:?}op: {:?}", self.describe(),&output.get_data()[..output.get_data().len().min(20)]);
+                println!("Layer::{:?}op: {:?}", self.describe(),&hashit(&output.get_data()));
             }
             LayerOutput::ConvOut((ref output,_)) => {
-                println!("Layer::{:?}op: {:?}", self.describe(),&output.get_data()[..output.get_data().len().min(20)]);
+                println!("Layer::{:?}op: {:?}", self.describe(),&hashit(&output.get_data()));
             }
         }
         output
     }
+}
+
+use sha2::Digest;
+use hex;
+pub fn hashit(data: &[Element]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(data.iter().map(|e| e.to_be_bytes()).flatten().collect::<Vec<_>>());
+    hex::encode(hasher.finalize().to_vec())
 }
 
 impl<E: ExtensionField> LayerProof<E>
