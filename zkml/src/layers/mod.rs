@@ -71,6 +71,7 @@ where
     Requant(RequantProof<E>),
     Pooling(PoolingProof<E>),
 }
+#[derive(Clone,Debug)]
 pub enum LayerOutput<F>
 where
     F: ExtensionField,
@@ -194,7 +195,7 @@ impl Layer<Element> {
     // TODO: move to tensor library : right now it works because we assume there is only Dense
     // layer which is matmul
     pub fn op<F: ExtensionField>(&self, input: &Tensor<Element>) -> LayerOutput<F> {
-        match &self {
+        let output =match &self {
             Layer::Dense(ref dense) => LayerOutput::NormalOut(dense.op(input)),
             Layer::Activation(activation) => LayerOutput::NormalOut(activation.op(input)),
             Layer::Convolution(ref filter) => LayerOutput::ConvOut(filter.op(input)),
@@ -211,7 +212,16 @@ impl Layer<Element> {
                 LayerOutput::NormalOut(info.op(input))
             }
             Layer::Pooling(info) => LayerOutput::NormalOut(info.op(input)),
+        };
+        match output {
+            LayerOutput::NormalOut(ref output) => {
+                println!("Layer::{:?}op: {:?}", self.describe(),&output.get_data()[..10]);
+            }
+            LayerOutput::ConvOut((ref output,_)) => {
+                println!("Layer::{:?}op: {:?}", self.describe(),&output.get_data()[..10]);
+            }
         }
+        output
     }
 }
 

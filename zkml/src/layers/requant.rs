@@ -96,16 +96,16 @@ impl Requant {
         }).collect_vec();
         let d = Data::new(res.iter().map(|e| *e as f64).collect_vec());
         let stats = (d.mean().unwrap(),d.variance().unwrap());
-        println!(
-            "AFTER REQUANT: shift {} : {:.2} % OUT OF RANGE (over total {})-> stats mean {:?} var {:?} \n\t->{:?}\n\t->{:?}",
-            self.right_shift,
-            not_ok_count as f32 / res.len() as f32 * 100.0,
-            res.len(),
-            stats.0,
-            stats.1,
-            &input.get_data()[..10.min(input.get_data().len())],
-            &res[..10.min(res.len())],
-        );
+        //println!(
+        //    "AFTER REQUANT: shift {} : {:.2} % OUT OF RANGE (over total {})-> stats mean {:?} var {:?} \n\t->{:?}\n\t->{:?}",
+        //    self.right_shift,
+        //    not_ok_count as f32 / res.len() as f32 * 100.0,
+        //    res.len(),
+        //    stats.0,
+        //    stats.1,
+        //    &input.get_data()[..10.min(input.get_data().len())],
+        //    &res[..10.min(res.len())],
+        //);
         crate::tensor::Tensor::<Element>::new(input.get_shape(), res)
     }
 
