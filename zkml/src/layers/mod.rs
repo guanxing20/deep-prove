@@ -215,10 +215,10 @@ impl Layer<Element> {
         };
         match output {
             LayerOutput::NormalOut(ref output) => {
-                println!("Layer::{:?}op: {:?}", self.describe(),&output.get_data()[..10]);
+                println!("Layer::{:?}op: {:?}", self.describe(),&output.get_data()[..output.get_data().len().min(20)]);
             }
             LayerOutput::ConvOut((ref output,_)) => {
-                println!("Layer::{:?}op: {:?}", self.describe(),&output.get_data()[..10]);
+                println!("Layer::{:?}op: {:?}", self.describe(),&output.get_data()[..output.get_data().len().min(20)]);
             }
         }
         output
