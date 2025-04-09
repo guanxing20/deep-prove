@@ -143,12 +143,12 @@ impl Requant {
     /// target bit width while preserving the relative magnitudes.
     #[inline(always)]
     pub fn apply(&self, e: &Element) -> RequantResult {
-        let res = (*e as f64 * self.multiplier as f64).round() as Element;
-        if !(res >= *quantization::MIN && res <= *quantization::MAX) {
-            return RequantResult::OutOfRange(res.clamp(*quantization::MIN, *quantization::MAX));
-        } else {
-            return RequantResult::Ok(res);
-        }
+        //let res = (*e as f64 * self.multiplier as f64).round() as Element;
+        //if !(res >= *quantization::MIN && res <= *quantization::MAX) {
+        //    return RequantResult::OutOfRange(res.clamp(*quantization::MIN, *quantization::MAX));
+        //} else {
+        //    return RequantResult::Ok(res);
+        //}
         let max_bit = (self.range << 1) as Element;
         let tmp = e + max_bit;
         assert!(
