@@ -10,6 +10,7 @@ struct ShapeInfo {
     input_shape_padded: Shape,
     ignore_garbage_pad: GarbagePad,
     input_shape_og: Shape,
+    ignore_garbage_pad_dense: bool,
 }
 
 pub fn pad_model(mut model: Model<Element>) -> Result<Model<Element>> {
@@ -22,6 +23,7 @@ pub fn pad_model(mut model: Model<Element>) -> Result<Model<Element>> {
             .collect::<Vec<_>>(),
         ignore_garbage_pad: None,
         input_shape_og: model.input_not_padded.clone(),
+        ignore_garbage_pad_dense: false,
     };
     println!("\n\nPADDING DENSE\n\n");
     println!("{:?}",model.describe());
@@ -103,6 +105,10 @@ fn pad_conv(mut c: Convolution<Element>, si: &mut ShapeInfo) -> Result<Convoluti
 }
 
 fn pad_dense(mut d: Dense<Element>, si: &mut ShapeInfo) -> Result<Dense<Element>> {
+    // NOTE: this should be ditacted by a reshape layer
+    if si.ignore_garbage_pad.is_none() && si.ignore_garbage_pad_dense == false {
+        si.ignore_garbage_pad = Some((si.input_shape_og.clone(),si.input_shape_padded.clone()));
+    }
     println!("PAD DENSE: input shape {:?}",si);
     let nrows = d.matrix.get_shape()[0];
     si.input_shape_og = vec![nrows];
@@ -134,6 +140,7 @@ fn pad_dense(mut d: Dense<Element>, si: &mut ShapeInfo) -> Result<Dense<Element>
     }
     let ncols = new_cols.next_power_of_two();
     let nrows = d.matrix.nrows_2d().next_power_of_two();
+
     if let Some(ref conv_shapes) = si.ignore_garbage_pad.as_ref() {
         let conv_shape_og = conv_shapes.0.clone();
         let conv_shape_pad = conv_shapes.1.clone();
@@ -141,6 +148,7 @@ fn pad_dense(mut d: Dense<Element>, si: &mut ShapeInfo) -> Result<Dense<Element>
             .matrix
             .pad_matrix_to_ignore_garbage(&conv_shape_og, &conv_shape_pad, &vec![nrows, ncols]);
         si.ignore_garbage_pad = None;
+        si.ignore_garbage_pad_dense = true;
     } else {
         d.matrix.reshape_to_fit_inplace_2d(vec![nrows, ncols]);
     }
