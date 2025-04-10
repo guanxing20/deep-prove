@@ -25,6 +25,7 @@ use ff_ext::ExtensionField;
 use pooling::{PoolingCtx, PoolingProof};
 use requant::RequantCtx;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use sha2::Sha256;
 #[derive(Clone, Debug)]
 pub enum Layer<T> {
     Dense(Dense<T>),
@@ -71,6 +72,7 @@ where
     Requant(RequantProof<E>),
     Pooling(PoolingProof<E>),
 }
+#[derive(Clone,Debug)]
 pub enum LayerOutput<F>
 where
     F: ExtensionField,
@@ -196,13 +198,11 @@ impl Layer<Element> {
     // TODO: move to tensor library : right now it works because we assume there is only Dense
     // layer which is matmul
     pub fn op<F: ExtensionField>(&self, input: &Tensor<Element>) -> LayerOutput<F> {
-        match &self {
+        let output =match &self {
             Layer::Dense(ref dense) => LayerOutput::NormalOut(dense.op(input)),
             Layer::Activation(activation) => LayerOutput::NormalOut(activation.op(input)),
-            // Layer::Convolution(ref filter) => LayerOutput::ConvOut(filter.op(input)),
-            Layer::Convolution(ref filter) => {
-                LayerOutput::NormalOut(input.conv2d(&filter.filter, &filter.bias, 1))
-            }
+            Layer::Convolution(ref filter) => LayerOutput::ConvOut(filter.op(input)),
+            //Layer::Convolution(ref filter) => LayerOutput::NormalOut(input.conv2d(&filter.filter,&filter.bias,1)),
             // Traditional convolution is used for debug purposes. That is because the actual convolution
             // we use relies on the FFT algorithm. This convolution does not have a snark implementation.
             Layer::SchoolBookConvolution(ref conv_pair) => {
@@ -215,8 +215,25 @@ impl Layer<Element> {
                 LayerOutput::NormalOut(info.op(input))
             }
             Layer::Pooling(info) => LayerOutput::NormalOut(info.op(input)),
+        };
+        match output {
+            LayerOutput::NormalOut(ref output) => {
+                println!("Layer::{:?}: shape {:?} op: {:?}", self.describe(),output.get_shape(),&output.get_data()[..output.get_data().len().min(20)]);
+            }
+            LayerOutput::ConvOut((ref output,_)) => {
+                println!("Layer::{:?}: shape {:?} op: {:?}", self.describe(),output.get_shape(),&output.get_data()[..output.get_data().len().min(20)]);
+            }
         }
+        output
     }
+}
+
+use sha2::Digest;
+use hex;
+pub fn hashit(data: &[Element]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(data.iter().map(|e| e.to_be_bytes()).flatten().collect::<Vec<_>>());
+    hex::encode(hasher.finalize().to_vec())
 }
 
 impl<E: ExtensionField> LayerProof<E>

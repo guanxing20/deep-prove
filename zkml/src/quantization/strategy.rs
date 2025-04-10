@@ -120,7 +120,7 @@ impl ScalingStrategy for InferenceObserver {
                         last_input_scaling = output_scaling;
                         vec![Layer::Dense(quantized_dense), Layer::Requant(requant)]
                     }
-                    Layer::SchoolBookConvolution(conv) => {
+                    Layer::Convolution(conv) => {
                         let model_scaling = ScalingFactor::from_absolute_max(conv.max_abs_weight(), None);
                         let (min, max) = tracker.distribution_info(id);
                         let output_scaling = ScalingFactor::from_absolute_max(min.abs().max(max.abs()), None);
