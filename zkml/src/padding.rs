@@ -1,7 +1,12 @@
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use tracing::debug;
 
-use crate::{layers::{convolution::Convolution, dense::Dense, Layer}, model::Model, onnx_parse::{check_cnn_input, check_filter, conv2d_shape, maxpool2d_shape}, Element};
+use crate::{
+    Element,
+    layers::{Layer, convolution::Convolution, dense::Dense},
+    model::Model,
+    onnx_parse::{check_cnn_input, check_filter, conv2d_shape, maxpool2d_shape},
+};
 type GarbagePad = Option<(Vec<usize>, Vec<usize>)>;
 type Shape = Vec<usize>;
 
@@ -13,7 +18,6 @@ struct ShapeInfo {
 }
 
 pub fn pad_model(mut model: Model<Element>) -> Result<Model<Element>> {
-
     let mut si = ShapeInfo {
         input_shape_padded: model
             .input_not_padded
@@ -24,33 +28,33 @@ pub fn pad_model(mut model: Model<Element>) -> Result<Model<Element>> {
         input_shape_og: model.input_not_padded.clone(),
     };
     println!("\n\nPADDING DENSE\n\n");
-    println!("{:?}",model.describe());
-    println!("input shape {:?}",si);
+    println!("{:?}", model.describe());
+    println!("input shape {:?}", si);
     model.layers = model
         .layers
         .into_iter()
         .enumerate()
         .map(|(i, layer)| {
             match layer {
-            Layer::Dense(d) => Ok(Layer::Dense(pad_dense(d, &mut si)?)),
-            Layer::Convolution(c) => Ok(Layer::Convolution(pad_conv(c, &mut si)?)),
-            Layer::Pooling(m) =>  {
-                println!("PAD POOLING: input shape {:?}",si);
-                // Make sure that input shape is already padded and is well formed
-                assert!(si.input_shape_padded.iter().all(|d| d.is_power_of_two()));
-                si.input_shape_og = maxpool2d_shape(&si.input_shape_og)?;
-                si.input_shape_padded = maxpool2d_shape(&si.input_shape_padded)?;
-                Ok(Layer::Pooling(m))
+                Layer::Dense(d) => Ok(Layer::Dense(pad_dense(d, &mut si)?)),
+                Layer::Convolution(c) => Ok(Layer::Convolution(pad_conv(c, &mut si)?)),
+                Layer::Pooling(m) => {
+                    println!("PAD POOLING: input shape {:?}", si);
+                    // Make sure that input shape is already padded and is well formed
+                    assert!(si.input_shape_padded.iter().all(|d| d.is_power_of_two()));
+                    si.input_shape_og = maxpool2d_shape(&si.input_shape_og)?;
+                    si.input_shape_padded = maxpool2d_shape(&si.input_shape_padded)?;
+                    Ok(Layer::Pooling(m))
+                }
+                e => Ok(e),
             }
-            e => Ok(e)
-        }
-        }).collect::<Result<Vec<_>>>()?;
+        })
+        .collect::<Result<Vec<_>>>()?;
     Ok(model)
 }
 
-
 fn pad_conv(mut c: Convolution<Element>, si: &mut ShapeInfo) -> Result<Convolution<Element>> {
-    println!("PAD CONV: input shape {:?}",si);
+    println!("PAD CONV: input shape {:?}", si);
     si.input_shape_og = conv2d_shape(&si.input_shape_og, &c.filter.get_shape())?;
     let weight_shape = c.filter.get_shape();
     // Perform basic sanity checks on the tensor dimensions
@@ -103,7 +107,7 @@ fn pad_conv(mut c: Convolution<Element>, si: &mut ShapeInfo) -> Result<Convoluti
 }
 
 fn pad_dense(mut d: Dense<Element>, si: &mut ShapeInfo) -> Result<Dense<Element>> {
-    println!("PAD DENSE: input shape {:?}",si);
+    println!("PAD DENSE: input shape {:?}", si);
     let nrows = d.matrix.get_shape()[0];
     si.input_shape_og = vec![nrows];
     ensure!(

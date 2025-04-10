@@ -46,7 +46,10 @@ impl ScalingFactor {
     pub fn from_absolute_max(abs_max: f32, quantized_domain: Option<(Element, Element)>) -> Self {
         Self::from_span(-(abs_max.abs()), abs_max.abs(), quantized_domain)
     }
-    pub fn from_tensor<T: MinMax>(t: &Tensor<T>, quantized_domain: Option<(Element, Element)>) -> Self {
+    pub fn from_tensor<T: MinMax>(
+        t: &Tensor<T>,
+        quantized_domain: Option<(Element, Element)>,
+    ) -> Self {
         let max_abs = t
             .get_data()
             .iter()
@@ -65,7 +68,7 @@ impl ScalingFactor {
     // provided as input.
     pub(crate) fn from_scale(scale: f32, quantized_domain: Option<(Element, Element)>) -> Self {
         let (min_quantized, max_quantized) = quantized_domain.clone().unwrap_or((*MIN, *MAX));
-        let max = scale/2.0 * (max_quantized - min_quantized) as f32;
+        let max = scale / 2.0 * (max_quantized - min_quantized) as f32;
         Self::from_absolute_max(max, quantized_domain)
     }
 
@@ -84,7 +87,6 @@ impl ScalingFactor {
     pub fn m(&self, s2: &Self, s3: &Self) -> f32 {
         self.scale() * s2.scale() / s3.scale()
     }
-
 
     /// Derives the right shift to apply to values to requantize them
     /// M = S1 * S2 / S3 = 2^-n * eps
@@ -112,7 +114,7 @@ impl ScalingFactor {
 impl Default for ScalingFactor {
     fn default() -> Self {
         Self {
-            min: -1.0, 
+            min: -1.0,
             max: 1.0,
             quantized_domain: (*MIN, *MAX),
         }

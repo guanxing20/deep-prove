@@ -81,21 +81,24 @@ impl Requant {
         }
     }
     pub fn op(&self, input: &crate::tensor::Tensor<Element>) -> crate::tensor::Tensor<Element> {
-
-        //println!(
+        // println!(
         //    "BEFORE REQUANT: {:?}",
         //    &input.get_data().iter().take(30).collect_vec()
         //);
         let mut not_ok_count = 0;
-        let res = input.get_data().iter().map(|e| match self.apply(e) {
-            RequantResult::Ok(res) => res,
-            RequantResult::OutOfRange(res) => {
-                not_ok_count += 1;
-                res
-            }
-        }).collect_vec();
+        let res = input
+            .get_data()
+            .iter()
+            .map(|e| match self.apply(e) {
+                RequantResult::Ok(res) => res,
+                RequantResult::OutOfRange(res) => {
+                    not_ok_count += 1;
+                    res
+                }
+            })
+            .collect_vec();
         let d = Data::new(res.iter().map(|e| *e as f64).collect_vec());
-        let stats = (d.mean().unwrap(),d.variance().unwrap());
+        let stats = (d.mean().unwrap(), d.variance().unwrap());
         println!(
             "AFTER REQUANT: shift {} : {:.2} % OUT OF RANGE (over total {})-> stats mean {:?} var {:?} \n\t->{:?}\n\t->{:?}",
             self.right_shift,
@@ -161,10 +164,10 @@ impl Requant {
         let tmp = tmp >> self.right_shift;
         let res = tmp - (max_bit >> self.right_shift);
         if !(res >= *quantization::MIN && res <= *quantization::MAX) {
-            //warn!("{} is NOT quantized correctly: res {}", e, res);
+            // warn!("{} is NOT quantized correctly: res {}", e, res);
             RequantResult::OutOfRange(res.clamp(*quantization::MIN, *quantization::MAX))
         } else {
-            //warn!("{} is OK quantized correctly: res {}", e, res);
+            // warn!("{} is OK quantized correctly: res {}", e, res);
             RequantResult::Ok(res)
         }
     }
@@ -437,7 +440,7 @@ impl RequantCtx {
         // The first claim needs to be shifted down as we add a value to make sure that all its evals are in the range 0..1 << BIT_LEn
         let corrected_claim = Claim::<E>::new(
             point.clone(),
-            first_claim.eval - E::from((*quantization::RANGE/2) as u64),
+            first_claim.eval - E::from((*quantization::RANGE / 2) as u64),
         );
         sp_verifier.add_claim(corrected_claim)?;
 

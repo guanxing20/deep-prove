@@ -4,7 +4,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use crate::{model::Model, Element, Tensor};
+use crate::{Element, Tensor, model::Model};
 
 use super::ScalingFactor;
 

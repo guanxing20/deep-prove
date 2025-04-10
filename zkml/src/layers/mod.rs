@@ -166,7 +166,9 @@ impl Layer<f32> {
         match self {
             Layer::Dense(dense) => Layer::Dense(dense.quantize(s, bias_s)),
             Layer::Convolution(conv) => Layer::Convolution(conv.quantize(&s, bias_s)),
-            Layer::SchoolBookConvolution(conv) => Layer::SchoolBookConvolution(conv.quantize(&s, bias_s)),
+            Layer::SchoolBookConvolution(conv) => {
+                Layer::SchoolBookConvolution(conv.quantize(&s, bias_s))
+            }
             Layer::Activation(activation) => Layer::Activation(activation),
             Layer::Requant(requant) => Layer::Requant(requant),
             Layer::Pooling(pooling) => Layer::Pooling(pooling),
@@ -197,8 +199,10 @@ impl Layer<Element> {
         match &self {
             Layer::Dense(ref dense) => LayerOutput::NormalOut(dense.op(input)),
             Layer::Activation(activation) => LayerOutput::NormalOut(activation.op(input)),
-            //Layer::Convolution(ref filter) => LayerOutput::ConvOut(filter.op(input)),
-            Layer::Convolution(ref filter) => LayerOutput::NormalOut(input.conv2d(&filter.filter,&filter.bias,1)),
+            // Layer::Convolution(ref filter) => LayerOutput::ConvOut(filter.op(input)),
+            Layer::Convolution(ref filter) => {
+                LayerOutput::NormalOut(input.conv2d(&filter.filter, &filter.bias, 1))
+            }
             // Traditional convolution is used for debug purposes. That is because the actual convolution
             // we use relies on the FFT algorithm. This convolution does not have a snark implementation.
             Layer::SchoolBookConvolution(ref conv_pair) => {

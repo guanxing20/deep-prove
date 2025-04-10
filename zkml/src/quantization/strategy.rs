@@ -1,4 +1,10 @@
-use crate::{layers::activation::Activation, quantization::{metadata::{MetadataBuilder, ModelMetadata}, BIT_LEN}};
+use crate::{
+    layers::activation::Activation,
+    quantization::{
+        BIT_LEN,
+        metadata::{MetadataBuilder, ModelMetadata},
+    },
+};
 use std::collections::HashMap;
 
 use crate::{
@@ -38,8 +44,8 @@ impl InferenceObserver {
 
 const INPUT_TRACKING_ID: usize = 10_000;
 impl ScalingStrategy for InferenceObserver {
-    fn name(&self) -> String{
-        format!("inference [{},{}]",*quantization::MIN,*quantization::MAX)
+    fn name(&self) -> String {
+        format!("inference [{},{}]", *quantization::MIN, *quantization::MAX)
     }
     fn quantize(&self, model: Model<f32>) -> Result<(Model<Element>, ModelMetadata)> {
         let mut tracker = InferenceTracker::new();
@@ -49,9 +55,9 @@ impl ScalingStrategy for InferenceObserver {
         // TODO: integrate that within model.rs in a more elegant way with inference step - currently problematic
         // because of the generics and FFT requirement to take a field
         for (i, input) in self.inputs.iter().enumerate() {
-            //let input_tensor = model.load_input_flat(input.clone());
+            // let input_tensor = model.load_input_flat(input.clone());
             let input_tensor = Tensor::new(model.input_not_padded.clone(), input.clone());
-            //ensure!(
+            // ensure!(
             //    model.input_shape() == input_tensor.get_shape(),
             //    "input shape mismatch: expected {:?}, got {:?}",
             //    model.input_shape(),
@@ -60,7 +66,7 @@ impl ScalingStrategy for InferenceObserver {
             let mut last_output = input_tensor;
             tracker.track(INPUT_TRACKING_ID, last_output.clone());
             for (id, layer) in model.layers.iter().enumerate() {
-                //debug!(
+                // debug!(
                 //    "Inference Observer: inference run #{}: running layer {}",
                 //    i,
                 //    layer.describe()
@@ -72,7 +78,8 @@ impl ScalingStrategy for InferenceObserver {
         let mut md = MetadataBuilder::new();
         // 2. get the scaling factor of the input
         let (input_min, input_max) = tracker.distribution_info(INPUT_TRACKING_ID);
-        let input_scaling = ScalingFactor::from_absolute_max(input_min.abs().max(input_max.abs()), None);
+        let input_scaling =
+            ScalingFactor::from_absolute_max(input_min.abs().max(input_max.abs()), None);
         md.set_input_scaling(input_scaling);
         let mut last_input_scaling = input_scaling.clone();
         // 2. Create the requant layers from the infered data
@@ -151,9 +158,9 @@ impl ScalingStrategy for InferenceObserver {
                     //    vec![Layer::Activation(Activation::Relu(r))]
                     //}
                     a => return vec![a.quantize(
-                        &last_input_scaling, 
+                        &last_input_scaling,
                         None // no scaling factor for bias needed for this layer
-                    )],  
+                    )],
                 }
             })
             .flatten()
@@ -170,8 +177,8 @@ fn run_layer(layer: &Layer<f32>, input: &Tensor<f32>) -> Tensor<f32> {
         Layer::Dense(ref dense) => dense.op(input),
         Layer::Activation(activation) => activation.op(input),
         Layer::Convolution(ref conv_pair) => {
-            //println!("RUN CONV: input shape {:?} (4d {:?}), filter shape {:?}, bias shape {:?} -- filter 4d {:?}", input.get_shape(),input.get4d(), conv_pair.filter.get_shape(), conv_pair.bias.get_shape(),conv_pair.filter.get4d());
-            //if input.get_shape().len() == 3 {
+            // println!("RUN CONV: input shape {:?} (4d {:?}), filter shape {:?}, bias shape {:?} -- filter 4d {:?}", input.get_shape(),input.get4d(), conv_pair.filter.get_shape(), conv_pair.bias.get_shape(),conv_pair.filter.get4d());
+            // if input.get_shape().len() == 3 {
             //    Tensor::new(input.get_shape(),input.get_data().to_vec());
             //    let input_shape_prod = input.get_shape().iter().product::<usize>();
             //    assert_eq!(input_shape_prod,input.get_data().len());
@@ -183,14 +190,14 @@ fn run_layer(layer: &Layer<f32>, input: &Tensor<f32>) -> Tensor<f32> {
             //    let conv_input = Tensor::new(augmented_shape, input.get_data().to_vec());
             //    conv_input.conv2d(&conv_pair.filter, &conv_pair.bias, 1)
             //} else {
-                input.conv2d(&conv_pair.filter, &conv_pair.bias, 1)
+            input.conv2d(&conv_pair.filter, &conv_pair.bias, 1)
             //}
         }
         Layer::Pooling(info) => info.op(input),
         // Traditional convolution is used for debug purposes. That is because the actual convolution
         // we use relies on the FFT algorithm. This convolution does not have a snark implementation.
         Layer::SchoolBookConvolution(ref conv_pair) => {
-                input.conv2d(&conv_pair.filter, &conv_pair.bias, 1)
+            input.conv2d(&conv_pair.filter, &conv_pair.bias, 1)
         }
         Layer::Requant(_) => {
             panic!(
@@ -225,10 +232,10 @@ impl InferenceTracker {
         assert!(min <= max);
         //(min, max)
         (d.min() as f32, d.max() as f32)
-        //let mean = d.mean().unwrap();
-        //let std_dev = d.std_dev().unwrap();
-        //let upper_bound = mean + 3.0 * std_dev;
-        //let lower_bound = mean - 3.0 * std_dev;
+        // let mean = d.mean().unwrap();
+        // let std_dev = d.std_dev().unwrap();
+        // let upper_bound = mean + 3.0 * std_dev;
+        // let lower_bound = mean - 3.0 * std_dev;
         //(lower_bound as f32, upper_bound as f32)
     }
 }
@@ -338,7 +345,7 @@ impl ScalingStrategy for AbsoluteMax {
                         vec![Layer::Convolution(quantized_conv), Layer::Requant(requant)]
                     }
                     a => return vec![a.quantize(
-                        &last_input_scaling_factor, 
+                        &last_input_scaling_factor,
                         None // no scaling factor for bias needed for this layer
                     )],
                 }

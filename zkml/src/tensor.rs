@@ -891,8 +891,7 @@ where
         let (m, n) = (self.shape[0], self.shape[1]);
         let vec_len = vector.shape[0];
 
-        assert_eq!(n,vec_len, "Matrix columns must match vector size.");
-
+        assert_eq!(n, vec_len, "Matrix columns must match vector size.");
 
         let mut result = Tensor::zeros(vec![m]);
 
@@ -1249,18 +1248,17 @@ where
     /// if the tensor is 3d, for example the input could be 3d if there is only one batch, then
     /// it returns as if N = 1.
     pub fn get4d(&self) -> (usize, usize, usize, usize) {
-        let (n_size,offset) = if self.shape.len() == 3 {
-            (1,0)
+        let (n_size, offset) = if self.shape.len() == 3 {
+            (1, 0)
         } else {
-            (self.shape.get(0).cloned().unwrap_or(1),1)
+            (self.shape.get(0).cloned().unwrap_or(1), 1)
         };
-        let c_size = self.shape.get(0+offset).cloned().unwrap_or(1);
-        let h_size = self.shape.get(1+offset).cloned().unwrap_or(1);
-        let w_size = self.shape.get(2+offset).cloned().unwrap_or(1);
+        let c_size = self.shape.get(0 + offset).cloned().unwrap_or(1);
+        let h_size = self.shape.get(1 + offset).cloned().unwrap_or(1);
+        let w_size = self.shape.get(2 + offset).cloned().unwrap_or(1);
 
         (n_size, c_size, h_size, w_size)
     }
-
 
     /// Retrieves an element using (N, C, H, W) indexing
     pub fn get(&self, n: usize, c: usize, h: usize, w: usize) -> T {

@@ -1,5 +1,8 @@
 use crate::{
-    layers::{convolution::Convolution, dense::Dense}, padding::pad_model, quantization::{AbsoluteMax, ModelMetadata, ScalingStrategy}, Element, ScalingFactor
+    Element, ScalingFactor,
+    layers::{convolution::Convolution, dense::Dense},
+    padding::pad_model,
+    quantization::{AbsoluteMax, ModelMetadata, ScalingStrategy},
 };
 use anyhow::{Context, Error, Result, bail, ensure};
 use goldilocks::GoldilocksExt2;
@@ -63,14 +66,13 @@ impl FloatOnnxLoader {
         let float_model = load_float_model(&self.model_path)?;
         let mut kept_float = None;
         if self.keep_float {
-            kept_float= Some(float_model.clone());
+            kept_float = Some(float_model.clone());
         }
-        let (quantized_model,mut md) = self.scaling_strategy.quantize(float_model)?;
+        let (quantized_model, mut md) = self.scaling_strategy.quantize(float_model)?;
         md.float_model = kept_float;
-        //let padded_model = pad_model(quantized_model)?;
+        // let padded_model = pad_model(quantized_model)?;
         let padded_model = quantized_model;
-        Ok((padded_model,md))
-
+        Ok((padded_model, md))
     }
 }
 // Supported operators
@@ -221,7 +223,10 @@ fn model_input_shape(graph: &GraphProto) -> Vec<usize> {
 
 pub fn check_filter(filter_shape: &[usize]) -> Result<()> {
     ensure!(filter_shape.len() == 4, "Filter should be 4D tensor.");
-    ensure!(filter_shape[2] == filter_shape[3], "Filter should be square.");
+    ensure!(
+        filter_shape[2] == filter_shape[3],
+        "Filter should be square."
+    );
     Ok(())
 }
 
@@ -335,12 +340,12 @@ pub fn load_float_model(filepath: &str) -> Result<Model<f32>> {
 
     let mut ignore_garbage_pad: Option<(Vec<usize>, Vec<usize>)> = None;
     let mut input_shape_og = input_shape.clone();
-    //let mut input_shape_padded = input_shape
+    // let mut input_shape_padded = input_shape
     //    .iter()
     //    .map(|i| i.next_power_of_two())
     //    .collect_vec();
     println!("Input shape: {:?}", input_shape);
-    //println!("Padded input shape: {:?}", input_shape_padded);
+    // println!("Padded input shape: {:?}", input_shape_padded);
     let mut initializers: HashMap<String, Tensor> = HashMap::new();
     for item in graph.initializer {
         let dt = tract_onnx::pb::tensor_proto::DataType::from_i32(item.data_type)
@@ -351,7 +356,10 @@ pub fn load_float_model(filepath: &str) -> Result<Model<f32>> {
         let key = item.name.to_string();
         initializers.insert(key, value);
     }
-    println!("Initializers: TENSOR NAMES: {:?}", initializers.keys().collect_vec());
+    println!(
+        "Initializers: TENSOR NAMES: {:?}",
+        initializers.keys().collect_vec()
+    );
     let mut layers: Vec<Layer<f32>> = Vec::with_capacity(graph.node.len());
     // we need to keep track of the last shape because when we pad to next power of two one layer, we need to make sure
     // the next layer's expected input matches.
@@ -362,8 +370,8 @@ pub fn load_float_model(filepath: &str) -> Result<Model<f32>> {
             op if LINEAR_ALG.contains(&op) => {
                 let WeightBiasInfo { mut weights, bias } =
                     fetch_weight_and_bias(node, &initializers)?;
-                //println!("DENSE weights shape: {:?}", weights.get_shape());
-                //println!("DENSE MATRIX: {:?}", weights.get_data());
+                // println!("DENSE weights shape: {:?}", weights.get_shape());
+                // println!("DENSE MATRIX: {:?}", weights.get_data());
                 ensure!(bias.get_shape().len() == 1, "bias is not a vector");
                 input_shape_og = vec![weights.get_shape()[0]];
                 let nrows = weights.get_shape()[0];
@@ -373,12 +381,17 @@ pub fn load_float_model(filepath: &str) -> Result<Model<f32>> {
                     bias.get_data().len(),
                     nrows
                 );
-                ensure!(bias.get_shape()[0] == nrows, "bias length {} does not match matrix width {}", bias.get_shape()[0], nrows);
-                //assert!(input_shape_padded.iter().all(|d| d.is_power_of_two()));
-                //assert!(input_shape_padded.len() == 1);
+                ensure!(
+                    bias.get_shape()[0] == nrows,
+                    "bias length {} does not match matrix width {}",
+                    bias.get_shape()[0],
+                    nrows
+                );
+                // assert!(input_shape_padded.iter().all(|d| d.is_power_of_two()));
+                // assert!(input_shape_padded.len() == 1);
 
                 let mut new_cols = weights.ncols_2d();
-                //if weights.ncols_2d() != input_shape_padded[0] {
+                // if weights.ncols_2d() != input_shape_padded[0] {
                 //    if weights.ncols_2d() < input_shape_padded[0] {
                 //        new_cols = input_shape_padded[0];
                 //    } else {
@@ -392,13 +405,13 @@ pub fn load_float_model(filepath: &str) -> Result<Model<f32>> {
                 //    }
                 //}
 
-                //let ncols = new_cols.next_power_of_two();
-                //let nrows = weights.nrows_2d().next_power_of_two();
-                 let ncols = new_cols;
-                 let nrows = weights.nrows_2d();
+                // let ncols = new_cols.next_power_of_two();
+                // let nrows = weights.nrows_2d().next_power_of_two();
+                let ncols = new_cols;
+                let nrows = weights.nrows_2d();
                 // Pad to power of two dimensions
 
-                //if let Some(ref conv_shapes) = ignore_garbage_pad.clone() {
+                // if let Some(ref conv_shapes) = ignore_garbage_pad.clone() {
                 //    let conv_shape_og = conv_shapes.0.clone();
                 //    let conv_shape_pad = conv_shapes.1.clone();
                 //    weights = weights.pad_matrix_to_ignore_garbage(
@@ -411,14 +424,14 @@ pub fn load_float_model(filepath: &str) -> Result<Model<f32>> {
                 //    weights.reshape_to_fit_inplace_2d(vec![nrows, ncols]);
                 //}
 
-                //let bias = bias.pad_1d(nrows);
-                //input_shape_padded = vec![nrows];
+                // let bias = bias.pad_1d(nrows);
+                // input_shape_padded = vec![nrows];
 
                 debug!("layer idx {} -> final shape {:?}", i, weights.get_shape());
                 layers.push(Layer::Dense(Dense::new_from_weights(weights, bias)));
             }
             op if ACTIVATION.contains(&op) => {
-                //assert!(input_shape_padded.iter().all(|d| d.is_power_of_two()));
+                // assert!(input_shape_padded.iter().all(|d| d.is_power_of_two()));
                 let layer = Layer::Activation(Activation::Relu(Relu::new()));
                 layers.push(layer);
             }
@@ -429,8 +442,16 @@ pub fn load_float_model(filepath: &str) -> Result<Model<f32>> {
                     mut weights,
                     mut bias,
                 } = fetch_weight_and_bias(node, &initializers)?;
-                println!("RUN CONV: input shape {:?} - og {:?} ", input_shape, input_shape_og);
-                println!("RUN CONV: filter shape {:?}, bias shape {:?} -- filter 4d {:?}", weights.get_shape(), bias.get_shape(),weights.get4d());
+                println!(
+                    "RUN CONV: input shape {:?} - og {:?} ",
+                    input_shape, input_shape_og
+                );
+                println!(
+                    "RUN CONV: filter shape {:?}, bias shape {:?} -- filter 4d {:?}",
+                    weights.get_shape(),
+                    bias.get_shape(),
+                    weights.get4d()
+                );
                 input_shape_og = conv2d_shape(&input_shape_og, &weights.get_shape())?;
                 let weight_shape = weights.get_shape();
                 // Perform basic sanity checks on the tensor dimensions
@@ -441,21 +462,20 @@ pub fn load_float_model(filepath: &str) -> Result<Model<f32>> {
                     "Bias length doesn't match filter shape"
                 );
 
-
                 // Pad the tensors to the next power of two.
-                //weights = weights.pad_next_power_of_two();
-                //bias = bias.pad_next_power_of_two();
+                // weights = weights.pad_next_power_of_two();
+                // bias = bias.pad_next_power_of_two();
 
                 // Make sure that input shape is already padded and is well formed
-                //assert!(input_shape_padded.iter().all(|d| d.is_power_of_two()));
-                //assert!(input_shape_padded.len() == 3);
+                // assert!(input_shape_padded.iter().all(|d| d.is_power_of_two()));
+                // assert!(input_shape_padded.len() == 3);
 
                 // Since we are doing an FFT based conv, we need to pad the last two dimensions of the filter to match the input.
-                //let weight_shape = weights.get_shape();
-                //let (filter_height, filter_weight) = (weight_shape[2], weight_shape[3]);
-                //let (input_height, input_weight) = (input_shape_padded[1], input_shape_padded[2]);
+                // let weight_shape = weights.get_shape();
+                // let (filter_height, filter_weight) = (weight_shape[2], weight_shape[3]);
+                // let (input_height, input_weight) = (input_shape_padded[1], input_shape_padded[2]);
 
-                //assert!(
+                // assert!(
                 //    filter_height <= input_height && filter_weight <= input_weight,
                 //    "Filter dimensions have to be smaller than input dimensions"
                 //);
@@ -475,8 +495,11 @@ pub fn load_float_model(filepath: &str) -> Result<Model<f32>> {
                 // let dims = weight.dims(); // save the shape of the filter to compute the output shape
 
                 // this is the non fft'd convolution layer
-                let layer = Layer::SchoolBookConvolution(Convolution { filter: weights, bias: bias });
-                //let layer = Layer::Convolution(Convolution::new_raw(
+                let layer = Layer::SchoolBookConvolution(Convolution {
+                    filter: weights,
+                    bias: bias,
+                });
+                // let layer = Layer::Convolution(Convolution::new_raw(
                 //    weights,
                 //    bias,
                 //));
@@ -484,8 +507,8 @@ pub fn load_float_model(filepath: &str) -> Result<Model<f32>> {
 
                 layers.push(layer);
 
-                //let output_shape = conv2d_shape(&input_shape_padded, &dims)?;
-                //input_shape_padded = output_shape
+                // let output_shape = conv2d_shape(&input_shape_padded, &dims)?;
+                // input_shape_padded = output_shape
                 //    .iter()
                 //    .map(|i| i.next_power_of_two())
                 //    .collect_vec();
@@ -494,19 +517,19 @@ pub fn load_float_model(filepath: &str) -> Result<Model<f32>> {
             op if DOWNSAMPLING.contains(&op) => {
                 input_shape_og = maxpool2d_shape(&input_shape_og)?;
                 // Make sure that input shape is already padded and is well formed
-                //assert!(input_shape_padded.iter().all(|d| d.is_power_of_two()));
+                // assert!(input_shape_padded.iter().all(|d| d.is_power_of_two()));
 
                 let _ = fetch_maxpool_attributes(node)?;
                 let layer = Layer::Pooling(Pooling::Maxpool2D(Maxpool2D::default()));
                 layers.push(layer);
-                //input_shape_padded = maxpool2d_shape(&input_shape_padded)?;
+                // input_shape_padded = maxpool2d_shape(&input_shape_padded)?;
             }
             op if RESHAPE.contains(&op) => {
-                //ignore_garbage_pad = Some((input_shape_og.clone(), input_shape_padded.clone()));
+                // ignore_garbage_pad = Some((input_shape_og.clone(), input_shape_padded.clone()));
 
                 input_shape_og = vec![input_shape_og.iter().product()];
-                //assert!(input_shape_padded.iter().all(|d| d.is_power_of_two()));
-                //input_shape_padded = vec![input_shape_padded.iter().product()];
+                // assert!(input_shape_padded.iter().all(|d| d.is_power_of_two()));
+                // input_shape_padded = vec![input_shape_padded.iter().product()];
             }
             _ => bail!("Unsupported operation"),
         };
@@ -514,7 +537,7 @@ pub fn load_float_model(filepath: &str) -> Result<Model<f32>> {
             "{}. {}'s output shape: {:?}",
             i + 1,
             node.op_type.as_str(),
-            //input_shape_padded,
+            // input_shape_padded,
             input_shape_og
         );
     }
@@ -544,13 +567,11 @@ fn extract_tensor_f32_data(
 ) -> Result<Option<(Vec<f32>, Vec<usize>)>> {
     ensure!(weight_or_bias == "weight" || weight_or_bias == "bias");
     let selector = match weight_or_bias {
-        "weight" => vec!["weight","MatMul"],
+        "weight" => vec!["weight", "MatMul"],
         "bias" => vec!["bias"],
         _ => bail!("Invalid weight_or_bias: {}", weight_or_bias),
     };
-    let is_good_selector = |name: &str| -> bool {
-        selector.iter().any(|s| name.contains(s))
-    };
+    let is_good_selector = |name: &str| -> bool { selector.iter().any(|s| name.contains(s)) };
 
     // Handle multipliers (alpha/beta) from Gemm operations
     let mut alpha_or_beta: f32 = 1.0;
@@ -580,9 +601,15 @@ fn extract_tensor_f32_data(
         .filter_map(|key| initializers.get(key).cloned())
         .collect_vec();
 
-    println!("node input: {:?} - match {:?}-> tensor_vec len() {:?}", 
-            node.input, 
-            node.input.iter().map(|name| initializers.get(name)).collect::<Vec<_>>(),tensor_vec.len());
+    println!(
+        "node input: {:?} - match {:?}-> tensor_vec len() {:?}",
+        node.input,
+        node.input
+            .iter()
+            .map(|name| initializers.get(name))
+            .collect::<Vec<_>>(),
+        tensor_vec.len()
+    );
 
     // If no matching tensor found, return None
     if tensor_vec.is_empty() {
@@ -598,7 +625,7 @@ fn extract_tensor_f32_data(
         tensor_shape.reverse();
         let (m, n) = (tensor_shape[0], tensor_shape[1]);
         let mut transposed_data = vec![0.0; tensor_data.len()];
-        
+
         // Transpose the data matrix
         for i in 0..m {
             for j in 0..n {
@@ -608,15 +635,14 @@ fn extract_tensor_f32_data(
         tensor_data = transposed_data;
     }
     // Apply alpha/beta multiplier
-   // let tensor_t_f32 = tensor_t
-   //     .as_slice::<f32>()
-   //     .unwrap()
-   //     .into_iter()
-   //     .map(|x| x * alpha_or_beta)
-   //     .collect_vec();
+    // let tensor_t_f32 = tensor_t
+    //     .as_slice::<f32>()
+    //     .unwrap()
+    //     .into_iter()
+    //     .map(|x| x * alpha_or_beta)
+    //     .collect_vec();
     // Apply alpha/beta multiplier
     let tensor_t_f32 = tensor_data.into_iter().map(|x| x * alpha_or_beta).collect();
-
 
     Ok(Some((tensor_t_f32, tensor_shape)))
 }
@@ -639,7 +665,7 @@ fn fetch_weight_and_bias(
         Some(data) => data,
         None => {
             warn!("No bias tensor found for node {}", node.name);
-            (vec![0.0; shape[0]],vec![shape[0]])
+            (vec![0.0; shape[0]], vec![shape[0]])
         }
     };
 

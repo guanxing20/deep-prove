@@ -317,7 +317,7 @@ impl Model<f32> {
                 }
             };
         }
-        
+
         last_output
     }
 }
