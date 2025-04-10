@@ -162,11 +162,11 @@ impl<T: Number> Layer<T> {
 }
 
 impl Layer<f32> {
-    pub fn quantize(self, s: &ScalingFactor) -> Layer<Element> {
+    pub fn quantize(self, s: &ScalingFactor, bias_s: Option<&ScalingFactor>) -> Layer<Element> {
         match self {
-            Layer::Dense(dense) => Layer::Dense(dense.quantize(s)),
-            Layer::Convolution(conv) => Layer::Convolution(conv.quantize(&s)),
-            Layer::SchoolBookConvolution(conv) => Layer::SchoolBookConvolution(conv.quantize(&s)),
+            Layer::Dense(dense) => Layer::Dense(dense.quantize(s, bias_s)),
+            Layer::Convolution(conv) => Layer::Convolution(conv.quantize(&s, bias_s)),
+            Layer::SchoolBookConvolution(conv) => Layer::SchoolBookConvolution(conv.quantize(&s, bias_s)),
             Layer::Activation(activation) => Layer::Activation(activation),
             Layer::Requant(requant) => Layer::Requant(requant),
             Layer::Pooling(pooling) => Layer::Pooling(pooling),

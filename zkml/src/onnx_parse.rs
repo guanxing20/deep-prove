@@ -758,7 +758,7 @@ mod tests {
     #[test]
     fn test_quantize() {
         let input: [f32; 2] = [0.09039914, -0.07716653];
-        let scaling = ScalingFactor::from_span(1.0, -1.0);
+        let scaling = ScalingFactor::from_span(1.0, -1.0, None);
         println!("Result: {} => {:?}", input[0], scaling.quantize(&input[0]));
         println!("Result: {} => {:?}", input[1], scaling.quantize(&input[0]));
         println!("Result: {} => {:?}", 0, scaling.quantize(&0.0));

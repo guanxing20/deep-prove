@@ -200,9 +200,9 @@ fn run(args: Args) -> anyhow::Result<()> {
     let (inputs, given_outputs) = raw_inputs.to_elements(&md);
 
     // Generate context once and measure the time
-    info!("[+] Generating context for proving");
     let now = time::Instant::now();
     let ctx = if !args.skip_proving {
+        info!("[+] Generating context for proving");
         Some(Context::<F>::generate(&model, None).expect("unable to generate context"))
     } else {
         None
@@ -256,7 +256,7 @@ fn run(args: Args) -> anyhow::Result<()> {
         }
         info!("[+] Running prover");
         let mut prover_transcript = default_transcript();
-        let prover = Prover::<_, _>::new(&ctx.as_ref().clone().unwrap(), &mut prover_transcript);
+        let prover = Prover::<_, _>::new(ctx.as_ref().unwrap(), &mut prover_transcript);
         let proof = bencher.r(CSV_PROVING, move || {
             prover.prove(trace).expect("unable to generate proof")
         });
@@ -270,7 +270,7 @@ fn run(args: Args) -> anyhow::Result<()> {
         let mut verifier_transcript = default_transcript();
         let io = IO::new(input_tensor.to_fields(), output.to_fields());
         bencher.r(CSV_VERIFYING, || {
-            verify::<_, _>(ctx.clone().unwrap(), proof, io, &mut verifier_transcript).expect("invalid proof")
+            verify::<_, _>(ctx.as_ref().unwrap().clone(), proof, io, &mut verifier_transcript).expect("invalid proof")
         });
         info!("[+] Verify proof: valid");
 

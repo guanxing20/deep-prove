@@ -135,9 +135,12 @@ impl Convolution<f32> {
     /// Quantizes the filter and the bias. Note the weights are not yet FFT'd, that happens with new_conv at the padding step
     /// since the FFT is also making the filter shape == input shape.
     /// TODO: refactor new_conv to be in convolution.rs and more efficient than cloning
-    pub fn quantize(self, s: &ScalingFactor) -> Convolution<Element> {
+    /// It uses a custom scaling factor `bias_s` for the bias, if provided, 
+    /// otherwise the same scaling factor of the weights (i.e., `s`) is used
+    pub fn quantize(self, s: &ScalingFactor, bias_s: Option<&ScalingFactor>) -> Convolution<Element> {
         let quantized_filter = self.filter.quantize(s);
-        let bias = self.bias.quantize(&s);
+        let bias_s = bias_s.unwrap_or(s);
+        let bias = self.bias.quantize(bias_s);
         Convolution::<Element> {
             filter: quantized_filter,
             bias,

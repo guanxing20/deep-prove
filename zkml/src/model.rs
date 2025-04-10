@@ -604,6 +604,7 @@ pub(crate) mod test {
             right_shift: 10,
             range: output1.get_data().iter().map(|e| e.abs()).max().unwrap() as usize,
             after_range: *quantization::RANGE as usize,
+            multiplier: 1.0,
         };
         let requantized_output1 = requant.op(&output1);
         let final_output = dense2.op(&requantized_output1);

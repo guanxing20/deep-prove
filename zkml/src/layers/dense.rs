@@ -87,9 +87,12 @@ impl<T: Number> Dense<T> {
 }
 
 impl Dense<f32> {
-    pub fn quantize(self, s: &ScalingFactor) -> Dense<Element> {
+    /// Quantize the parameters of the dense layer. It uses a custom scaling factor `bias_s` for
+    /// the bias, if provided, otherwise the same scaling factor of the weights (i.e., `s`) is used
+    pub fn quantize(self, s: &ScalingFactor, bias_s: Option<&ScalingFactor>) -> Dense<Element> {
         let matrix = self.matrix.quantize(s);
-        let bias = self.bias.quantize(s);
+        let bias_s = bias_s.unwrap_or(s);
+        let bias = self.bias.quantize(bias_s);
         Dense::<Element> { matrix, bias }
     }
 
