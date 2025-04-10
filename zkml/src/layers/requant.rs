@@ -11,7 +11,8 @@ use ff::Field;
 use ff_ext::ExtensionField;
 use gkr::util::ceil_log2;
 use itertools::Itertools;
-use multilinear_extensions::mle::IntoMLE;
+use multilinear_extensions::mle::{IntoMLE, MultilinearExtension};
+use num_traits::Float;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use statrs::statistics::{Data, Distribution};
 use std::ops::{Add, Mul, Sub};
@@ -81,31 +82,34 @@ impl Requant {
         }
     }
     pub fn op(&self, input: &crate::tensor::Tensor<Element>) -> crate::tensor::Tensor<Element> {
-
-        //println!(
+        // println!(
         //    "BEFORE REQUANT: {:?}",
         //    &input.get_data().iter().take(30).collect_vec()
         //);
         let mut not_ok_count = 0;
-        let res = input.get_data().iter().map(|e| match self.apply(e) {
-            RequantResult::Ok(res) => res,
-            RequantResult::OutOfRange(res) => {
-                not_ok_count += 1;
-                res
-            }
-        }).collect_vec();
+        let res = input
+            .get_data()
+            .iter()
+            .map(|e| match self.apply(e) {
+                RequantResult::Ok(res) => res,
+                RequantResult::OutOfRange(res) => {
+                    not_ok_count += 1;
+                    res
+                }
+            })
+            .collect_vec();
         let d = Data::new(res.iter().map(|e| *e as f64).collect_vec());
-        let stats = (d.mean().unwrap(),d.variance().unwrap());
-        println!(
-            "AFTER REQUANT: shift {} : {:.2} % OUT OF RANGE (over total {})-> stats mean {:?} var {:?} \n\t->{:?}\n\t->{:?}",
-            self.right_shift,
-            not_ok_count as f32 / res.len() as f32 * 100.0,
-            res.len(),
-            stats.0,
-            stats.1,
-            &input.get_data()[..10.min(input.get_data().len())],
-            &res[..10.min(res.len())],
-        );
+        let stats = (d.mean().unwrap(), d.variance().unwrap());
+        // println!(
+        //    "AFTER REQUANT: shift {} : {:.2} % OUT OF RANGE (over total {})-> stats mean {:?} var {:?} \n\t->{:?}\n\t->{:?}",
+        //    self.right_shift,
+        //    not_ok_count as f32 / res.len() as f32 * 100.0,
+        //    res.len(),
+        //    stats.0,
+        //    stats.1,
+        //    &input.get_data()[..10.min(input.get_data().len())],
+        //    &res[..10.min(res.len())],
+        //);
         crate::tensor::Tensor::<Element>::new(input.get_shape(), res)
     }
 
@@ -144,11 +148,13 @@ impl Requant {
     #[inline(always)]
     pub fn apply(&self, e: &Element) -> RequantResult {
         let res = (*e as f64 * self.multiplier as f64).round() as Element;
-        if !(res >= *quantization::MIN && res <= *quantization::MAX) {
-            return RequantResult::OutOfRange(res.clamp(*quantization::MIN, *quantization::MAX));
-        } else {
-            return RequantResult::Ok(res);
-        }
+        let (mantissa, exp, _) = self.multiplier.integer_decode();
+
+        // if !(res >= *quantization::MIN && res <= *quantization::MAX) {
+        //    return RequantResult::OutOfRange(res.clamp(*quantization::MIN, *quantization::MAX));
+        //} else {
+        //    return RequantResult::Ok(res);
+        //}
         let max_bit = (self.range << 1) as Element;
         let tmp = e + max_bit;
         assert!(
@@ -161,10 +167,10 @@ impl Requant {
         let tmp = tmp >> self.right_shift;
         let res = tmp - (max_bit >> self.right_shift);
         if !(res >= *quantization::MIN && res <= *quantization::MAX) {
-            //warn!("{} is NOT quantized correctly: res {}", e, res);
+            // warn!("{} is NOT quantized correctly: res {}", e, res);
             RequantResult::OutOfRange(res.clamp(*quantization::MIN, *quantization::MAX))
         } else {
-            //warn!("{} is OK quantized correctly: res {}", e, res);
+            // warn!("{} is OK quantized correctly: res {}", e, res);
             RequantResult::Ok(res)
         }
     }
@@ -380,8 +386,12 @@ impl Requant {
             .ok_or(anyhow!("No claims found"))?;
         let point = first_claim.point.clone();
 
+        let corrected_claim = Claim::<E> {
+            point: point.clone(),
+            eval: first_claim.eval - E::from((*quantization::RANGE / 2) as u64 + 1),
+        };
         // Add the claim used in the activation function
-        same_poly_prover.add_claim(first_claim.clone())?;
+        same_poly_prover.add_claim(corrected_claim)?;
         let claim_acc_proof = same_poly_prover.prove(&same_poly_ctx, prover.transcript)?;
 
         prover
@@ -437,7 +447,7 @@ impl RequantCtx {
         // The first claim needs to be shifted down as we add a value to make sure that all its evals are in the range 0..1 << BIT_LEn
         let corrected_claim = Claim::<E>::new(
             point.clone(),
-            first_claim.eval - E::from((*quantization::RANGE/2) as u64),
+            first_claim.eval - E::from((*quantization::RANGE / 2) as u64 + 1),
         );
         sp_verifier.add_claim(corrected_claim)?;
 
