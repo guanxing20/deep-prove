@@ -474,7 +474,7 @@ where
         // let (lookup_witness, polys) =
         //     lookup::WitnessContext::<E>::initialise_witness_ctx(&self.ctx.lookup, trace)?;
 
-        self.witness_ctx = Some(witness_ctx);
+        self.witness_ctx = witness_ctx;
         self.challenge_storage = challenge_storage;
         self.lookup_witness = lookup_witnesses;
         self.table_witness = table_witnesses;

@@ -5,7 +5,7 @@ use std::collections::{BTreeSet, HashMap};
 use ff::Field;
 use ff_ext::ExtensionField;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use tracing::debug;
+use tracing::{debug, warn};
 use transcript::Transcript;
 
 use crate::{
@@ -150,7 +150,7 @@ pub fn generate_lookup_witnesses<E: ExtensionField, T: Transcript<E>>(
     transcript: &mut T,
 ) -> Result<
     (
-        Context<E>,
+        Option<Context<E>>,
         ChallengeStorage<E>,
         Vec<LogUpInput<E>>,
         Vec<LogUpInput<E>>,
@@ -260,6 +260,14 @@ where
         }
     });
 
+    if tables.is_empty() {
+        warn!("Lookup witness generation: no tables found, returning empty context TEST?");
+        return Ok((None,ChallengeStorage {
+            constant_challenge: E::ZERO,
+            challenge_map: HashMap::new(),
+        },vec![],vec![]));
+    }
+
     debug!("Lookup witness generation: generating table multiplicities...");
     // calculate the table multiplicities
     let tables_no_challenges = tables.iter().map(|table_type| {
@@ -335,7 +343,7 @@ where
             )
         })
         .collect::<Result<Vec<LogUpInput<E>>, LogUpError>>()?;
-    Ok((ctx, challenge_storage, lookup_inputs, table_inputs))
+    Ok((Some(ctx), challenge_storage, lookup_inputs, table_inputs))
 }
 
 fn initialise_from_table_set<E: ExtensionField, T: Transcript<E>>(
