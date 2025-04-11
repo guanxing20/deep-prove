@@ -178,7 +178,7 @@ mod test {
 
     fn test_model_run_helper() -> anyhow::Result<()> {
         let filepath = workspace_root().join("zkml/assets/model.onnx");
-        let model = FloatOnnxLoader::new(&filepath.to_string_lossy())
+        let (model, _md) = FloatOnnxLoader::new(&filepath.to_string_lossy())
             .with_model_type(ModelType::MLP)
             .build()?;
 

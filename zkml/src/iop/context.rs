@@ -84,9 +84,10 @@ where
                 id,
                 layer.describe()
             );
-            let (info, new_aux) = layer.step_info(id, ctx_aux);
-            step_infos.push(info);
-            ctx_aux = new_aux;
+            if let Some((info, new_aux)) = layer.step_info(id, ctx_aux.clone()) {
+                step_infos.push(info);
+                ctx_aux = new_aux;
+            }
         }
         debug!("Context : commitment generating ...");
         let commit_ctx = precommit::Context::generate_from_model(model)

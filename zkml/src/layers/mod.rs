@@ -1,8 +1,10 @@
 pub mod activation;
+pub mod common;
 pub mod convolution;
 pub mod dense;
 pub mod pooling;
 pub mod requant;
+pub mod reshape;
 
 use crate::{
     Element,
@@ -19,13 +21,16 @@ use crate::{
     tensor::{ConvData, Number, Tensor},
 };
 use activation::ActivationCtx;
+use common::{Op, ProvableOp, QuantizableOp};
 use convolution::{ConvCtx, ConvProof, SchoolBookConvCtx};
 use dense::{DenseCtx, DenseProof};
 use ff_ext::ExtensionField;
 use pooling::{PoolingCtx, PoolingProof};
 use requant::RequantCtx;
+use reshape::Reshape;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::Sha256;
+
 #[derive(Clone, Debug)]
 pub enum Layer<T> {
     Dense(Dense<T>),
@@ -39,6 +44,8 @@ pub enum Layer<T> {
     // then we assume the inputs requant info are default()
     Requant(Requant),
     Pooling(Pooling),
+    // TODO: so far it's only flattening the input tensor, e.g. new_shape = vec![shape.iter().product()]
+    Reshape(Reshape),
 }
 
 /// Describes a steps wrt the polynomial to be proven/looked at. Verifier needs to know
@@ -72,7 +79,7 @@ where
     Requant(RequantProof<E>),
     Pooling(PoolingProof<E>),
 }
-#[derive(Clone,Debug)]
+#[derive(Clone, Debug)]
 pub enum LayerOutput<F>
 where
     F: ExtensionField,
@@ -107,6 +114,8 @@ where
 }
 
 impl<T: Number> Layer<T> {
+    /// TODO: this method should be renamed to output_shape. THe internals of the layer should only be disclosed
+    /// for some node but not all (e.g. reshape doesn't have an internal shape).
     pub fn shape(&self) -> Vec<usize> {
         match &self {
             Layer::Dense(ref dense) => vec![dense.matrix.nrows_2d(), dense.matrix.ncols_2d()],
@@ -117,6 +126,7 @@ impl<T: Number> Layer<T> {
             Layer::Activation(Activation::Relu(_)) => Relu::shape(),
             Layer::Requant(info) => info.shape(),
             Layer::Pooling(Pooling::Maxpool2D(info)) => vec![info.kernel_size, info.kernel_size],
+            Layer::Reshape(ref _reshape) => vec![1],
         }
     }
 
@@ -159,8 +169,13 @@ impl<T: Number> Layer<T> {
                 "MaxPool2D{{ kernel size: {}, stride: {} }}",
                 info.kernel_size, info.stride
             ),
+            Layer::Reshape(ref reshape) => describe_op::<T, Reshape>(reshape),
         }
     }
+}
+
+fn describe_op<N: Number, O: Op<N>>(op: &O) -> String {
+    format!("{}: {:?}", op.describe(), op.output_shape())
 }
 
 impl Layer<f32> {
@@ -174,12 +189,39 @@ impl Layer<f32> {
             Layer::Activation(activation) => Layer::Activation(activation),
             Layer::Requant(requant) => Layer::Requant(requant),
             Layer::Pooling(pooling) => Layer::Pooling(pooling),
+            Layer::Reshape(reshape) => reshape.quantize(s, bias_s),
+        }
+    }
+    /// TODO: limitation of enum is we can't have same names as in Element run
+    pub(crate) fn run(&self, input: &Tensor<f32>) -> Tensor<f32> {
+        match self {
+            Layer::Dense(ref dense) => dense.op(input),
+            Layer::Activation(activation) => activation.op(input),
+            Layer::Convolution(ref conv_pair) => {
+                input.conv2d(&conv_pair.filter, &conv_pair.bias, 1)
+            }
+            Layer::Pooling(info) => info.op(input),
+            // Traditional convolution is used for debug purposes. That is because the actual convolution
+            // we use relies on the FFT algorithm. This convolution does not have a snark implementation.
+            Layer::SchoolBookConvolution(ref conv_pair) => {
+                input.conv2d(&conv_pair.filter, &conv_pair.bias, 1)
+            }
+            Layer::Reshape(ref reshape) => reshape.op(input),
+            Layer::Requant(_) => {
+                panic!(
+                    "InferenceObserver: requantization layer found while observing inference on float !?"
+                );
+            }
         }
     }
 }
 
 impl Layer<Element> {
-    pub(crate) fn step_info<E>(&self, id: PolyID, aux: ContextAux) -> (LayerCtx<E>, ContextAux)
+    pub(crate) fn step_info<E>(
+        &self,
+        id: PolyID,
+        aux: ContextAux,
+    ) -> Option<(LayerCtx<E>, ContextAux)>
     where
         E: ExtensionField + DeserializeOwned,
         E::BaseField: Serialize + DeserializeOwned,
@@ -191,6 +233,7 @@ impl Layer<Element> {
             Layer::Activation(activation) => activation.step_info(id, aux),
             Layer::Requant(requant) => requant.step_info(id, aux),
             Layer::Pooling(pooling) => pooling.step_info(id, aux),
+            Layer::Reshape(reshape) => reshape.step_info(id, aux),
         }
     }
 
@@ -198,11 +241,11 @@ impl Layer<Element> {
     // TODO: move to tensor library : right now it works because we assume there is only Dense
     // layer which is matmul
     pub fn op<F: ExtensionField>(&self, input: &Tensor<Element>) -> LayerOutput<F> {
-        let output =match &self {
+        let output = match &self {
             Layer::Dense(ref dense) => LayerOutput::NormalOut(dense.op(input)),
             Layer::Activation(activation) => LayerOutput::NormalOut(activation.op(input)),
             Layer::Convolution(ref filter) => LayerOutput::ConvOut(filter.op(input)),
-            //Layer::Convolution(ref filter) => LayerOutput::NormalOut(input.conv2d(&filter.filter,&filter.bias,1)),
+            // Layer::Convolution(ref filter) => LayerOutput::NormalOut(input.conv2d(&filter.filter,&filter.bias,1)),
             // Traditional convolution is used for debug purposes. That is because the actual convolution
             // we use relies on the FFT algorithm. This convolution does not have a snark implementation.
             Layer::SchoolBookConvolution(ref conv_pair) => {
@@ -215,24 +258,40 @@ impl Layer<Element> {
                 LayerOutput::NormalOut(info.op(input))
             }
             Layer::Pooling(info) => LayerOutput::NormalOut(info.op(input)),
+            Layer::Reshape(reshape) => LayerOutput::NormalOut(reshape.op(input)),
         };
         match output {
             LayerOutput::NormalOut(ref output) => {
-                println!("Layer::{:?}: shape {:?} op: {:?}", self.describe(),output.get_shape(),&output.get_data()[..output.get_data().len().min(20)]);
+                println!(
+                    "Layer::{:?}: shape {:?} op: {:?}",
+                    self.describe(),
+                    output.get_shape(),
+                    &output.get_data()[..output.get_data().len().min(20)]
+                );
             }
-            LayerOutput::ConvOut((ref output,_)) => {
-                println!("Layer::{:?}: shape {:?} op: {:?}", self.describe(),output.get_shape(),&output.get_data()[..output.get_data().len().min(20)]);
+            LayerOutput::ConvOut((ref output, _)) => {
+                println!(
+                    "Layer::{:?}: shape {:?} op: {:?}",
+                    self.describe(),
+                    output.get_shape(),
+                    &output.get_data()[..output.get_data().len().min(20)]
+                );
             }
         }
         output
     }
 }
 
-use sha2::Digest;
 use hex;
+use sha2::Digest;
 pub fn hashit(data: &[Element]) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(data.iter().map(|e| e.to_be_bytes()).flatten().collect::<Vec<_>>());
+    hasher.update(
+        data.iter()
+            .map(|e| e.to_be_bytes())
+            .flatten()
+            .collect::<Vec<_>>(),
+    );
     hex::encode(hasher.finalize().to_vec())
 }
 

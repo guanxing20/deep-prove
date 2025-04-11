@@ -2,10 +2,7 @@ use anyhow::{Context, Result, ensure};
 use tracing::debug;
 
 use crate::{
-    Element,
-    layers::{Layer, convolution::Convolution, dense::Dense},
-    model::Model,
-    onnx_parse::{check_cnn_input, check_filter, conv2d_shape, maxpool2d_shape},
+    layers::{convolution::Convolution, dense::Dense, reshape::Reshape, Layer}, model::Model, onnx_parse::{check_cnn_input, check_filter, conv2d_shape, maxpool2d_shape}, Element
 };
 type GarbagePad = Option<(Vec<usize>, Vec<usize>)>;
 type Shape = Vec<usize>;
@@ -15,7 +12,6 @@ struct ShapeInfo {
     input_shape_padded: Shape,
     ignore_garbage_pad: GarbagePad,
     input_shape_og: Shape,
-    ignore_garbage_pad_dense: bool,
 }
 
 pub fn pad_model(mut model: Model<Element>) -> Result<Model<Element>> {
@@ -27,7 +23,6 @@ pub fn pad_model(mut model: Model<Element>) -> Result<Model<Element>> {
             .collect::<Vec<_>>(),
         ignore_garbage_pad: None,
         input_shape_og: model.input_not_padded.clone(),
-        ignore_garbage_pad_dense: false,
     };
     println!("\n\nPADDING DENSE\n\n");
     println!("{:?}", model.describe());
@@ -48,11 +43,17 @@ pub fn pad_model(mut model: Model<Element>) -> Result<Model<Element>> {
                     si.input_shape_padded = maxpool2d_shape(&si.input_shape_padded)?;
                     Ok(Layer::Pooling(m))
                 }
+                Layer::Reshape(_) => Ok(Layer::<Element>::Reshape(reshape(&mut si)?)),
                 e => Ok(e),
             }
         })
         .collect::<Result<Vec<_>>>()?;
     Ok(model)
+}
+
+fn reshape(si: &mut ShapeInfo) -> Result<Reshape> {
+    si.ignore_garbage_pad = Some((si.input_shape_og.clone(), si.input_shape_padded.clone()));
+    Ok(Reshape)
 }
 
 fn pad_conv(mut c: Convolution<Element>, si: &mut ShapeInfo) -> Result<Convolution<Element>> {
@@ -109,11 +110,7 @@ fn pad_conv(mut c: Convolution<Element>, si: &mut ShapeInfo) -> Result<Convoluti
 }
 
 fn pad_dense(mut d: Dense<Element>, si: &mut ShapeInfo) -> Result<Dense<Element>> {
-    // NOTE: this should be ditacted by a reshape layer
-    if si.ignore_garbage_pad.is_none() && si.ignore_garbage_pad_dense == false {
-        si.ignore_garbage_pad = Some((si.input_shape_og.clone(),si.input_shape_padded.clone()));
-    }
-    println!("PAD DENSE: input shape {:?}", si);
+       println!("PAD DENSE: input shape {:?}", si);
     let nrows = d.matrix.get_shape()[0];
     si.input_shape_og = vec![nrows];
     ensure!(
@@ -152,7 +149,6 @@ fn pad_dense(mut d: Dense<Element>, si: &mut ShapeInfo) -> Result<Dense<Element>
             .matrix
             .pad_matrix_to_ignore_garbage(&conv_shape_og, &conv_shape_pad, &vec![nrows, ncols]);
         si.ignore_garbage_pad = None;
-        si.ignore_garbage_pad_dense = true;
     } else {
         d.matrix.reshape_to_fit_inplace_2d(vec![nrows, ncols]);
     }

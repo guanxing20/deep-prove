@@ -70,8 +70,8 @@ impl FloatOnnxLoader {
         }
         let (quantized_model, mut md) = self.scaling_strategy.quantize(float_model)?;
         md.float_model = kept_float;
-         let padded_model = pad_model(quantized_model)?;
-        //let padded_model = quantized_model;
+        let padded_model = pad_model(quantized_model)?;
+        // let padded_model = quantized_model;
         Ok((padded_model, md))
     }
 }
@@ -495,11 +495,8 @@ pub fn load_float_model(filepath: &str) -> Result<Model<f32>> {
                 // let dims = weight.dims(); // save the shape of the filter to compute the output shape
 
                 // this is the non fft'd convolution layer
-                //let layer = Layer::SchoolBookConvolution(Convolution { filter: weights, bias: bias });
-                let layer = Layer::Convolution(Convolution::new_raw(
-                    weights,
-                    bias,
-                ));
+                // let layer = Layer::SchoolBookConvolution(Convolution { filter: weights, bias: bias });
+                let layer = Layer::Convolution(Convolution::new_raw(weights, bias));
                 // let layer = Layer::SchoolBookConvolution(Convolution::new(weight, _bias));
 
                 layers.push(layer);

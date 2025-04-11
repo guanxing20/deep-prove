@@ -117,13 +117,13 @@ impl Requant {
         &self,
         id: PolyID,
         mut aux: ContextAux,
-    ) -> (LayerCtx<E>, ContextAux)
+    ) -> Option<(LayerCtx<E>, ContextAux)>
     where
         E: ExtensionField + DeserializeOwned,
         E::BaseField: Serialize + DeserializeOwned,
     {
         aux.tables.insert(TableType::Range);
-        (
+        Some((
             LayerCtx::Requant(RequantCtx {
                 requant: *self,
                 poly_id: id,
@@ -134,7 +134,7 @@ impl Requant {
                     .sum::<usize>(),
             }),
             aux,
-        )
+        ))
     }
     /// Applies requantization to a single element.
     ///

@@ -5,7 +5,7 @@ use tracing::info;
 
 use crate::{
     Element,
-    layers::{Layer, LayerOutput},
+    layers::{Layer, LayerOutput, common::Op},
     quantization::TensorFielder,
     tensor::{ConvData, Number, Tensor},
 };
@@ -302,22 +302,8 @@ impl Model<f32> {
     pub fn run_float(&self, input: Vec<f32>) -> Tensor<f32> {
         let mut last_output = Tensor::new(self.input_not_padded.clone(), input);
         for layer in self.layers.iter() {
-            last_output = match layer {
-                Layer::Dense(ref dense) => dense.op(&last_output),
-                Layer::Activation(activation) => activation.op(&last_output),
-                Layer::Convolution(ref conv_pair) => {
-                    last_output.conv2d(&conv_pair.filter, &conv_pair.bias, 1)
-                }
-                Layer::Pooling(info) => info.op(&last_output),
-                Layer::SchoolBookConvolution(ref conv_pair) => {
-                    last_output.conv2d(&conv_pair.filter, &conv_pair.bias, 1)
-                }
-                Layer::Requant(_) => {
-                    panic!("Requantization layer not supported in float mode")
-                }
-            };
+            last_output = layer.run(&last_output);
         }
-
         last_output
     }
 }
@@ -629,14 +615,16 @@ pub(crate) mod test {
     #[test]
     fn test_inference_trace_iterator() {
         let dense1 = Dense::random(vec![10, 11]).pad_next_power_of_two();
-        // let relu1 = Activation::Relu(Relu);
+        let relu1 = Activation::Relu(Relu);
         let dense2 = Dense::random(vec![7, dense1.ncols()]).pad_next_power_of_two();
-        // let relu2 = Activation::Relu(Relu);
+        let relu2 = Activation::Relu(Relu);
         let input = Tensor::random(vec![dense1.ncols()]);
 
         let mut model = Model::new();
         model.add_layer(Layer::Dense(dense1));
+        model.add_layer(Layer::Activation(relu1));
         model.add_layer(Layer::Dense(dense2));
+        model.add_layer(Layer::Activation(relu2));
 
         let trace = model.run::<F>(input.clone());
 
@@ -669,13 +657,13 @@ pub(crate) mod test {
 
     #[test]
     fn test_inference_trace_reverse_iterator() {
-        let dense1 = Dense::<Element>::random(vec![10, 11]).pad_next_power_of_two();
-
+        let dense1 = Dense::random(vec![10, 11]).pad_next_power_of_two();
+        let dense2 = Dense::random(vec![10, dense1.nrows()]).pad_next_power_of_two();
         let input = Tensor::random(vec![dense1.ncols()]);
 
         let mut model = Model::new();
         model.add_layer(Layer::Dense(dense1));
-
+        model.add_layer(Layer::Dense(dense2));
         let trace = model.run::<F>(input.clone());
 
         // Test reverse iteration
@@ -761,6 +749,7 @@ pub(crate) mod test {
     use transcript::BasicTranscript;
 
     #[test]
+    #[ignore = "This test should be deleted since there is no requant and it is not testing much"]
     fn test_single_matvec_prover() {
         let w1 = random_vector_quant(1024 * 1024);
         let conv1 = Tensor::new(vec![1024, 1024], w1.clone());

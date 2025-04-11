@@ -60,7 +60,7 @@ impl Activation {
         &self,
         id: PolyID,
         mut aux: ContextAux,
-    ) -> (LayerCtx<E>, ContextAux)
+    ) -> Option<(LayerCtx<E>, ContextAux)>
     where
         E: ExtensionField + DeserializeOwned,
         E::BaseField: Serialize + DeserializeOwned,
@@ -77,7 +77,7 @@ impl Activation {
                     .sum::<usize>(),
             }),
         };
-        (info, aux)
+        Some((info, aux))
     }
 
     pub(crate) fn prove_step<E: ExtensionField, T: Transcript<E>>(
