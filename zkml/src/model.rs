@@ -586,28 +586,19 @@ pub(crate) mod test {
         let dense2 = Dense::<Element>::random(vec![7, dense1.ncols()]).pad_next_power_of_two();
         let input = Tensor::<Element>::random(vec![dense1.ncols()]);
         let output1 = dense1.op(&input);
-        let requant = Requant {
-            right_shift: 10,
-            range: output1.get_data().iter().map(|e| e.abs()).max().unwrap() as usize,
-            after_range: *quantization::RANGE as usize,
-            multiplier: 1.0,
-        };
-        let requantized_output1 = requant.op(&output1);
-        let final_output = dense2.op(&requantized_output1);
+        let final_output = dense2.op(&output1);
 
         let mut model = Model::<Element>::new();
         model.add_layer(Layer::Dense(dense1.clone()));
         model.add_layer(Layer::Dense(dense2.clone()));
 
         let trace = model.run::<F>(input.clone());
-        // 4 steps because we requant after each dense layer
-        assert_eq!(trace.steps.len(), 4);
-
+        assert_eq!(trace.steps.len(), 2);
         // Verify first step
         assert_eq!(trace.steps[0].output, output1);
 
         // Verify second step
-        assert_eq!(trace.steps[2].output, final_output.clone());
+        assert_eq!(trace.steps[1].output, final_output.clone());
         let (nrow, _) = (dense2.nrows(), dense2.ncols());
         assert_eq!(final_output.get_data().len(), nrow);
     }
@@ -704,8 +695,7 @@ pub(crate) mod test {
             .collect_vec();
         let point1 = random_bool_vector(dense_layers[0].matrix.nrows_2d().ilog2() as usize);
         println!("point1: {:?}", point1);
-        // -2 because there is always requant after each dense layer
-        let computed_eval1 = trace.steps[trace.steps.len() - 2]
+        let computed_eval1 = trace.steps[trace.steps.len() - 1]
             .output
             .get_data()
             .to_vec()
