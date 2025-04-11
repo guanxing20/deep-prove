@@ -39,25 +39,37 @@ pub const MAX_FLOAT: f32 = 1.0;
 pub struct ScalingFactor {
     min: f32,
     max: f32,
+    quantized_domain: (Element, Element),
 }
 
 impl ScalingFactor {
-    pub fn from_absolute_max(abs_max: f32) -> Self {
-        Self { min: -(abs_max.abs()), max: abs_max.abs() }
+    pub fn from_absolute_max(abs_max: f32, quantized_domain: Option<(Element, Element)>) -> Self {
+        Self::from_span(-(abs_max.abs()), abs_max.abs(), quantized_domain)
     }
-    pub fn from_tensor<T: MinMax>(t: &Tensor<T>) -> Self {
+    pub fn from_tensor<T: MinMax>(
+        t: &Tensor<T>,
+        quantized_domain: Option<(Element, Element)>,
+    ) -> Self {
         let max_abs = t
             .get_data()
             .iter()
             .fold(T::zero(), |a, b| a.cmp_max(b.absolute_value()));
-        Self::from_absolute_max(max_abs.to_f32())
+        Self::from_absolute_max(max_abs.to_f32(), quantized_domain)
     }
 
-    pub fn from_span(min: f32, max: f32) -> Self {
+    pub fn from_span(min: f32, max: f32, quantized_domain: Option<(Element, Element)>) -> Self {
         Self {
             min: min,
-            max: max
+            max: max,
+            quantized_domain: quantized_domain.unwrap_or((*MIN, *MAX)),
         }
+    }
+    // Initialize a scaling factor in such a way that `self.scale()` is equal to the `scale` value
+    // provided as input.
+    pub(crate) fn from_scale(scale: f32, quantized_domain: Option<(Element, Element)>) -> Self {
+        let (min_quantized, max_quantized) = quantized_domain.clone().unwrap_or((*MIN, *MAX));
+        let max = scale / 2.0 * (max_quantized - min_quantized) as f32;
+        Self::from_absolute_max(max, quantized_domain)
     }
 
     pub fn min(&self) -> f32 {
@@ -69,13 +81,12 @@ impl ScalingFactor {
     }
 
     pub fn scale(&self) -> f32 {
-        (self.max - self.min) / (*MAX - *MIN) as f32
+        (self.max - self.min) / (self.quantized_domain.1 - self.quantized_domain.0) as f32
     }
     /// M = S1 * S2 / S3
     pub fn m(&self, s2: &Self, s3: &Self) -> f32 {
         self.scale() * s2.scale() / s3.scale()
     }
-
 
     /// Derives the right shift to apply to values to requantize them
     /// M = S1 * S2 / S3 = 2^-n * eps
@@ -96,15 +107,16 @@ impl ScalingFactor {
         // formula is q = round(r/S) + z
         // let scaled =((value.clamp(self.min,self.max) - self.min) / self.scale()).round() * self.scale() + self.min;
         let scaled = (*value / self.scale()).round() as Element + zero_point;
-        scaled.clamp(*MIN, *MAX)
+        scaled.clamp(self.quantized_domain.0, self.quantized_domain.1)
     }
 }
 
 impl Default for ScalingFactor {
     fn default() -> Self {
         Self {
-            min: -1.0, 
-            max: 1.0
+            min: -1.0,
+            max: 1.0,
+            quantized_domain: (*MIN, *MAX),
         }
     }
 }

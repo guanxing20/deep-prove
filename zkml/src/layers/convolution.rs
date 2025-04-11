@@ -1,7 +1,12 @@
 use core::f32;
 
 use crate::{
-    commit::{compute_betas_eval, identity_eval}, iop::{context::ContextAux, verifier::Verifier}, layers::{LayerProof, PolyID}, quantization::{self, max_range_from_weight, ScalingFactor}, tensor::{get_root_of_unity, ConvData, Number}, Claim, Prover
+    Claim, Prover,
+    commit::{compute_betas_eval, identity_eval},
+    iop::{context::ContextAux, verifier::Verifier},
+    layers::{LayerProof, PolyID},
+    quantization::{self, ScalingFactor, max_range_from_weight},
+    tensor::{ConvData, Number, get_root_of_unity},
 };
 use anyhow::Context;
 use ff_ext::ExtensionField;
@@ -120,24 +125,27 @@ impl<T: Number> Convolution<T> {
     pub fn filter_size(&self) -> usize {
         self.filter.filter_size()
     }
-
-   }
+}
 impl Convolution<f32> {
     /// used to create a convoluation layer with from the raw float weights and bias.
     /// The wieghts are NOT fft'd as they are when the it is being quantized.
     pub fn new_raw(filter: Tensor<f32>, bias: Tensor<f32>) -> Self {
-        Self {
-            filter,
-            bias,
-        }
+        Self { filter, bias }
     }
 
     /// Quantizes the filter and the bias. Note the weights are not yet FFT'd, that happens with new_conv at the padding step
     /// since the FFT is also making the filter shape == input shape.
     /// TODO: refactor new_conv to be in convolution.rs and more efficient than cloning
-    pub fn quantize(self, s: &ScalingFactor) -> Convolution<Element> {
+    /// It uses a custom scaling factor `bias_s` for the bias, if provided,
+    /// otherwise the same scaling factor of the weights (i.e., `s`) is used
+    pub fn quantize(
+        self,
+        s: &ScalingFactor,
+        bias_s: Option<&ScalingFactor>,
+    ) -> Convolution<Element> {
         let quantized_filter = self.filter.quantize(s);
-        let bias = self.bias.quantize(&s);
+        let bias_s = bias_s.unwrap_or(s);
+        let bias = self.bias.quantize(bias_s);
         Convolution::<Element> {
             filter: quantized_filter,
             bias,
@@ -153,9 +161,12 @@ impl Convolution<f32> {
         let max_bias = self.bias.max_abs_output();
         let distance = (max_weight - max_bias).abs() / max_weight;
         if distance > 0.1 {
-            warn!("max_abs_weight CONV: distance between max_weight and max_bias is too large: {:.2}%", distance * 100.0);
+            warn!(
+                "max_abs_weight CONV: distance between max_weight and max_bias is too large: {:.2}%",
+                distance * 100.0
+            );
         }
-        self.filter.max_abs_output()//.max(self.bias.max_abs_output())
+        self.filter.max_abs_output() //.max(self.bias.max_abs_output())
     }
 
     pub fn float_op(&self, input: &Tensor<f32>) -> Tensor<f32> {
@@ -165,10 +176,7 @@ impl Convolution<f32> {
 
 impl Convolution<Element> {
     pub fn new(filter: Tensor<Element>, bias: Tensor<Element>) -> Self {
-        Self {
-            filter,
-            bias,
-        }
+        Self { filter, bias }
     }
 
     pub fn op<E: ExtensionField>(&self, input: &Tensor<Element>) -> (Tensor<Element>, ConvData<E>) {
@@ -180,24 +188,37 @@ impl Convolution<Element> {
     /// NOTE: it assumes the weights in float are NOT fft'd
     pub fn output_range(&self, min_input: Element, max_input: Element) -> (Element, Element) {
         let (k_n, k_c, k_h, k_w) = self.filter.get4d();
-        let (global_min,global_max) = (Element::MAX,Element::MIN);
+        let (global_min, global_max) = (Element::MAX, Element::MIN);
         // iterate over output channels and take the min/max of all of it
-        return (0..k_n).into_iter().map(|output| {
-            let (mut filter_min,mut filter_max) = (0,0);
-            // iterate over input channels and sum up
-            for input in 0..k_c {
-                for h in 0..k_h {
-                    for w in 0..k_w {
-                        let (ind_min,ind_max) = quantization::max_range_from_weight(&self.filter.get(output,input,h,w), &min_input, &max_input);
-                        filter_min += ind_min;
-                        filter_max += ind_max;
+        return (0..k_n)
+            .into_iter()
+            .map(|output| {
+                let (mut filter_min, mut filter_max) = (0, 0);
+                // iterate over input channels and sum up
+                for input in 0..k_c {
+                    for h in 0..k_h {
+                        for w in 0..k_w {
+                            let (ind_min, ind_max) = quantization::max_range_from_weight(
+                                &self.filter.get(output, input, h, w),
+                                &min_input,
+                                &max_input,
+                            );
+                            filter_min += ind_min;
+                            filter_max += ind_max;
+                        }
                     }
                 }
-            }
-            (filter_min,filter_max)
-        }).fold((global_min,global_max),|(global_min,global_max),(local_min,local_max)| {
-            (global_min.cmp_min(&local_min),global_max.cmp_max(&local_max))
-        });
+                (filter_min, filter_max)
+            })
+            .fold(
+                (global_min, global_max),
+                |(global_min, global_max), (local_min, local_max)| {
+                    (
+                        global_min.cmp_min(&local_min),
+                        global_max.cmp_max(&local_max),
+                    )
+                },
+            );
 
         let x_min = min_input;
         let x_max = max_input;
@@ -216,8 +237,16 @@ impl Convolution<Element> {
                 std::iter::repeat(x_max).take(input_n).collect(),
             );
             let max_outputt = max_input_tensor.conv2d(&self.filter, &self.bias, 1);
-            println!("CONV: min_min_outputt {:?}, min_max_outputt {:?}", min_outputt.min_value(), min_outputt.max_value());
-            println!("CONV: max_min_outputt {:?}, max_max_outputt {:?}", max_outputt.min_value(), max_outputt.max_value());
+            println!(
+                "CONV: min_min_outputt {:?}, min_max_outputt {:?}",
+                min_outputt.min_value(),
+                min_outputt.max_value()
+            );
+            println!(
+                "CONV: max_min_outputt {:?}, max_max_outputt {:?}",
+                max_outputt.min_value(),
+                max_outputt.max_value()
+            );
             // take the smallest and highest value from both runs
             let min_output = min_outputt.min_value().cmp_min(&max_outputt.min_value());
             let max_output = min_outputt.max_value().cmp_max(&max_outputt.max_value());

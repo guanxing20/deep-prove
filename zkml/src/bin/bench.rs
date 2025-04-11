@@ -1,4 +1,3 @@
-use zkml::{model::Model, Tensor};
 use std::{
     collections::HashMap,
     fs::{File, OpenOptions},
@@ -6,7 +5,11 @@ use std::{
     path::Path,
     time,
 };
-use zkml::quantization::{AbsoluteMax, InferenceObserver, ModelMetadata, ScalingStrategy};
+use zkml::{
+    Tensor,
+    model::Model,
+    quantization::{AbsoluteMax, InferenceObserver, ModelMetadata, ScalingStrategy},
+};
 
 use anyhow::{Context as CC, ensure};
 use clap::Parser;
@@ -130,7 +133,8 @@ impl InputJSON {
                 "PyTorch Run {}/{}: \n\t truth {:?} \n\t pytorch {:?}\n\t-> Accuracy: {}",
                 i + 1,
                 self.output_data.len(),
-                expected, pytorch_out,
+                expected,
+                pytorch_out,
                 if accuracy > 0 { "correct" } else { "incorrect" }
             );
         }
@@ -152,9 +156,11 @@ fn run_float_model(raw_inputs: &InputJSON, model: &Model<f32>) -> f32 {
     let mut accuracies = Vec::new();
     info!("[+] Running model in float format");
 
-    for (i, (input, expected)) in raw_inputs.input_data.iter()
+    for (i, (input, expected)) in raw_inputs
+        .input_data
+        .iter()
         .zip(raw_inputs.output_data.iter())
-        .enumerate() 
+        .enumerate()
     {
         // Run the model in float mode
         let output = model.run_float(input.clone());
@@ -200,9 +206,9 @@ fn run(args: Args) -> anyhow::Result<()> {
     let (inputs, given_outputs) = raw_inputs.to_elements(&md);
 
     // Generate context once and measure the time
-    info!("[+] Generating context for proving");
     let now = time::Instant::now();
     let ctx = if !args.skip_proving {
+        info!("[+] Generating context for proving");
         Some(Context::<F>::generate(&model, None).expect("unable to generate context"))
     } else {
         None
@@ -210,7 +216,7 @@ fn run(args: Args) -> anyhow::Result<()> {
     let setup_time = now.elapsed().as_millis();
     info!("STEP: {} took {}ms", CSV_SETUP, setup_time);
 
-    //return Ok(());
+    // return Ok(());
     // Collect accuracies for final average
     let mut accuracies = Vec::new();
 
@@ -256,7 +262,7 @@ fn run(args: Args) -> anyhow::Result<()> {
         }
         info!("[+] Running prover");
         let mut prover_transcript = default_transcript();
-        let prover = Prover::<_, _>::new(&ctx.as_ref().clone().unwrap(), &mut prover_transcript);
+        let prover = Prover::<_, _>::new(ctx.as_ref().unwrap(), &mut prover_transcript);
         let proof = bencher.r(CSV_PROVING, move || {
             prover.prove(trace).expect("unable to generate proof")
         });
@@ -270,7 +276,13 @@ fn run(args: Args) -> anyhow::Result<()> {
         let mut verifier_transcript = default_transcript();
         let io = IO::new(input_tensor.to_fields(), output.to_fields());
         bencher.r(CSV_VERIFYING, || {
-            verify::<_, _>(ctx.clone().unwrap(), proof, io, &mut verifier_transcript).expect("invalid proof")
+            verify::<_, _>(
+                ctx.as_ref().unwrap().clone(),
+                proof,
+                io,
+                &mut verifier_transcript,
+            )
+            .expect("invalid proof")
         });
         info!("[+] Verify proof: valid");
 
@@ -282,12 +294,12 @@ fn run(args: Args) -> anyhow::Result<()> {
     let avg_accuracy = calculate_average_accuracy(&accuracies);
 
     // Single final accuracy comparison
-    info!(
-        "Final accuracy comparison across {} runs:",
-        num_samples
-    );
+    info!("Final accuracy comparison across {} runs:", num_samples);
     info!("ZKML float model accuracy: {:.2}%", float_accuracy * 100.0);
-    info!("ZKML quantized model accuracy: {:.2}%", avg_accuracy * 100.0);
+    info!(
+        "ZKML quantized model accuracy: {:.2}%",
+        avg_accuracy * 100.0
+    );
     info!("PyTorch accuracy: {:.2}%", pytorch_accuracy * 100.0);
 
     Ok(())
