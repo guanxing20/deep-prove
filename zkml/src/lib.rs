@@ -125,10 +125,10 @@ pub fn argmax<T: PartialOrd>(v: &[T]) -> Option<usize> {
     if v.is_empty() {
         return None;
     }
-    
+
     let mut max_index = 0;
     let mut max_value = &v[0];
-    
+
     for (i, value) in v.iter().enumerate().skip(1) {
         // Only update if strictly greater, ensuring we take the first maximum in ties
         if value > max_value {
@@ -136,7 +136,7 @@ pub fn argmax<T: PartialOrd>(v: &[T]) -> Option<usize> {
             max_value = value;
         }
     }
-    
+
     Some(max_index)
 }
 

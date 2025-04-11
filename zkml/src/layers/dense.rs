@@ -82,14 +82,15 @@ impl<T: Number> Dense<T> {
         let bias = self.bias.pad_1d(matrix.nrows_2d());
         Self { matrix, bias }
     }
-
-    
 }
 
 impl Dense<f32> {
-    pub fn quantize(self, s: &ScalingFactor) -> Dense<Element> {
+    /// Quantize the parameters of the dense layer. It uses a custom scaling factor `bias_s` for
+    /// the bias, if provided, otherwise the same scaling factor of the weights (i.e., `s`) is used
+    pub fn quantize(self, s: &ScalingFactor, bias_s: Option<&ScalingFactor>) -> Dense<Element> {
         let matrix = self.matrix.quantize(s);
-        let bias = self.bias.quantize(s);
+        let bias_s = bias_s.unwrap_or(s);
+        let bias = self.bias.quantize(bias_s);
         Dense::<Element> { matrix, bias }
     }
 
@@ -106,7 +107,10 @@ impl Dense<f32> {
         let max_bias = self.bias.max_abs_output();
         let distance = (max_weight - max_bias).abs() / max_weight;
         if distance > 0.1 {
-            warn!("max_abs_weight DENSE: distance between max_weight and max_bias is too large: {:.2}%", distance * 100.0);
+            warn!(
+                "max_abs_weight DENSE: distance between max_weight and max_bias is too large: {:.2}%",
+                distance * 100.0
+            );
         }
         self.matrix.max_abs_output().max(self.bias.max_abs_output())
     }
@@ -118,11 +122,16 @@ impl Dense<Element> {
         // formula is 2^{2 * BIT_LEN + log(c) + 1} where c is the number of columns and +1 because of the bias
         let ncols = self.matrix.ncols_2d() as u32;
         let power = (2 * (*quantization::BIT_LEN as u32) + ncols.ilog2() + 1);
-        println!(" DENSE POWER {:?} - quantization::BIT_LEN {:?}, ncols.log2() {:?}",power,*quantization::BIT_LEN,ncols.ilog2());
+        println!(
+            " DENSE POWER {:?} - quantization::BIT_LEN {:?}, ncols.log2() {:?}",
+            power,
+            *quantization::BIT_LEN,
+            ncols.ilog2()
+        );
         let min = -(2u64.pow(power as u32) as Element);
-        println!(" DENSE POWER 2 {:?}",power);
+        println!(" DENSE POWER 2 {:?}", power);
         let max = 2u64.pow(power as u32) as Element;
-        return (min,max);
+        return (min, max);
         // return {
         //    let ncols = self.matrix.ncols_2d();
         //    let min_input_tensor = Tensor::new(vec![ncols],std::iter::repeat(input_scaling.min()).take(ncols).collect());
@@ -131,8 +140,8 @@ impl Dense<Element> {
         //    let max_output = self.matrix.matvec(&max_input_tensor).add(&self.bias);
         //    min_output.max_abs_output().max(max_output.max_abs_output())
         //};
-        //let ncols = self.matrix.ncols_2d();
-        //self.matrix
+        // let ncols = self.matrix.ncols_2d();
+        // self.matrix
         //    .get_data()
         //    .iter()
         //    .chunks(ncols)
