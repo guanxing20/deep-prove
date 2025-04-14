@@ -1,7 +1,6 @@
-use crate::quantization::{
-    BIT_LEN,
-    metadata::{MetadataBuilder, ModelMetadata},
-};
+use crate::{quantization::{
+    metadata::{MetadataBuilder, ModelMetadata}, BIT_LEN
+}, tensor::Number};
 use std::collections::HashMap;
 
 use crate::{
@@ -11,6 +10,8 @@ use crate::{
     quantization,
 };
 use anyhow::{Result, ensure};
+use ark_std::rand;
+use itertools::Itertools;
 use statrs::statistics::{Data, Max, Min, OrderStatistics};
 use tracing::debug;
 
@@ -36,6 +37,9 @@ impl InferenceObserver {
     pub fn new_with_representative_input(inputs: Vec<Vec<f32>>) -> Self {
         Self { inputs }
     }
+    pub fn new() -> Self {
+        Self { inputs: vec![] }
+    }
 }
 
 const INPUT_TRACKING_ID: usize = 10_000;
@@ -47,10 +51,16 @@ impl ScalingStrategy for InferenceObserver {
         let mut tracker = InferenceTracker::new();
         let input_shape = model.input_shape();
         let input_not_padded_shape = model.input_not_padded();
+        let inputs = if self.inputs.is_empty() {
+            let size = input_not_padded_shape.iter().product();
+            (0..10).map(|_| (0..size).map(|_| <f32 as Number>::random(&mut rand::thread_rng())).collect_vec()).collect_vec()
+        } else {
+            self.inputs.clone()
+        };
         // 1. Run the inference multiple times with different inputs
         // TODO: integrate that within model.rs in a more elegant way with inference step - currently problematic
         // because of the generics and FFT requirement to take a field
-        for (i, input) in self.inputs.iter().enumerate() {
+        for (i, input) in inputs.iter().enumerate() {
             // let input_tensor = model.load_input_flat(input.clone());
             let input_tensor = Tensor::new(model.input_not_padded.clone(), input.clone());
             // ensure!(
@@ -188,7 +198,7 @@ impl InferenceTracker {
 
     /// Returns the 0.05 and 0.95 quantiles of the distribution of the output values of the layer.
     fn distribution_info(&self, layer_index: usize) -> (f32, f32) {
-        let mut d: Data<Vec<f64>> = Data::new(self.data[&layer_index].clone());
+        let mut d: Data<Vec<f64>> = Data::new(self.data.get(&layer_index).expect(&format!("No data for layer {:?}",layer_index)).clone());
         let min = d.percentile(5) as f32;
         let max = d.percentile(95) as f32;
         assert!(min <= max);
