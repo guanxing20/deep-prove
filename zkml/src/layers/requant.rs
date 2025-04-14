@@ -13,8 +13,9 @@ use gkr::util::ceil_log2;
 use itertools::Itertools;
 use multilinear_extensions::mle::{IntoMLE, MultilinearExtension};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use tracing::warn;
+use statrs::statistics::{Data, Distribution};
 use std::ops::{Add, Mul, Sub};
+use tracing::warn;
 use transcript::Transcript;
 
 use crate::{
@@ -96,21 +97,21 @@ impl Requant {
                 }
             })
             .collect_vec();
-        // let _d = Data::new(res.iter().map(|e| *e as f64).collect_vec());
+        let d = Data::new(res.iter().map(|e| *e as f64).collect_vec());
         // Debug information to uncomment when debugging scaling factor. Sometimes the right shift is too high
         // and we can observe values being null'd, e.g. set to 0 very quickly. Which messes up the distribution and
         // thus the inference.
-        // let stats = (d.mean().unwrap(), d.variance().unwrap());
-        // println!(
-        //    "AFTER REQUANT: shift {} : {:.2} % OUT OF RANGE (over total {})-> stats mean {:?} var {:?} \n\t->{:?}\n\t->{:?}",
-        //    self.right_shift,
-        //    not_ok_count as f32 / res.len() as f32 * 100.0,
-        //    res.len(),
-        //    stats.0,
-        //    stats.1,
-        //    &input.get_data()[..10.min(input.get_data().len())],
-        //    &res[..10.min(res.len())],
-        //);
+        let stats = (d.mean().unwrap(), d.variance().unwrap());
+        println!(
+            "AFTER REQUANT: shift {} : {:.2} % OUT OF RANGE (over total {})-> stats mean {:?} var {:?} \n\t->{:?}\n\t->{:?}",
+            self.right_shift,
+            not_ok_count as f32 / res.len() as f32 * 100.0,
+            res.len(),
+            stats.0,
+            stats.1,
+            &input.get_data()[..10.min(input.get_data().len())],
+            &res[..10.min(res.len())],
+        );
         crate::tensor::Tensor::<Element>::new(input.get_shape(), res)
     }
 
@@ -172,7 +173,8 @@ impl Requant {
         let res = tmp - (max_bit >> self.right_shift);
         if !(res >= *quantization::MIN && res <= *quantization::MAX) {
             warn!("{} is NOT quantized correctly: res {}", e, res);
-            RequantResult::OutOfRange(res.clamp(*quantization::MIN, *quantization::MAX))
+            // RequantResult::OutOfRange(res.clamp(*quantization::MIN, *quantization::MAX))
+            RequantResult::OutOfRange(res)
         } else {
             // warn!("{} is OK quantized correctl: res {}", e, res);
             RequantResult::Ok(res)

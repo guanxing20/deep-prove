@@ -690,7 +690,7 @@ mod tests {
     use super::*;
 
     use crate::{
-        Context, IO, Prover, ScalingFactor, init_test_logging, quantization::TensorFielder, verify,
+        init_test_logging, quantization::{InferenceObserver, TensorFielder}, verify, Context, Prover, ScalingFactor, IO
     };
     use goldilocks::GoldilocksExt2;
     use transcript::BasicTranscript;
@@ -793,6 +793,7 @@ mod tests {
         ModelType::CNN.validate(filepath).unwrap();
         let result = FloatOnnxLoader::new(&filepath)
             .with_model_type(ModelType::CNN)
+            .with_scaling_strategy(Box::new(InferenceObserver::new()))
             .build();
 
         assert!(result.is_ok(), "Failed: {:?}", result.unwrap_err());
