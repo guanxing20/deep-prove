@@ -291,9 +291,10 @@ impl ScalingStrategy for AbsoluteMax {
                         //let output_scaling = ScalingFactor::new(abs_max);
                         // TODO: remove this is broken
                         let output_scaling = ScalingFactor::default();
-                        last_input_scaling_factor = output_scaling;
+                        
                         md.set_layers_scaling(id, output_scaling);
                         let shift = last_input_scaling_factor.shift(&model_scaling, &output_scaling);
+                        last_input_scaling_factor = output_scaling;
                         println!("Scaling: AbsoluteMax: CONV max_weight {:?}, max_output: {:?} - adding requant", max_weight, 1.0);
                         let requant = Requant::new(quant_min_output.abs() as usize, shift);
                         vec![Layer::Convolution(quantized_conv), Layer::Requant(requant)]
