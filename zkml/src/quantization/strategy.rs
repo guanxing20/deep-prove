@@ -1,6 +1,10 @@
-use crate::{quantization::{
-    metadata::{MetadataBuilder, ModelMetadata}, BIT_LEN
-}, tensor::Number};
+use crate::{
+    quantization::{
+        BIT_LEN,
+        metadata::{MetadataBuilder, ModelMetadata},
+    },
+    tensor::Number,
+};
 use std::collections::HashMap;
 
 use crate::{
@@ -53,7 +57,13 @@ impl ScalingStrategy for InferenceObserver {
         let input_not_padded_shape = model.input_not_padded();
         let inputs = if self.inputs.is_empty() {
             let size = input_not_padded_shape.iter().product();
-            (0..10).map(|_| (0..size).map(|_| <f32 as Number>::random(&mut rand::thread_rng())).collect_vec()).collect_vec()
+            (0..10)
+                .map(|_| {
+                    (0..size)
+                        .map(|_| <f32 as Number>::random(&mut rand::thread_rng()))
+                        .collect_vec()
+                })
+                .collect_vec()
         } else {
             self.inputs.clone()
         };
@@ -149,9 +159,9 @@ impl ScalingStrategy for InferenceObserver {
                             quantized_conv.output_range(*quantization::MIN, *quantization::MAX);
                         md.set_layers_scaling(id, output_scaling);
                         let mut requant = Requant::new(quantized_min.abs() as usize, shift);
-                        //let scale = last_input_scaling.scale() * model_scaling.scale()
+                        // let scale = last_input_scaling.scale() * model_scaling.scale()
                         //  / output_scaling.scale();
-                        //requant.set_test_multiplier(scale);
+                        // requant.set_test_multiplier(scale);
                         last_input_scaling = output_scaling;
                         vec![Layer::Convolution(quantized_conv), Layer::Requant(requant)]
                     }
@@ -198,7 +208,12 @@ impl InferenceTracker {
 
     /// Returns the 0.05 and 0.95 quantiles of the distribution of the output values of the layer.
     fn distribution_info(&self, layer_index: usize) -> (f32, f32) {
-        let mut d: Data<Vec<f64>> = Data::new(self.data.get(&layer_index).expect(&format!("No data for layer {:?}",layer_index)).clone());
+        let mut d: Data<Vec<f64>> = Data::new(
+            self.data
+                .get(&layer_index)
+                .expect(&format!("No data for layer {:?}", layer_index))
+                .clone(),
+        );
         let min = d.percentile(5) as f32;
         let max = d.percentile(95) as f32;
         assert!(min <= max);
@@ -301,7 +316,6 @@ impl ScalingStrategy for AbsoluteMax {
                         //let output_scaling = ScalingFactor::new(abs_max);
                         // TODO: remove this is broken
                         let output_scaling = ScalingFactor::default();
-                        
                         md.set_layers_scaling(id, output_scaling);
                         let shift = last_input_scaling_factor.shift(&model_scaling, &output_scaling);
                         last_input_scaling_factor = output_scaling;

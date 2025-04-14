@@ -14,8 +14,8 @@ use itertools::Itertools;
 use multilinear_extensions::mle::{IntoMLE, MultilinearExtension};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use statrs::statistics::{Data, Distribution};
-use tracing::warn;
 use std::ops::{Add, Mul, Sub};
+use tracing::warn;
 use transcript::Transcript;
 
 use crate::{
@@ -173,7 +173,7 @@ impl Requant {
         let res = tmp - (max_bit >> self.right_shift);
         if !(res >= *quantization::MIN && res <= *quantization::MAX) {
             warn!("{} is NOT quantized correctly: res {}", e, res);
-            //RequantResult::OutOfRange(res.clamp(*quantization::MIN, *quantization::MAX))
+            // RequantResult::OutOfRange(res.clamp(*quantization::MIN, *quantization::MAX))
             RequantResult::OutOfRange(res)
         } else {
             // warn!("{} is OK quantized correctl: res {}", e, res);

@@ -188,10 +188,10 @@ impl Convolution<Element> {
     pub fn output_range(&self, min_input: Element, max_input: Element) -> (Element, Element) {
         // 2^{BIT_LEN + log2(k_h * k_w * k_c)}
         let (k_n, k_c, k_h, k_w) = self.filter.get4d();
-        let exp = 2* *quantization::BIT_LEN + ceil_log2(k_h * k_w * k_c + 1) as usize;
+        let exp = 2 * *quantization::BIT_LEN + ceil_log2(k_h * k_w * k_c + 1) as usize;
         let min = -(2u64.pow(exp as u32) as Element);
         let max = 2u64.pow(exp as u32) as Element;
-        return (min,max);
+        return (min, max);
         let (global_min, global_max) = (Element::MAX, Element::MIN);
         // iterate over output channels and take the min/max of all of it
         return (0..k_n)

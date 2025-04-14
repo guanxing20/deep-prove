@@ -690,7 +690,9 @@ mod tests {
     use super::*;
 
     use crate::{
-        init_test_logging, quantization::{InferenceObserver, TensorFielder}, verify, Context, Prover, ScalingFactor, IO
+        Context, IO, Prover, ScalingFactor, init_test_logging,
+        quantization::{InferenceObserver, TensorFielder},
+        verify,
     };
     use goldilocks::GoldilocksExt2;
     use transcript::BasicTranscript;
