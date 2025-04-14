@@ -13,6 +13,7 @@ use gkr::util::ceil_log2;
 use itertools::Itertools;
 use multilinear_extensions::mle::IntoMLE;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use tracing::warn;
 use std::ops::{Add, Mul, Sub};
 use transcript::Transcript;
 
@@ -148,6 +149,7 @@ impl Requant {
     #[inline(always)]
     fn apply(&self, e: &Element) -> RequantResult {
         if let Some(multiplier) = self.multiplier {
+            panic!("this is only for test - disable manually");
             let res = (*e as f64 * multiplier as f64).round() as Element;
             if !(res >= *quantization::MIN && res <= *quantization::MAX) {
                 return RequantResult::OutOfRange(
@@ -169,7 +171,7 @@ impl Requant {
         let tmp = tmp >> self.right_shift;
         let res = tmp - (max_bit >> self.right_shift);
         if !(res >= *quantization::MIN && res <= *quantization::MAX) {
-            // warn!("{} is NOT quantized correctly: res {}", e, res);
+            warn!("{} is NOT quantized correctly: res {}", e, res);
             RequantResult::OutOfRange(res.clamp(*quantization::MIN, *quantization::MAX))
         } else {
             // warn!("{} is OK quantized correctl: res {}", e, res);
