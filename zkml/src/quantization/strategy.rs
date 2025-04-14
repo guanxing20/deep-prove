@@ -138,9 +138,9 @@ impl ScalingStrategy for InferenceObserver {
                         let (quantized_min, _quantized_max) =
                             quantized_conv.output_range(*quantization::MIN, *quantization::MAX);
                         md.set_layers_scaling(id, output_scaling);
-                        let requant = Requant::new(quantized_min.abs() as usize, shift);
-                        // let scale = last_input_scaling.scale() * model_scaling.scale()
-                        //     / output_scaling.scale();
+                        let mut requant = Requant::new(quantized_min.abs() as usize, shift);
+                        //let scale = last_input_scaling.scale() * model_scaling.scale()
+                        //  / output_scaling.scale();
                         //requant.set_test_multiplier(scale);
                         last_input_scaling = output_scaling;
                         vec![Layer::Convolution(quantized_conv), Layer::Requant(requant)]
