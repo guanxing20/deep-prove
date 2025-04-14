@@ -182,69 +182,69 @@ def estimate_params(c1, c2, fc1, fc2, fc3, use_bias=True):
     return conv1_params + conv2_params + fc1_params + fc2_params + fc3_params
 
 
-# class Net(nn.Module):
-#     def __init__(self, target_params=None, use_bias=True):
-#         super().__init__()
-# 
-#         # Default values
-#         c1, c2 = 6, 16
-#         fc1, fc2, fc3 = 120, 84, 10
-# 
-#         if target_params:
-#             # Adjust parameters iteratively to fit within target
-#             scale = (target_params / estimate_params(c1, c2,
-#                      fc1, fc2, fc3, use_bias=use_bias)) ** 0.5
-#             c1, c2 = int(c1 * scale), int(c2 * scale)
-#             fc1, fc2 = int(fc1 * scale), int(fc2 * scale)
-# 
-#             # Recalculate to get final parameter count
-#             final_params = estimate_params(
-#                 c1, c2, fc1, fc2, fc3, use_bias=use_bias)
-#             assert abs(final_params - target_params) / \
-#                 target_params <= 0.05, "Final params exceed 5% tolerance"
-# 
-#         # Create layers with or without bias based on use_bias parameter
-#         self.quant = QuantStub()
-#         self.conv1 = nn.Conv2d(3, c1, 5, bias=use_bias)
-#         self.pool = nn.MaxPool2d(2, 2)
-#         self.conv2 = nn.Conv2d(c1, c2, 5, bias=use_bias)
-#         self.fc1 = nn.Linear(c2 * 5 * 5, fc1, bias=use_bias)
-#         self.fc2 = nn.Linear(fc1, fc2, bias=use_bias)
-#         self.fc3 = nn.Linear(fc2, fc3, bias=use_bias)
-#         self.dequant = DeQuantStub()
-# 
-#     def forward(self, x):
-#         x = self.quant(x)
-#         x = self.pool(F.relu(self.conv1(x)))
-#         x = self.pool(F.relu(self.conv2(x)))
-#         x = torch.flatten(x, 1)
-#         x = F.relu(self.fc1(x))
-#         x = F.relu(self.fc2(x))
-#         x = self.fc3(x)
-#         x = self.dequant(x)
-#         return x
-
-
-# Test module
 class Net(nn.Module):
     def __init__(self, target_params=None, use_bias=True):
         super().__init__()
+
+        # Default values
+        c1, c2 = 6, 16
+        fc1, fc2, fc3 = 120, 84, 10
+
+        if target_params:
+            # Adjust parameters iteratively to fit within target
+            scale = (target_params / estimate_params(c1, c2,
+                     fc1, fc2, fc3, use_bias=use_bias)) ** 0.5
+            c1, c2 = int(c1 * scale), int(c2 * scale)
+            fc1, fc2 = int(fc1 * scale), int(fc2 * scale)
+
+            # Recalculate to get final parameter count
+            final_params = estimate_params(
+                c1, c2, fc1, fc2, fc3, use_bias=use_bias)
+            assert abs(final_params - target_params) / \
+                target_params <= 0.05, "Final params exceed 5% tolerance"
+
+        # Create layers with or without bias based on use_bias parameter
         self.quant = QuantStub()
+        self.conv1 = nn.Conv2d(3, c1, 5, bias=use_bias)
+        self.pool = nn.MaxPool2d(2, 2)
+        self.conv2 = nn.Conv2d(c1, c2, 5, bias=use_bias)
+        self.fc1 = nn.Linear(c2 * 5 * 5, fc1, bias=use_bias)
+        self.fc2 = nn.Linear(fc1, fc2, bias=use_bias)
+        self.fc3 = nn.Linear(fc2, fc3, bias=use_bias)
         self.dequant = DeQuantStub()
-        # input size is 3x32x32
-        self.conv1 = nn.Conv2d(3, 1, 5)
-        #self.pool = nn.MaxPool2d(2, 2)
-        self.fc1 = nn.Linear(784, 10)
 
     def forward(self, x):
-
         x = self.quant(x)
-        #x = self.pool(F.relu(self.conv1(x)))
-        x = self.conv1(x)
-        x = torch.flatten(x, 1)  # flatten all dimensions except batch
-        x = self.fc1(x)
+        x = self.pool(F.relu(self.conv1(x)))
+        x = self.pool(F.relu(self.conv2(x)))
+        x = torch.flatten(x, 1)
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        x = self.fc3(x)
         x = self.dequant(x)
         return x
+
+
+# # Test module
+# class Net(nn.Module):
+#     def __init__(self, target_params=None, use_bias=True):
+#         super().__init__()
+#         self.quant = QuantStub()
+#         self.dequant = DeQuantStub()
+#         # input size is 3x32x32
+#         self.conv1 = nn.Conv2d(3, 1, 5)
+#         #self.pool = nn.MaxPool2d(2, 2)
+#         self.fc1 = nn.Linear(784, 10)
+# 
+#     def forward(self, x):
+# 
+#         x = self.quant(x)
+#         #x = self.pool(F.relu(self.conv1(x)))
+#         x = self.conv1(x)
+#         x = torch.flatten(x, 1)  # flatten all dimensions except batch
+#         x = self.fc1(x)
+#         x = self.dequant(x)
+#         return x
 
 with_bias = args.with_bias
 if args.num_params:
