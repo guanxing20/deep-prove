@@ -262,10 +262,15 @@ where
 
     if tables.is_empty() {
         warn!("Lookup witness generation: no tables found, returning empty context TEST?");
-        return Ok((None,ChallengeStorage {
-            constant_challenge: E::ZERO,
-            challenge_map: HashMap::new(),
-        },vec![],vec![]));
+        return Ok((
+            None,
+            ChallengeStorage {
+                constant_challenge: E::ZERO,
+                challenge_map: HashMap::new(),
+            },
+            vec![],
+            vec![],
+        ));
     }
 
     debug!("Lookup witness generation: generating table multiplicities...");

@@ -6,7 +6,7 @@ use anyhow::bail;
 use ark_std::rand::{self, Rng, SeedableRng, rngs::StdRng};
 use ff::Field;
 use ff_ext::ExtensionField;
-use goldilocks::{GoldilocksExt2, SmallField};
+use goldilocks::GoldilocksExt2;
 use itertools::Itertools;
 use multilinear_extensions::mle::DenseMultilinearExtension;
 use rayon::{
@@ -1419,7 +1419,7 @@ mod test {
     use ark_std::rand::{Rng, thread_rng};
     use goldilocks::GoldilocksExt2;
 
-    use super::super::testing::{random_vector, random_vector_seed};
+    use super::super::testing::random_vector;
 
     use super::*;
     use multilinear_extensions::mle::MultilinearExtension;
@@ -1760,7 +1760,7 @@ mod test {
         // minimal bias shape is k_n
         let bias = Tensor::<Element>::random(vec![2]);
         let output = input.conv2d(&conv, &bias, 1);
-        // assert_eq!(output.get_shape(), vec![2,3,3,3]);
+        assert_eq!(output.get_shape(), vec![1, 2, 1, 1]);
     }
 
     #[test]

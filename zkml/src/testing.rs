@@ -44,6 +44,7 @@ pub fn random_bool_vector<E: ExtensionField>(n: usize) -> Vec<E> {
         .collect_vec()
 }
 
+#[allow(unused)]
 pub fn random_vector_seed(n: usize, seed: Option<u64>) -> Vec<Element> {
     let seed = seed.unwrap_or(rand::random::<u64>()); // Use provided seed or default
     let mut rng = StdRng::seed_from_u64(seed);

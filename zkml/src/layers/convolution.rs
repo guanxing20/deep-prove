@@ -5,7 +5,7 @@ use crate::{
     commit::{compute_betas_eval, identity_eval},
     iop::{context::ContextAux, verifier::Verifier},
     layers::{LayerProof, PolyID},
-    quantization::{self, ScalingFactor, max_range_from_weight},
+    quantization::{self, ScalingFactor},
     tensor::{ConvData, Number, get_root_of_unity},
 };
 use anyhow::Context;
@@ -14,11 +14,9 @@ use multilinear_extensions::{
     mle::{IntoMLE, MultilinearExtension},
     virtual_poly::{VPAuxInfo, VirtualPolynomial},
 };
-use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sumcheck::structs::{IOPProof, IOPProverState, IOPVerifierState};
 use tracing::{instrument, warn};
-use tract_onnx::tract_core::ops::matmul::quant;
 use transcript::Transcript;
 
 use crate::{Element, tensor::Tensor};
@@ -219,68 +217,6 @@ impl Convolution<Element> {
                     )
                 },
             );
-
-        let x_min = min_input;
-        let x_max = max_input;
-        // min_input = 1,k_c,k_h * k_w
-        // max_input =
-        return {
-            let input_shape = vec![1, k_c, k_h, k_w];
-            let input_n = input_shape.iter().product();
-            let min_input_tensor = Tensor::new(
-                input_shape.clone(),
-                std::iter::repeat(x_min).take(input_n).collect(),
-            );
-            let min_outputt = min_input_tensor.conv2d(&self.filter, &self.bias, 1);
-            let max_input_tensor = Tensor::new(
-                input_shape.clone(),
-                std::iter::repeat(x_max).take(input_n).collect(),
-            );
-            let max_outputt = max_input_tensor.conv2d(&self.filter, &self.bias, 1);
-            println!(
-                "CONV: min_min_outputt {:?}, min_max_outputt {:?}",
-                min_outputt.min_value(),
-                min_outputt.max_value()
-            );
-            println!(
-                "CONV: max_min_outputt {:?}, max_max_outputt {:?}",
-                max_outputt.min_value(),
-                max_outputt.max_value()
-            );
-            // take the smallest and highest value from both runs
-            let min_output = min_outputt.min_value().cmp_min(&max_outputt.min_value());
-            let max_output = min_outputt.max_value().cmp_max(&max_outputt.max_value());
-            (min_output, max_output)
-        };
-
-        // let mut max_max = f32::NEG_INFINITY;
-        // assert!(
-        //     k_n == self.bias.get_shape()[0],
-        //     "bias get shape {} vs k_n{}",
-        //     self.bias.get_shape()[0],
-        //     k_n
-        // );
-        // for feature in 0..k_n {
-        //     let mut output_max_abs = f32::NEG_INFINITY;
-        //     for channel in 0..k_c {
-        //         let mut weight_neg = 0.0;
-        //         let mut weight_pos = 0.0;
-        //         (0..k_h * k_w).map(|ij| {
-        //             let weight = self.filter.get(feature, channel, ij / k_w, ij % k_w);
-        //             if weight < 0.0 {
-        //                 weight_neg += weight;
-        //             } else {
-        //                 weight_pos += weight;
-        //             }
-        //         });
-        //         let output_min = weight_neg * x_min;
-        //         let output_max = weight_pos * x_max;
-        //         output_max_abs = output_max_abs.max(output_min.abs().max(output_max.abs()));
-        //     }
-        //     output_max_abs += self.bias.get_data()[feature];
-        //     max_max = max_max.max(output_max_abs);
-        // }
-        // max_max
     }
 
     pub(crate) fn step_info<E: ExtensionField>(
@@ -821,15 +757,9 @@ pub fn phi_eval<E: ExtensionField>(
 
 #[cfg(test)]
 mod test {
-    use crate::{layers::dense, testing::random_vector};
+    use crate::layers::dense;
 
     use super::*;
-    use goldilocks::GoldilocksExt2;
-
-    fn random_vector_quant(n: usize) -> Vec<Element> {
-        // vec![thread_rng().gen_range(-128..128); n]
-        random_vector(n)
-    }
 
     #[test]
     fn test_conv_offset_poly_id() {

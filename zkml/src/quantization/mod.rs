@@ -198,10 +198,9 @@ pub fn max_range_from_weight<T: Number>(weight: &T, min_input: &T, max_input: &T
     (min, max)
 }
 
-trait MinMax {
+pub trait MinMax {
     fn zero() -> Self;
     fn absolute_value(&self) -> Self;
-    fn cmp_min(&self, other: Self) -> Self;
     fn cmp_max(&self, other: Self) -> Self;
     fn to_f32(&self) -> f32;
 }
@@ -212,9 +211,6 @@ impl MinMax for f32 {
     }
     fn zero() -> Self {
         0.0
-    }
-    fn cmp_min(&self, other: Self) -> Self {
-        self.min(other)
     }
     fn cmp_max(&self, other: Self) -> Self {
         self.max(other)
@@ -227,9 +223,6 @@ impl MinMax for f32 {
 impl MinMax for Element {
     fn absolute_value(&self) -> Self {
         self.abs()
-    }
-    fn cmp_min(&self, other: Self) -> Self {
-        std::cmp::min(*self, other)
     }
     fn cmp_max(&self, other: Self) -> Self {
         std::cmp::max(*self, other)

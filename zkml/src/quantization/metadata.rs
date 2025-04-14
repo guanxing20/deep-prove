@@ -1,10 +1,8 @@
 //! Metadata related information for a model. These are the information derived from the
 //! float based model weights and activations.
-
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use crate::{Element, Tensor, model::Model};
+use crate::model::Model;
 
 use super::ScalingFactor;
 

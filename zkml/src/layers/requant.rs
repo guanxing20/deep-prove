@@ -11,12 +11,9 @@ use ff::Field;
 use ff_ext::ExtensionField;
 use gkr::util::ceil_log2;
 use itertools::Itertools;
-use multilinear_extensions::mle::{IntoMLE, MultilinearExtension};
-use num_traits::Float;
+use multilinear_extensions::mle::IntoMLE;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use statrs::statistics::{Data, Distribution};
 use std::ops::{Add, Mul, Sub};
-use tracing::warn;
 use transcript::Transcript;
 
 use crate::{
@@ -49,8 +46,9 @@ pub struct Requant {
     pub range: usize,
     /// The range we want the values to be in post requantizing
     pub after_range: usize,
-    /// TEST
-    pub multiplier: f32,
+    /// TEST ONLY: this can be given to simulate a perfect requantization during inference. Note that it CAN NOT
+    /// be proven currently.
+    pub multiplier: Option<f32>,
 }
 
 /// Info related to the lookup protocol necessary to requantize
@@ -73,19 +71,18 @@ where
     pub(crate) lookup: LogUpProof<E>,
 }
 impl Requant {
-    pub fn new(min_value: usize, right_shift: usize, multiplier: f32) -> Self {
+    pub fn new(min_value: usize, right_shift: usize) -> Self {
         Self {
             right_shift,
             range: min_value,
             after_range: *quantization::RANGE as usize,
-            multiplier: multiplier,
+            multiplier: None,
         }
     }
+    pub fn set_test_multiplier(&mut self, multiplier: f32) {
+        self.multiplier = Some(multiplier);
+    }
     pub fn op(&self, input: &crate::tensor::Tensor<Element>) -> crate::tensor::Tensor<Element> {
-        // println!(
-        //    "BEFORE REQUANT: {:?}",
-        //    &input.get_data().iter().take(30).collect_vec()
-        //);
         let mut not_ok_count = 0;
         let res = input
             .get_data()
@@ -98,8 +95,11 @@ impl Requant {
                 }
             })
             .collect_vec();
-        let d = Data::new(res.iter().map(|e| *e as f64).collect_vec());
-        let stats = (d.mean().unwrap(), d.variance().unwrap());
+        // let _d = Data::new(res.iter().map(|e| *e as f64).collect_vec());
+        // Debug information to uncomment when debugging scaling factor. Sometimes the right shift is too high
+        // and we can observe values being null'd, e.g. set to 0 very quickly. Which messes up the distribution and
+        // thus the inference.
+        // let stats = (d.mean().unwrap(), d.variance().unwrap());
         // println!(
         //    "AFTER REQUANT: shift {} : {:.2} % OUT OF RANGE (over total {})-> stats mean {:?} var {:?} \n\t->{:?}\n\t->{:?}",
         //    self.right_shift,
@@ -146,15 +146,17 @@ impl Requant {
     /// The result is a value that has been scaled down to fit within the
     /// target bit width while preserving the relative magnitudes.
     #[inline(always)]
-    pub fn apply(&self, e: &Element) -> RequantResult {
-        let res = (*e as f64 * self.multiplier as f64).round() as Element;
-        let (mantissa, exp, _) = self.multiplier.integer_decode();
-
-        // if !(res >= *quantization::MIN && res <= *quantization::MAX) {
-        //    return RequantResult::OutOfRange(res.clamp(*quantization::MIN, *quantization::MAX));
-        //} else {
-        //    return RequantResult::Ok(res);
-        //}
+    fn apply(&self, e: &Element) -> RequantResult {
+        if let Some(multiplier) = self.multiplier {
+            let res = (*e as f64 * multiplier as f64).round() as Element;
+            if !(res >= *quantization::MIN && res <= *quantization::MAX) {
+                return RequantResult::OutOfRange(
+                    res.clamp(*quantization::MIN, *quantization::MAX),
+                );
+            } else {
+                return RequantResult::Ok(res);
+            }
+        }
         let max_bit = (self.range << 1) as Element;
         let tmp = e + max_bit;
         assert!(
@@ -170,7 +172,7 @@ impl Requant {
             // warn!("{} is NOT quantized correctly: res {}", e, res);
             RequantResult::OutOfRange(res.clamp(*quantization::MIN, *quantization::MAX))
         } else {
-            // warn!("{} is OK quantized correctly: res {}", e, res);
+            // warn!("{} is OK quantized correctl: res {}", e, res);
             RequantResult::Ok(res)
         }
     }

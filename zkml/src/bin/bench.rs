@@ -6,9 +6,8 @@ use std::{
     time,
 };
 use zkml::{
-    Tensor,
     model::Model,
-    quantization::{AbsoluteMax, InferenceObserver, ModelMetadata, ScalingStrategy},
+    quantization::{InferenceObserver, ModelMetadata, ScalingStrategy},
 };
 
 use anyhow::{Context as CC, ensure};
@@ -17,7 +16,7 @@ use csv::WriterBuilder;
 use goldilocks::GoldilocksExt2;
 use tracing::info;
 use tracing_subscriber::{EnvFilter, fmt};
-use zkml::{FloatOnnxLoader, quantization::ScalingFactor};
+use zkml::FloatOnnxLoader;
 
 use serde::{Deserialize, Serialize};
 use zkml::{

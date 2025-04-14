@@ -20,7 +20,6 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use transcript::Transcript;
 
 use crate::{
-    Element,
     quantization::{self, BIT_LEN, Fieldizer},
     tensor::Tensor,
 };
@@ -209,7 +208,7 @@ impl Relu {
 
 #[cfg(test)]
 mod test {
-    use crate::to_bit_sequence_le;
+    use crate::{to_bit_sequence_le, Element};
     use goldilocks::GoldilocksExt2;
     use itertools::Itertools;
     use multilinear_extensions::mle::{DenseMultilinearExtension, MultilinearExtension};

@@ -2,12 +2,16 @@ use ff_ext::ExtensionField;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use crate::{
-    commit::precommit::PolyID, iop::context::ContextAux, layers::LayerCtx, tensor::Number, Element, ScalingFactor, Tensor
+    Element, ScalingFactor, Tensor, commit::precommit::PolyID, iop::context::ContextAux,
+    layers::LayerCtx, tensor::Number,
 };
 
-use super::{common::{Op, ProvableOp, QuantizableOp}, Layer};
+use super::{
+    Layer,
+    common::{Op, ProvableOp, QuantizableOp},
+};
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub(crate) struct Reshape;
+pub struct Reshape;
 
 impl<N: Number> Op<N> for Reshape {
     fn output_shape(&self) -> Vec<usize> {
@@ -30,8 +34,8 @@ impl QuantizableOp for Reshape {
 impl ProvableOp for Reshape {
     fn step_info<E: ExtensionField>(
         &self,
-        id: PolyID,
-        aux: ContextAux,
+        _id: PolyID,
+        _aux: ContextAux,
     ) -> Option<(LayerCtx<E>, ContextAux)>
     where
         E: ExtensionField + DeserializeOwned,

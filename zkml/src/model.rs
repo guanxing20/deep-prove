@@ -5,7 +5,7 @@ use tracing::info;
 
 use crate::{
     Element,
-    layers::{Layer, LayerOutput, common::Op},
+    layers::{Layer, LayerOutput},
     quantization::TensorFielder,
     tensor::{ConvData, Number, Tensor},
 };
@@ -310,17 +310,12 @@ impl Model<f32> {
 
 #[cfg(test)]
 pub(crate) mod test {
-    use crate::{
-        ScalingFactor,
-        layers::{
-            Layer,
-            activation::{Activation, Relu},
-            convolution::Convolution,
-            dense::Dense,
-            pooling::{MAXPOOL2D_KERNEL_SIZE, Maxpool2D, Pooling},
-            requant::Requant,
-        },
-        quantization,
+    use crate::layers::{
+        Layer,
+        activation::{Activation, Relu},
+        convolution::Convolution,
+        dense::Dense,
+        pooling::{MAXPOOL2D_KERNEL_SIZE, Maxpool2D, Pooling},
     };
     use ark_std::rand::{Rng, RngCore, thread_rng};
     use ff_ext::ExtensionField;
@@ -331,7 +326,6 @@ pub(crate) mod test {
         virtual_poly::VirtualPolynomial,
     };
     use sumcheck::structs::{IOPProverState, IOPVerifierState};
-    use tract_onnx::tract_core::ops::matmul::quant;
 
     use crate::{
         Element, default_transcript,
@@ -361,8 +355,8 @@ pub(crate) mod test {
             let mut model = Model::new();
             let mut last_row = rng.gen_range(3..15);
             for selector in 0..num_dense_layers {
-                // if selector % MOD_SELECTOR == SELECTOR_DENSE {
-                if true {
+                if selector % MOD_SELECTOR == SELECTOR_DENSE {
+                    // if true {
                     // last row becomes new column
                     let (nrows, ncols) = (rng.gen_range(3..15), last_row);
                     last_row = nrows;

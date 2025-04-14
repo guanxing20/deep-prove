@@ -1,11 +1,10 @@
 use crate::{
-    Element, ScalingFactor,
+    Element,
     layers::{convolution::Convolution, dense::Dense},
     padding::pad_model,
     quantization::{AbsoluteMax, ModelMetadata, ScalingStrategy},
 };
 use anyhow::{Context, Error, Result, bail, ensure};
-use goldilocks::GoldilocksExt2;
 use itertools::Itertools;
 use std::{collections::HashMap, i8, time::Instant};
 use tracing::{debug, info, warn};
@@ -330,7 +329,7 @@ pub fn load_float_model(filepath: &str) -> Result<Model<f32>> {
         input_shape[0] == 1,
         "First dimension of the CNNs or MLP's input should 1."
     );
-    /// We force the input shape to be for a single inference and not a batch inference.
+    // We force the input shape to be for a single inference and not a batch inference.
     input_shape.remove(0);
     if model_type == ModelType::CNN {
         assert!(input_shape.len() == 3);
@@ -338,14 +337,8 @@ pub fn load_float_model(filepath: &str) -> Result<Model<f32>> {
         assert!(input_shape.len() == 1);
     }
 
-    let mut ignore_garbage_pad: Option<(Vec<usize>, Vec<usize>)> = None;
     let mut input_shape_og = input_shape.clone();
-    // let mut input_shape_padded = input_shape
-    //    .iter()
-    //    .map(|i| i.next_power_of_two())
-    //    .collect_vec();
     println!("Input shape: {:?}", input_shape);
-    // println!("Padded input shape: {:?}", input_shape_padded);
     let mut initializers: HashMap<String, Tensor> = HashMap::new();
     for item in graph.initializer {
         let dt = tract_onnx::pb::tensor_proto::DataType::from_i32(item.data_type)
@@ -368,8 +361,7 @@ pub fn load_float_model(filepath: &str) -> Result<Model<f32>> {
         println!("NODE: {:?}", node.op_type.as_str());
         match node.op_type.as_str() {
             op if LINEAR_ALG.contains(&op) => {
-                let WeightBiasInfo { mut weights, bias } =
-                    fetch_weight_and_bias(node, &initializers)?;
+                let WeightBiasInfo { weights, bias } = fetch_weight_and_bias(node, &initializers)?;
                 // println!("DENSE weights shape: {:?}", weights.get_shape());
                 // println!("DENSE MATRIX: {:?}", weights.get_data());
                 ensure!(bias.get_shape().len() == 1, "bias is not a vector");
@@ -387,46 +379,6 @@ pub fn load_float_model(filepath: &str) -> Result<Model<f32>> {
                     bias.get_shape()[0],
                     nrows
                 );
-                // assert!(input_shape_padded.iter().all(|d| d.is_power_of_two()));
-                // assert!(input_shape_padded.len() == 1);
-
-                let mut new_cols = weights.ncols_2d();
-                // if weights.ncols_2d() != input_shape_padded[0] {
-                //    if weights.ncols_2d() < input_shape_padded[0] {
-                //        new_cols = input_shape_padded[0];
-                //    } else {
-                //        // If we have too many columns, we can't shrink without losing information
-                //        panic!(
-                //            "Matrix has more columns ({}) than previous layer output size ({}).
-                //            Cannot shrink without losing information.",
-                //            weights.ncols_2d(),
-                //            input_shape_padded[0]
-                //        );
-                //    }
-                //}
-
-                // let ncols = new_cols.next_power_of_two();
-                // let nrows = weights.nrows_2d().next_power_of_two();
-                let ncols = new_cols;
-                let nrows = weights.nrows_2d();
-                // Pad to power of two dimensions
-
-                // if let Some(ref conv_shapes) = ignore_garbage_pad.clone() {
-                //    let conv_shape_og = conv_shapes.0.clone();
-                //    let conv_shape_pad = conv_shapes.1.clone();
-                //    weights = weights.pad_matrix_to_ignore_garbage(
-                //        &conv_shape_og,
-                //        &conv_shape_pad,
-                //        &vec![nrows, ncols],
-                //    );
-                //    ignore_garbage_pad = None;
-                //} else {
-                //    weights.reshape_to_fit_inplace_2d(vec![nrows, ncols]);
-                //}
-
-                // let bias = bias.pad_1d(nrows);
-                // input_shape_padded = vec![nrows];
-
                 debug!("layer idx {} -> final shape {:?}", i, weights.get_shape());
                 layers.push(Layer::Dense(Dense::new_from_weights(weights, bias)));
             }
@@ -438,20 +390,17 @@ pub fn load_float_model(filepath: &str) -> Result<Model<f32>> {
             op if CONVOLUTION.contains(&op) => {
                 let now = Instant::now();
                 let _ = fetch_conv2d_attributes(node)?;
-                let WeightBiasInfo {
-                    mut weights,
-                    mut bias,
-                } = fetch_weight_and_bias(node, &initializers)?;
-                println!(
-                    "RUN CONV: input shape {:?} - og {:?} ",
-                    input_shape, input_shape_og
-                );
-                println!(
-                    "RUN CONV: filter shape {:?}, bias shape {:?} -- filter 4d {:?}",
-                    weights.get_shape(),
-                    bias.get_shape(),
-                    weights.get4d()
-                );
+                let WeightBiasInfo { weights, bias } = fetch_weight_and_bias(node, &initializers)?;
+                // println!(
+                //    "RUN CONV: input shape {:?} - og {:?} ",
+                //    input_shape, input_shape_og
+                //);
+                // println!(
+                //    "RUN CONV: filter shape {:?}, bias shape {:?} -- filter 4d {:?}",
+                //    weights.get_shape(),
+                //    bias.get_shape(),
+                //    weights.get4d()
+                //);
                 input_shape_og = conv2d_shape(&input_shape_og, &weights.get_shape())?;
                 let weight_shape = weights.get_shape();
                 // Perform basic sanity checks on the tensor dimensions
@@ -485,7 +434,6 @@ pub fn load_float_model(filepath: &str) -> Result<Model<f32>> {
                 // Filter need to know the shape of the input
                 // weight.update_input_shape(&input_shape_padded);
 
-                let dims = weights.get_shape();
                 // The conversion to fft'd weights is done when the quantization happens, see conv.quantize()
                 // let weight = crate::tensor::Tensor::new_conv(
                 //    weights.get_shape(),
@@ -741,7 +689,7 @@ mod tests {
 
     use super::*;
 
-    use crate::{Context, IO, Prover, init_test_logging, quantization::TensorFielder, verify};
+    use crate::{init_test_logging, quantization::TensorFielder, verify, Context, Prover, ScalingFactor, IO};
     use goldilocks::GoldilocksExt2;
     use transcript::BasicTranscript;
 
@@ -851,19 +799,19 @@ mod tests {
         let input = crate::tensor::Tensor::<f32>::random(model.input_shape()).quantize(&md.input);
         let input = model.prepare_input(input);
         let trace = model.run::<F>(input.clone());
-        // println!("Result: {:?}", trace.final_output());
+        println!("Result: {:?}", trace.final_output());
 
-        // let mut tr: BasicTranscript<GoldilocksExt2> = BasicTranscript::new(b"m2vec");
-        // let ctx = Context::<GoldilocksExt2>::generate(&model, Some(input.get_shape()))
-        //    .expect("Unable to generate context");
-        // let output = trace.final_output().clone();
+        let mut tr: BasicTranscript<GoldilocksExt2> = BasicTranscript::new(b"m2vec");
+        let ctx = Context::<GoldilocksExt2>::generate(&model, Some(input.get_shape()))
+            .expect("Unable to generate context");
+        let output = trace.final_output().clone();
 
-        // let prover: Prover<'_, GoldilocksExt2, BasicTranscript<GoldilocksExt2>> =
-        //    Prover::new(&ctx, &mut tr);
-        // let proof = prover.prove(trace).expect("unable to generate proof");
-        // let mut verifier_transcript: BasicTranscript<GoldilocksExt2> =
-        //    BasicTranscript::new(b"m2vec");
-        // let io = IO::new(input.to_fields(), output.to_fields());
-        // verify::<_, _>(ctx, proof, io, &mut verifier_transcript).unwrap();
+        let prover: Prover<'_, GoldilocksExt2, BasicTranscript<GoldilocksExt2>> =
+            Prover::new(&ctx, &mut tr);
+        let proof = prover.prove(trace).expect("unable to generate proof");
+        let mut verifier_transcript: BasicTranscript<GoldilocksExt2> =
+            BasicTranscript::new(b"m2vec");
+        let io = IO::new(input.to_fields(), output.to_fields());
+        verify::<_, _>(ctx, proof, io, &mut verifier_transcript).unwrap();
     }
 }

@@ -1,8 +1,10 @@
 use anyhow::{Context, Result, ensure};
-use tracing::debug;
 
 use crate::{
-    layers::{convolution::Convolution, dense::Dense, reshape::Reshape, Layer}, model::Model, onnx_parse::{check_cnn_input, check_filter, conv2d_shape, maxpool2d_shape}, Element
+    Element,
+    layers::{Layer, convolution::Convolution, dense::Dense, reshape::Reshape},
+    model::Model,
+    onnx_parse::{check_filter, conv2d_shape, maxpool2d_shape},
 };
 type GarbagePad = Option<(Vec<usize>, Vec<usize>)>;
 type Shape = Vec<usize>;
@@ -31,7 +33,7 @@ pub fn pad_model(mut model: Model<Element>) -> Result<Model<Element>> {
         .layers
         .into_iter()
         .enumerate()
-        .map(|(i, layer)| {
+        .map(|(_i, layer)| {
             match layer {
                 Layer::Dense(d) => Ok(Layer::Dense(pad_dense(d, &mut si)?)),
                 Layer::Convolution(c) => Ok(Layer::Convolution(pad_conv(c, &mut si)?)),
@@ -110,7 +112,7 @@ fn pad_conv(mut c: Convolution<Element>, si: &mut ShapeInfo) -> Result<Convoluti
 }
 
 fn pad_dense(mut d: Dense<Element>, si: &mut ShapeInfo) -> Result<Dense<Element>> {
-       println!("PAD DENSE: input shape {:?}", si);
+    // println!("PAD DENSE: input shape {:?}", si);
     let nrows = d.matrix.get_shape()[0];
     si.input_shape_og = vec![nrows];
     ensure!(
@@ -120,7 +122,7 @@ fn pad_dense(mut d: Dense<Element>, si: &mut ShapeInfo) -> Result<Dense<Element>
         nrows
     );
     assert!(si.input_shape_padded.iter().all(|d| d.is_power_of_two()));
-    /// NOTE: this eventually should be handled by a reshape layer
+    // NOTE: this eventually should be handled by a reshape layer
     if si.input_shape_padded.len() != 1 {
         si.input_shape_padded = vec![si.input_shape_padded.iter().product()];
         si.input_shape_og = vec![si.input_shape_og.iter().product()];
