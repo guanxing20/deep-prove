@@ -111,7 +111,7 @@ impl ScalingStrategy for InferenceObserver {
                         let (min, max) = tracker.distribution_info(id);
                         let output_scaling =
                             ScalingFactor::from_absolute_max(min.abs().max(max.abs()), None);
-                        let bias_scaling = Some(&{
+                        let _bias_scaling = Some(&{
                             // bias has to be quantized over integers with double bit length
                             let min_quantized = -(1 << (2 * (*BIT_LEN) - 1)) + 1;
                             let max_quantized = (1 << (2 * (*BIT_LEN) - 1)) - 1;
@@ -141,7 +141,7 @@ impl ScalingStrategy for InferenceObserver {
                         let (min, max) = tracker.distribution_info(id);
                         let output_scaling =
                             ScalingFactor::from_absolute_max(min.abs().max(max.abs()), None);
-                        let bias_scaling = {
+                        let _bias_scaling = {
                             // bias has to be quantized over integers with double bit length
                             let min_quantized = -(1 << (2 * (*BIT_LEN) - 1)) + 1;
                             let max_quantized = (1 << (2 * (*BIT_LEN) - 1)) - 1;
@@ -150,15 +150,16 @@ impl ScalingStrategy for InferenceObserver {
                                 Some((min_quantized, max_quantized)),
                             )
                         };
+                        let bias_scaling = None;
                         // println!("InferenceObserver: CONV {} layer model max weight abs {:?}", id, conv.max_abs_weight());
                         // println!("InferenceObserver: CONV {} layer output range [{:?}, {:?}]", id, min,max);
                         // println!("InferenceObserver: CONV {} layer scales: input {:?}, model {:?}, bias {:?}, output {:?} -> scale {:?}", id, last_input_scaling.scale(), model_scaling.scale(), bias_scaling.scale(), output_scaling.scale(), scale);
-                        let quantized_conv = conv.quantize(&model_scaling, Some(&bias_scaling));
+                        let quantized_conv = conv.quantize(&model_scaling, bias_scaling);
                         let shift = last_input_scaling.shift(&model_scaling, &output_scaling);
                         let (quantized_min, _quantized_max) =
                             quantized_conv.output_range(*quantization::MIN, *quantization::MAX);
                         md.set_layers_scaling(id, output_scaling);
-                        let mut requant = Requant::new(quantized_min.abs() as usize, shift);
+                        let requant = Requant::new(quantized_min.abs() as usize, shift);
                         // let scale = last_input_scaling.scale() * model_scaling.scale()
                         //  / output_scaling.scale();
                         // requant.set_test_multiplier(scale);
@@ -272,7 +273,7 @@ impl ScalingStrategy for AbsoluteMax {
                         let max_weight = d.max_abs_weight();
                         let model_scaling = ScalingFactor::from_absolute_max(max_weight, None);
                         //let (min_output,max_output) = d.output_range(-last_input_scaling_factor.abs_max,last_input_scaling_factor.abs_max);
-                        let bias_scaling = Some({
+                        let _bias_scaling = Some({
                             // bias has to be quantized over integers with double bit length
                             let min_quantized = -(1 << (2*(*BIT_LEN) - 1)) + 1;
                             let max_quantized = (1 << (2*(*BIT_LEN) - 1)) - 1;
@@ -300,7 +301,7 @@ impl ScalingStrategy for AbsoluteMax {
                         let max_weight = d.max_abs_weight();
                         let model_scaling = ScalingFactor::from_absolute_max(max_weight, None);
                         //let (min_output,max_output) = d.output_range(-last_input_scaling_factor.abs_max,last_input_scaling_factor.abs_max);
-                        let bias_scaling = {
+                        let _bias_scaling = {
                             // bias has to be quantized over integers with double bit length
                             let min_quantized = -(1 << (2*(*BIT_LEN) - 1)) + 1;
                             let max_quantized = (1 << (2*(*BIT_LEN) - 1)) - 1;
