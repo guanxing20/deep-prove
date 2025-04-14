@@ -280,7 +280,7 @@ impl Requant {
         let mut lookups = vec![vec![0i128; 1 << num_vars]; num_columns];
         let mut lookups_field = vec![vec![E::BaseField::ZERO; 1 << num_vars]; num_columns];
         // Bit mask for the bytes
-        let bit_mask = self.after_range as i128 - 1;
+        let bit_mask = self.after_range.next_power_of_two() as i128 - 1;
 
         let max_bit = self.range << 1;
         let subtract = max_bit >> self.right_shift;
@@ -308,7 +308,7 @@ impl Requant {
                     let val_field: E = value.to_field();
                     discarded_lookup_chunk[index] = value;
                     discarded_field_chunk[index] = val_field.as_bases()[0];
-                    remainder_vals >>= self.after_range.ilog2();
+                    remainder_vals >>= ceil_log2(self.after_range);
                 });
             debug_assert_eq!(remainder_vals, 0);
         });
@@ -342,14 +342,13 @@ impl Requant {
 
         let tmp_eval = E::from(1 << self.right_shift as u64)
             * (eval_claims[0] + E::from(subtract as u64) - E::from(self.after_range as u64 >> 1))
-            + eval_claims
-                .iter()
-                .skip(1)
-                .rev()
-                .enumerate()
-                .fold(E::default(), |acc, (i, &claim)| {
-                    acc + E::from((self.after_range.pow(i as u32)) as u64) * (claim)
-                });
+            + eval_claims.iter().skip(1).rev().enumerate().fold(
+                E::default(),
+                |acc, (i, &claim)| {
+                    acc + E::from((self.after_range.next_power_of_two().pow(i as u32)) as u64)
+                        * (claim)
+                },
+            );
         tmp_eval - E::from(max_bit as u64)
     }
     pub(crate) fn prove_step<E: ExtensionField, T: Transcript<E>>(
