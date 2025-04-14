@@ -19,10 +19,7 @@ use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use transcript::Transcript;
 
-use crate::{
-    quantization::{self, BIT_LEN, Fieldizer},
-    tensor::Tensor,
-};
+use crate::{quantization::BIT_LEN, tensor::Tensor};
 
 #[derive(Clone, Debug, Serialize, Deserialize, Copy)]
 pub enum Activation {
@@ -196,11 +193,9 @@ impl Relu {
 
 #[cfg(test)]
 mod test {
-    use crate::{Element};
-    use goldilocks::GoldilocksExt2;
+    use crate::Element;
 
     use super::*;
-
 
     #[test]
     fn test_activation_relu_apply() {
@@ -218,7 +213,7 @@ mod test {
             TestCase::from(-24, 0),
             TestCase::from(0, 0),
             TestCase::from(124, 124),
-            TestCase::from(-127,0),
+            TestCase::from(-127, 0),
         ] {
             assert_eq!(Relu::apply(case.input), case.output);
         }
