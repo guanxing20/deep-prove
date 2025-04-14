@@ -11,10 +11,11 @@ use ff::Field;
 use ff_ext::ExtensionField;
 use gkr::util::ceil_log2;
 use itertools::Itertools;
-use multilinear_extensions::mle::IntoMLE;
+use multilinear_extensions::mle::{IntoMLE, MultilinearExtension};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use tracing::warn;
+use statrs::statistics::{Data, Distribution};
 use std::ops::{Add, Mul, Sub};
+use tracing::warn;
 use transcript::Transcript;
 
 use crate::{
@@ -96,21 +97,21 @@ impl Requant {
                 }
             })
             .collect_vec();
-        // let _d = Data::new(res.iter().map(|e| *e as f64).collect_vec());
+        let d = Data::new(res.iter().map(|e| *e as f64).collect_vec());
         // Debug information to uncomment when debugging scaling factor. Sometimes the right shift is too high
         // and we can observe values being null'd, e.g. set to 0 very quickly. Which messes up the distribution and
         // thus the inference.
-        // let stats = (d.mean().unwrap(), d.variance().unwrap());
-        // println!(
-        //    "AFTER REQUANT: shift {} : {:.2} % OUT OF RANGE (over total {})-> stats mean {:?} var {:?} \n\t->{:?}\n\t->{:?}",
-        //    self.right_shift,
-        //    not_ok_count as f32 / res.len() as f32 * 100.0,
-        //    res.len(),
-        //    stats.0,
-        //    stats.1,
-        //    &input.get_data()[..10.min(input.get_data().len())],
-        //    &res[..10.min(res.len())],
-        //);
+        let stats = (d.mean().unwrap(), d.variance().unwrap());
+        println!(
+            "AFTER REQUANT: shift {} : {:.2} % OUT OF RANGE (over total {})-> stats mean {:?} var {:?} \n\t->{:?}\n\t->{:?}",
+            self.right_shift,
+            not_ok_count as f32 / res.len() as f32 * 100.0,
+            res.len(),
+            stats.0,
+            stats.1,
+            &input.get_data()[..10.min(input.get_data().len())],
+            &res[..10.min(res.len())],
+        );
         crate::tensor::Tensor::<Element>::new(input.get_shape(), res)
     }
 
@@ -148,16 +149,16 @@ impl Requant {
     /// target bit width while preserving the relative magnitudes.
     #[inline(always)]
     fn apply(&self, e: &Element) -> RequantResult {
-        if let Some(multiplier) = self.multiplier {
+        if let Some(_multiplier) = self.multiplier {
             panic!("this is only for test - disable manually");
-            let res = (*e as f64 * multiplier as f64).round() as Element;
-            if !(res >= *quantization::MIN && res <= *quantization::MAX) {
-                return RequantResult::OutOfRange(
-                    res.clamp(*quantization::MIN, *quantization::MAX),
-                );
-            } else {
-                return RequantResult::Ok(res);
-            }
+            //let res = (*e as f64 * multiplier as f64).round() as Element;
+            //if !(res >= *quantization::MIN && res <= *quantization::MAX) {
+            //    return RequantResult::OutOfRange(
+            //        res.clamp(*quantization::MIN, *quantization::MAX),
+            //    );
+            //} else {
+            //    return RequantResult::Ok(res);
+            //}
         }
         let max_bit = (self.range << 1) as Element;
         let tmp = e + max_bit;
@@ -172,7 +173,8 @@ impl Requant {
         let res = tmp - (max_bit >> self.right_shift);
         if !(res >= *quantization::MIN && res <= *quantization::MAX) {
             warn!("{} is NOT quantized correctly: res {}", e, res);
-            RequantResult::OutOfRange(res.clamp(*quantization::MIN, *quantization::MAX))
+            // RequantResult::OutOfRange(res.clamp(*quantization::MIN, *quantization::MAX))
+            RequantResult::OutOfRange(res)
         } else {
             // warn!("{} is OK quantized correctl: res {}", e, res);
             RequantResult::Ok(res)
@@ -282,7 +284,7 @@ impl Requant {
         let mut lookups = vec![vec![0i128; 1 << num_vars]; num_columns];
         let mut lookups_field = vec![vec![E::BaseField::ZERO; 1 << num_vars]; num_columns];
         // Bit mask for the bytes
-        let bit_mask = self.after_range as i128 - 1;
+        let bit_mask = self.after_range.next_power_of_two() as i128 - 1;
 
         let max_bit = self.range << 1;
         let subtract = max_bit >> self.right_shift;
@@ -310,7 +312,7 @@ impl Requant {
                     let val_field: E = value.to_field();
                     discarded_lookup_chunk[index] = value;
                     discarded_field_chunk[index] = val_field.as_bases()[0];
-                    remainder_vals >>= self.after_range.ilog2();
+                    remainder_vals >>= ceil_log2(self.after_range);
                 });
             debug_assert_eq!(remainder_vals, 0);
         });
@@ -344,14 +346,13 @@ impl Requant {
 
         let tmp_eval = E::from(1 << self.right_shift as u64)
             * (eval_claims[0] + E::from(subtract as u64) - E::from(self.after_range as u64 >> 1))
-            + eval_claims
-                .iter()
-                .skip(1)
-                .rev()
-                .enumerate()
-                .fold(E::default(), |acc, (i, &claim)| {
-                    acc + E::from((self.after_range.pow(i as u32)) as u64) * (claim)
-                });
+            + eval_claims.iter().skip(1).rev().enumerate().fold(
+                E::default(),
+                |acc, (i, &claim)| {
+                    acc + E::from((self.after_range.next_power_of_two().pow(i as u32)) as u64)
+                        * (claim)
+                },
+            );
         tmp_eval - E::from(max_bit as u64)
     }
     pub(crate) fn prove_step<E: ExtensionField, T: Transcript<E>>(
@@ -392,8 +393,13 @@ impl Requant {
 
         let corrected_claim = Claim::<E> {
             point: point.clone(),
-            eval: first_claim.eval - E::from((*quantization::RANGE / 2) as u64 + 1),
+            eval: first_claim.eval - E::from((*quantization::RANGE / 2) as u64),
         };
+        println!("correct claim eval: {:?}", corrected_claim.eval);
+        println!(
+            "output eval: {:?}",
+            output.to_vec().into_mle().evaluate(&corrected_claim.point)
+        );
         // Add the claim used in the activation function
         same_poly_prover.add_claim(corrected_claim)?;
         let claim_acc_proof = same_poly_prover.prove(&same_poly_ctx, prover.transcript)?;
@@ -451,7 +457,7 @@ impl RequantCtx {
         // The first claim needs to be shifted down as we add a value to make sure that all its evals are in the range 0..1 << BIT_LEn
         let corrected_claim = Claim::<E>::new(
             point.clone(),
-            first_claim.eval - E::from((*quantization::RANGE / 2) as u64 + 1),
+            first_claim.eval - E::from((*quantization::RANGE / 2) as u64),
         );
         sp_verifier.add_claim(corrected_claim)?;
 

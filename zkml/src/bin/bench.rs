@@ -7,7 +7,7 @@ use std::{
 };
 use zkml::{
     model::Model,
-    quantization::{InferenceObserver, ModelMetadata, ScalingStrategy},
+    quantization::{AbsoluteMax, InferenceObserver, ModelMetadata, ScalingStrategy},
 };
 
 use anyhow::{Context as CC, ensure};
@@ -395,7 +395,7 @@ fn quantization_strategy_from(args: &Args, inputs: &InputJSON) -> Box<dyn Scalin
         "inference" => Box::new(InferenceObserver::new_with_representative_input(
             inputs.input_data.clone(),
         )),
-        //"maxabs" => Box::new(AbsoluteMax::new_with_representative_input(inputs.input_data[0].clone())),
+        "maxabs" => Box::new(AbsoluteMax::new()),
         _ => panic!("Unsupported quantization strategy: {}", args.quantization),
     }
 }

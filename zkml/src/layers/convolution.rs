@@ -10,6 +10,7 @@ use crate::{
 };
 use anyhow::Context;
 use ff_ext::ExtensionField;
+use gkr::util::ceil_log2;
 use multilinear_extensions::{
     mle::{IntoMLE, MultilinearExtension},
     virtual_poly::{VPAuxInfo, VirtualPolynomial},
@@ -184,39 +185,44 @@ impl Convolution<Element> {
 
     /// Returns the min and max output range of the convolution layer for a given input range.
     /// NOTE: it assumes the weights in float are NOT fft'd
-    pub fn output_range(&self, min_input: Element, max_input: Element) -> (Element, Element) {
-        let (k_n, k_c, k_h, k_w) = self.filter.get4d();
-        let (global_min, global_max) = (Element::MAX, Element::MIN);
-        // iterate over output channels and take the min/max of all of it
-        return (0..k_n)
-            .into_iter()
-            .map(|output| {
-                let (mut filter_min, mut filter_max) = (0, 0);
-                // iterate over input channels and sum up
-                for input in 0..k_c {
-                    for h in 0..k_h {
-                        for w in 0..k_w {
-                            let (ind_min, ind_max) = quantization::max_range_from_weight(
-                                &self.filter.get(output, input, h, w),
-                                &min_input,
-                                &max_input,
-                            );
-                            filter_min += ind_min;
-                            filter_max += ind_max;
-                        }
-                    }
-                }
-                (filter_min, filter_max)
-            })
-            .fold(
-                (global_min, global_max),
-                |(global_min, global_max), (local_min, local_max)| {
-                    (
-                        global_min.cmp_min(&local_min),
-                        global_max.cmp_max(&local_max),
-                    )
-                },
-            );
+    pub fn output_range(&self, _min_input: Element, _max_input: Element) -> (Element, Element) {
+        // 2^{BIT_LEN + log2(k_h * k_w * k_c)}
+        let (_k_n, k_c, k_h, k_w) = self.filter.get4d();
+        let exp = 2 * *quantization::BIT_LEN + ceil_log2(k_h * k_w * k_c + 1) as usize;
+        let min = -(2u64.pow(exp as u32) as Element);
+        let max = 2u64.pow(exp as u32) as Element;
+        return (min, max);
+        //let (global_min, global_max) = (Element::MAX, Element::MIN);
+        //// iterate over output channels and take the min/max of all of it
+        //return (0..k_n)
+        //    .into_iter()
+        //    .map(|output| {
+        //        let (mut filter_min, mut filter_max) = (0, 0);
+        //        // iterate over input channels and sum up
+        //        for input in 0..k_c {
+        //            for h in 0..k_h {
+        //                for w in 0..k_w {
+        //                    let (ind_min, ind_max) = quantization::max_range_from_weight(
+        //                        &self.filter.get(output, input, h, w),
+        //                        &min_input,
+        //                        &max_input,
+        //                    );
+        //                    filter_min += ind_min;
+        //                    filter_max += ind_max;
+        //                }
+        //            }
+        //        }
+        //        (filter_min, filter_max)
+        //    })
+        //    .fold(
+        //        (global_min, global_max),
+        //        |(global_min, global_max), (local_min, local_max)| {
+        //            (
+        //                global_min.cmp_min(&local_min),
+        //                global_max.cmp_max(&local_max),
+        //            )
+        //        },
+        //    );
     }
 
     pub(crate) fn step_info<E: ExtensionField>(
