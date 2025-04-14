@@ -713,7 +713,7 @@ mod tests {
     fn test_mlp_model_run() {
         init_test_logging();
         // let filepath = "assets/scripts/MLP/mlp-iris-01.onnx";
-        let filepath = "assets/scripts/MLP/model.onnx";
+        let filepath = "assets/scripts/MLP/mlp-iris-01.onnx";
         let (model, md) = FloatOnnxLoader::new(&filepath)
             .with_model_type(ModelType::MLP)
             .build()

@@ -11,7 +11,7 @@ use ff::Field;
 use ff_ext::ExtensionField;
 use gkr::util::ceil_log2;
 use itertools::Itertools;
-use multilinear_extensions::mle::IntoMLE;
+use multilinear_extensions::mle::{IntoMLE, MultilinearExtension};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::ops::{Add, Mul, Sub};
 use transcript::Transcript;
@@ -390,8 +390,13 @@ impl Requant {
 
         let corrected_claim = Claim::<E> {
             point: point.clone(),
-            eval: first_claim.eval - E::from((*quantization::RANGE / 2) as u64 + 1),
+            eval: first_claim.eval - E::from((*quantization::RANGE / 2) as u64),
         };
+        println!("correct claim eval: {:?}", corrected_claim.eval);
+        println!(
+            "output eval: {:?}",
+            output.to_vec().into_mle().evaluate(&corrected_claim.point)
+        );
         // Add the claim used in the activation function
         same_poly_prover.add_claim(corrected_claim)?;
         let claim_acc_proof = same_poly_prover.prove(&same_poly_ctx, prover.transcript)?;
@@ -449,7 +454,7 @@ impl RequantCtx {
         // The first claim needs to be shifted down as we add a value to make sure that all its evals are in the range 0..1 << BIT_LEn
         let corrected_claim = Claim::<E>::new(
             point.clone(),
-            first_claim.eval - E::from((*quantization::RANGE / 2) as u64 + 1),
+            first_claim.eval - E::from((*quantization::RANGE / 2) as u64),
         );
         sp_verifier.add_claim(corrected_claim)?;
 
