@@ -90,7 +90,7 @@ where
         step: &InferenceStep<'b, E, E>,
         info: &LayerCtx<E>,
     ) -> anyhow::Result<Claim<E>> {
-        debug!("PROVER: proving layer {}", step.layer.to_string());
+        debug!("PROVER: proving layer {} vs ctx {}", step.layer.to_string(), info.variant_name());
         let claim = match (step.layer, info) {
             (Layer::Dense(dense), LayerCtx::Dense(info)) => {
                 dense.prove_step(self, last_claim, input, &step.output, info)
@@ -437,7 +437,6 @@ where
         };
 
         // let trace_size = trace.last_step().id;
-
         // we start by the output to prove up to the input, GKR style
         for ((input, step), info) in trace.iter().rev().zip(self.ctx.steps_info.iter()) {
             last_claim = self.prove_step(last_claim, input, step, &info)?;

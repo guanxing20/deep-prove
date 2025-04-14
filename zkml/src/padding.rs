@@ -49,7 +49,7 @@ pub fn pad_model(mut model: Model<Element>) -> Result<Model<Element>> {
                 e => Ok(e),
             }
         })
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Result<Vec<_>>>()?.into_iter().filter(|l| l.is_provable()).collect::<Vec<_>>();
     Ok(model)
 }
 

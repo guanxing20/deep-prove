@@ -788,7 +788,8 @@ mod tests {
 
     #[test]
     fn test_load_cnn() {
-        let filepath = "assets/scripts/CNN/cnn-cifar-01.onnx";
+        //let filepath = "assets/scripts/CNN/cnn-cifar-01.onnx";
+        let filepath = "bench/model.onnx";
         ModelType::CNN.validate(filepath).unwrap();
         let result = FloatOnnxLoader::new(&filepath)
             .with_model_type(ModelType::CNN)

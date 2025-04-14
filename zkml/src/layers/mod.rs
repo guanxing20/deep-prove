@@ -237,6 +237,13 @@ impl Layer<Element> {
         }
     }
 
+    pub fn is_provable(&self) -> bool {
+        match self {
+            Layer::Reshape(..) => false,
+            _ => true,
+        }
+    }
+
     /// Run the operation associated with that layer with the given input
     // TODO: move to tensor library : right now it works because we assume there is only Dense
     // layer which is matmul

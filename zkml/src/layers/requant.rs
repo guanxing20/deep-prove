@@ -150,7 +150,7 @@ impl Requant {
     #[inline(always)]
     fn apply(&self, e: &Element) -> RequantResult {
         if let Some(multiplier) = self.multiplier {
-            //panic!("this is only for test - disable manually");
+            panic!("this is only for test - disable manually");
             let res = (*e as f64 * multiplier as f64).round() as Element;
             if !(res >= *quantization::MIN && res <= *quantization::MAX) {
                 return RequantResult::OutOfRange(

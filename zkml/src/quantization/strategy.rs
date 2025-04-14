@@ -125,7 +125,8 @@ impl ScalingStrategy for InferenceObserver {
                         // println!("InferenceObserver: DENSE {} layer output range [{:?}, {:?}]", id, min,max);
                         // println!("InferenceObserver: DENSE {} layer scales: input {:?}, model {:?}, bias {:?}, output {:?} -> scale {:?}", id, last_input_scaling.scale(), model_scaling.scale(), bias_scaling.scale(), output_scaling.scale(), scale);
                         let shift = last_input_scaling.shift(&model_scaling, &output_scaling);
-                        let quantized_dense = dense.quantize(&model_scaling, Some(&bias_scaling));
+                        //let quantized_dense = dense.quantize(&model_scaling, Some(&bias_scaling));
+                        let quantized_dense = dense.quantize(&model_scaling, None);
                         let (quantized_min, _quantized_max) =
                             quantized_dense.output_range(*quantization::MIN, *quantization::MAX);
                         let requant = Requant::new(quantized_min.abs() as usize, shift);
@@ -154,7 +155,8 @@ impl ScalingStrategy for InferenceObserver {
                         // println!("InferenceObserver: CONV {} layer model max weight abs {:?}", id, conv.max_abs_weight());
                         // println!("InferenceObserver: CONV {} layer output range [{:?}, {:?}]", id, min,max);
                         // println!("InferenceObserver: CONV {} layer scales: input {:?}, model {:?}, bias {:?}, output {:?} -> scale {:?}", id, last_input_scaling.scale(), model_scaling.scale(), bias_scaling.scale(), output_scaling.scale(), scale);
-                        let quantized_conv = conv.quantize(&model_scaling, Some(&bias_scaling));
+                        //let quantized_conv = conv.quantize(&model_scaling, Some(&bias_scaling));
+                        let quantized_conv = conv.quantize(&model_scaling, None);
                         let shift = last_input_scaling.shift(&model_scaling, &output_scaling);
                         let (quantized_min, _quantized_max) =
                             quantized_conv.output_range(*quantization::MIN, *quantization::MAX);

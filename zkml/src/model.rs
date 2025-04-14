@@ -172,6 +172,7 @@ pub struct InferenceTrace<'a, E, F: ExtensionField> {
 }
 
 impl<'a, F: ExtensionField> InferenceTrace<'a, Element, F> {
+    
     pub fn to_field(self) -> InferenceTrace<'a, F, F> {
         let input = self.input.to_fields();
         let field_steps = self
