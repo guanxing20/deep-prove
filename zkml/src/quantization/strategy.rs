@@ -111,7 +111,7 @@ impl ScalingStrategy for InferenceObserver {
                         let (min, max) = tracker.distribution_info(id);
                         let output_scaling =
                             ScalingFactor::from_absolute_max(min.abs().max(max.abs()), None);
-                        let bias_scaling = {
+                        let _bias_scaling = {
                             // bias has to be quantized over integers with double bit length
                             let min_quantized = -(1 << (2 * (*BIT_LEN) - 1)) + 1;
                             let max_quantized = (1 << (2 * (*BIT_LEN) - 1)) - 1;
@@ -120,12 +120,11 @@ impl ScalingStrategy for InferenceObserver {
                                 Some((min_quantized, max_quantized)),
                             )
                         };
-                        //let bias_scaling = None;
                         // println!("InferenceObserver: DENSE {} layer model max weight abs {:?}", id, dense.max_abs_weight());
                         // println!("InferenceObserver: DENSE {} layer output range [{:?}, {:?}]", id, min,max);
                         // println!("InferenceObserver: DENSE {} layer scales: input {:?}, model {:?}, bias {:?}, output {:?} -> scale {:?}", id, last_input_scaling.scale(), model_scaling.scale(), bias_scaling.scale(), output_scaling.scale(), scale);
                         let shift = last_input_scaling.shift(&model_scaling, &output_scaling);
-                        //let quantized_dense = dense.quantize(&model_scaling, Some(&bias_scaling));
+                        //let quantized_dense = dense.quantize(&model_scaling, Some(&_bias_scaling));
                         let quantized_dense = dense.quantize(&model_scaling, None);
                         let (quantized_min, _quantized_max) =
                             quantized_dense.output_range(*quantization::MIN, *quantization::MAX);
@@ -142,7 +141,7 @@ impl ScalingStrategy for InferenceObserver {
                         let (min, max) = tracker.distribution_info(id);
                         let output_scaling =
                             ScalingFactor::from_absolute_max(min.abs().max(max.abs()), None);
-                        let bias_scaling = {
+                        let _bias_scaling = {
                             // bias has to be quantized over integers with double bit length
                             let min_quantized = -(1 << (2 * (*BIT_LEN) - 1)) + 1;
                             let max_quantized = (1 << (2 * (*BIT_LEN) - 1)) - 1;
@@ -151,11 +150,10 @@ impl ScalingStrategy for InferenceObserver {
                                 Some((min_quantized, max_quantized)),
                             )
                         };
-                        //let bias_scaling = None;
                         // println!("InferenceObserver: CONV {} layer model max weight abs {:?}", id, conv.max_abs_weight());
                         // println!("InferenceObserver: CONV {} layer output range [{:?}, {:?}]", id, min,max);
                         // println!("InferenceObserver: CONV {} layer scales: input {:?}, model {:?}, bias {:?}, output {:?} -> scale {:?}", id, last_input_scaling.scale(), model_scaling.scale(), bias_scaling.scale(), output_scaling.scale(), scale);
-                        //let quantized_conv = conv.quantize(&model_scaling, Some(&bias_scaling));
+                        //let quantized_conv = conv.quantize(&model_scaling, Some(&_bias_scaling));
                         let quantized_conv = conv.quantize(&model_scaling, None);
                         let shift = last_input_scaling.shift(&model_scaling, &output_scaling);
                         let (quantized_min, _quantized_max) =
