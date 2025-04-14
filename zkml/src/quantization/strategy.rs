@@ -91,7 +91,7 @@ impl ScalingStrategy for InferenceObserver {
                         let (min, max) = tracker.distribution_info(id);
                         let output_scaling =
                             ScalingFactor::from_absolute_max(min.abs().max(max.abs()), None);
-                        let bias_scaling = {
+                        let bias_scaling = Some(&{
                             // bias has to be quantized over integers with double bit length
                             let min_quantized = -(1 << (2 * (*BIT_LEN) - 1)) + 1;
                             let max_quantized = (1 << (2 * (*BIT_LEN) - 1)) - 1;
@@ -99,12 +99,13 @@ impl ScalingStrategy for InferenceObserver {
                                 last_input_scaling.scale() * model_scaling.scale(),
                                 Some((min_quantized, max_quantized)),
                             )
-                        };
+                        });
+                        let bias_scaling = None;
                         // println!("InferenceObserver: DENSE {} layer model max weight abs {:?}", id, dense.max_abs_weight());
                         // println!("InferenceObserver: DENSE {} layer output range [{:?}, {:?}]", id, min,max);
                         // println!("InferenceObserver: DENSE {} layer scales: input {:?}, model {:?}, bias {:?}, output {:?} -> scale {:?}", id, last_input_scaling.scale(), model_scaling.scale(), bias_scaling.scale(), output_scaling.scale(), scale);
                         let shift = last_input_scaling.shift(&model_scaling, &output_scaling);
-                        let quantized_dense = dense.quantize(&model_scaling, Some(&bias_scaling));
+                        let quantized_dense = dense.quantize(&model_scaling, bias_scaling);
                         let (quantized_min, _quantized_max) =
                             quantized_dense.output_range(*quantization::MIN, *quantization::MAX);
                         let requant = Requant::new(quantized_min.abs() as usize, shift);
@@ -246,7 +247,7 @@ impl ScalingStrategy for AbsoluteMax {
                         let max_weight = d.max_abs_weight();
                         let model_scaling = ScalingFactor::from_absolute_max(max_weight, None);
                         //let (min_output,max_output) = d.output_range(-last_input_scaling_factor.abs_max,last_input_scaling_factor.abs_max);
-                        let bias_scaling = {
+                        let bias_scaling = Some({
                             // bias has to be quantized over integers with double bit length
                             let min_quantized = -(1 << (2*(*BIT_LEN) - 1)) + 1;
                             let max_quantized = (1 << (2*(*BIT_LEN) - 1)) - 1;
@@ -254,8 +255,9 @@ impl ScalingStrategy for AbsoluteMax {
                                 last_input_scaling_factor.scale() * model_scaling.scale(),
                                 Some((min_quantized, max_quantized))
                             )
-                        };
-                        let quantized_dense= d.quantize(&model_scaling, Some(&bias_scaling));
+                        });
+                        let bias_scaling = None;
+                        let quantized_dense= d.quantize(&model_scaling, bias_scaling);
                         let (quant_min_output,_quant_max_output) = quantized_dense.output_range(*quantization::MIN,*quantization::MAX);
                         //let abs_max = min_output.abs().max(max_output.abs());
                         //let output_scaling = ScalingFactor::new(abs_max);
@@ -264,7 +266,7 @@ impl ScalingStrategy for AbsoluteMax {
                         last_input_scaling_factor = output_scaling;
                         md.set_layers_scaling(id, output_scaling);
                         let shift = last_input_scaling_factor.shift(&model_scaling, &output_scaling);
-                        println!("Scaling: AbsoluteMax: CONV max_weight {:?}, max_output: {:?} - adding requant", max_weight, 1.0);
+                        println!("Scaling: AbsoluteMax: DENSE max_weight {:?}, max_output: {:?} - adding requant", max_weight, 1.0);
                         let requant = Requant::new( quant_min_output.abs() as usize, shift);
                         vec![Layer::Dense(quantized_dense), Layer::Requant(requant)]
 
@@ -282,7 +284,8 @@ impl ScalingStrategy for AbsoluteMax {
                                 Some((min_quantized, max_quantized))
                             )
                         };
-                        let quantized_conv= d.quantize(&model_scaling, Some(&bias_scaling));
+                        let bias_scaling = None;
+                        let quantized_conv= d.quantize(&model_scaling, bias_scaling);
                         let (quant_min_output,_quant_max_output) = quantized_conv.output_range(*quantization::MIN,*quantization::MAX);
                         //let abs_max = min_output.abs().max(max_output.abs());
                         //let output_scaling = ScalingFactor::new(abs_max);
