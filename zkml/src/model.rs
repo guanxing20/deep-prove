@@ -1,14 +1,14 @@
-use ff_ext::ExtensionField;
-use itertools::Itertools;
-use rayon::iter::{IntoParallelIterator, ParallelIterator};
-use tracing::info;
-
 use crate::{
     Element,
     layers::{Layer, LayerOutput},
     quantization::TensorFielder,
     tensor::{ConvData, Number, Tensor},
 };
+use anyhow::Result;
+use ff_ext::ExtensionField;
+use itertools::Itertools;
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
+use tracing::info;
 
 // The index of the step, starting from the input layer. (proving is done in the opposite flow)
 pub type StepIdx = usize;
@@ -133,11 +133,11 @@ impl Model<Element> {
     pub fn run<'a, E: ExtensionField>(
         &'a self,
         input: Tensor<Element>,
-    ) -> InferenceTrace<'a, Element, E> {
+    ) -> Result<InferenceTrace<'a, Element, E>> {
         let mut trace = InferenceTrace::<Element, E>::new(input);
         for (id, layer) in self.layers() {
             let input = trace.last_input();
-            let output = layer.op(input);
+            let output = layer.op(input)?;
             match output {
                 LayerOutput::NormalOut(output) => {
                     let conv_data = ConvData::default();
@@ -160,7 +160,7 @@ impl Model<Element> {
                 }
             }
         }
-        trace
+        Ok(trace)
     }
 }
 
@@ -172,7 +172,6 @@ pub struct InferenceTrace<'a, E, F: ExtensionField> {
 }
 
 impl<'a, F: ExtensionField> InferenceTrace<'a, Element, F> {
-    
     pub fn to_field(self) -> InferenceTrace<'a, F, F> {
         let input = self.input.to_fields();
         let field_steps = self
@@ -434,7 +433,7 @@ pub(crate) mod test {
     #[test]
     fn test_model_long() {
         let (model, input) = Model::random(3);
-        model.run::<F>(input);
+        model.run::<F>(input).unwrap();
     }
 
     pub fn check_tensor_consistency_field<E: ExtensionField>(
@@ -529,7 +528,7 @@ pub(crate) mod test {
 
         let input = Tensor::new(vec![1, 32, 32], random_vector_quant(1024));
         let trace: crate::model::InferenceTrace<'_, _, GoldilocksExt2> =
-            model.run::<F>(input.clone());
+            model.run::<F>(input.clone()).unwrap();
 
         let mut model2 = Model::new();
         model2.add_layer(Layer::SchoolBookConvolution(Convolution::new(
@@ -541,7 +540,7 @@ pub(crate) mod test {
         model2.add_layer(Layer::SchoolBookConvolution(Convolution::new(
             trad_conv3, bias3,
         )));
-        let trace2 = model.run::<F>(input.clone());
+        let trace2 = model.run::<F>(input.clone()).unwrap();
 
         check_tensor_consistency_field::<GoldilocksExt2>(
             trace2.final_output().clone().to_fields(),
@@ -572,7 +571,8 @@ pub(crate) mod test {
         model.add_layer(Layer::Pooling(Pooling::Maxpool2D(Maxpool2D::default())));
 
         let input = Tensor::random(input_shape_padded.clone());
-        let _: crate::model::InferenceTrace<'_, _, GoldilocksExt2> = model.run::<F>(input.clone());
+        let _: crate::model::InferenceTrace<'_, _, GoldilocksExt2> =
+            model.run::<F>(input.clone()).unwrap();
     }
 
     #[test]
@@ -587,7 +587,7 @@ pub(crate) mod test {
         model.add_layer(Layer::Dense(dense1.clone()));
         model.add_layer(Layer::Dense(dense2.clone()));
 
-        let trace = model.run::<F>(input.clone());
+        let trace = model.run::<F>(input.clone()).unwrap();
         assert_eq!(trace.steps.len(), 2);
         // Verify first step
         assert_eq!(trace.steps[0].output, output1);
@@ -612,7 +612,7 @@ pub(crate) mod test {
         model.add_layer(Layer::Dense(dense2));
         model.add_layer(Layer::Activation(relu2));
 
-        let trace = model.run::<F>(input.clone());
+        let trace = model.run::<F>(input.clone()).unwrap();
 
         // Verify iterator yields correct input/output pairs
         let mut iter = trace.iter();
@@ -650,7 +650,7 @@ pub(crate) mod test {
         let mut model = Model::new();
         model.add_layer(Layer::Dense(dense1));
         model.add_layer(Layer::Dense(dense2));
-        let trace = model.run::<F>(input.clone());
+        let trace = model.run::<F>(input.clone()).unwrap();
 
         // Test reverse iteration
         let mut rev_iter = trace.iter().rev();
@@ -676,7 +676,7 @@ pub(crate) mod test {
         model.describe();
         println!("INPUT: {:?}", input);
         let bb = model.clone();
-        let trace = bb.run::<F>(input.clone()).to_field();
+        let trace = bb.run::<F>(input.clone()).unwrap().to_field();
         let dense_layers = model
             .layers()
             .flat_map(|(_id, l)| match l {
@@ -746,7 +746,7 @@ pub(crate) mod test {
         model.describe();
         let input = Tensor::new(vec![1024], random_vector_quant(1024));
         let trace: crate::model::InferenceTrace<'_, _, GoldilocksExt2> =
-            model.run::<F>(input.clone());
+            model.run::<F>(input.clone()).unwrap();
         let mut tr: BasicTranscript<GoldilocksExt2> = BasicTranscript::new(b"m2vec");
         let ctx =
             Context::<GoldilocksExt2>::generate(&model, None).expect("Unable to generate context");
@@ -789,7 +789,7 @@ pub(crate) mod test {
         model.describe();
         let input = Tensor::new(vec![k_x, n_x, n_x], random_vector_quant(n_x * n_x * k_x));
         let trace: crate::model::InferenceTrace<'_, _, GoldilocksExt2> =
-            model.run::<F>(input.clone());
+            model.run::<F>(input.clone()).unwrap();
         let mut tr: BasicTranscript<GoldilocksExt2> = BasicTranscript::new(b"m2vec");
         let ctx = Context::<GoldilocksExt2>::generate(&model, Some(input.get_shape()))
             .expect("Unable to generate context");
@@ -839,7 +839,7 @@ pub(crate) mod test {
                         let input =
                             Tensor::new(vec![k_x, n_x, n_x], random_vector_quant(n_x * n_x * k_x));
                         let trace: crate::model::InferenceTrace<'_, _, GoldilocksExt2> =
-                            model.run::<F>(input.clone());
+                            model.run::<F>(input.clone()).unwrap();
                         let mut tr: BasicTranscript<GoldilocksExt2> =
                             BasicTranscript::new(b"m2vec");
                         let ctx =

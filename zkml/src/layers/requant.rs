@@ -6,7 +6,7 @@ use crate::{
     lookup::logup_gkr::{prover::batch_prove as logup_batch_prove, verifier::verify_logup_proof},
     quantization,
 };
-use anyhow::anyhow;
+use anyhow::{Result, anyhow, ensure};
 use ff::Field;
 use ff_ext::ExtensionField;
 use gkr::util::ceil_log2;
@@ -84,7 +84,10 @@ impl Requant {
     pub fn set_test_multiplier(&mut self, multiplier: f32) {
         self.multiplier = Some(multiplier);
     }
-    pub fn op(&self, input: &crate::tensor::Tensor<Element>) -> crate::tensor::Tensor<Element> {
+    pub fn op(
+        &self,
+        input: &crate::tensor::Tensor<Element>,
+    ) -> Result<crate::tensor::Tensor<Element>> {
         let mut not_ok_count = 0;
         let res = input
             .get_data()
@@ -112,7 +115,14 @@ impl Requant {
             &input.get_data()[..10.min(input.get_data().len())],
             &res[..10.min(res.len())],
         );
-        crate::tensor::Tensor::<Element>::new(input.get_shape(), res)
+        ensure!(
+            not_ok_count == 0,
+            "Requantization led to out of range values"
+        );
+        Ok(crate::tensor::Tensor::<Element>::new(
+            input.get_shape(),
+            res,
+        ))
     }
 
     pub(crate) fn step_info<E: ExtensionField>(

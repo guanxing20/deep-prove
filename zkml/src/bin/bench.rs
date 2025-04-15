@@ -14,7 +14,7 @@ use anyhow::{Context as CC, ensure};
 use clap::Parser;
 use csv::WriterBuilder;
 use goldilocks::GoldilocksExt2;
-use tracing::info;
+use tracing::{debug, info};
 use tracing_subscriber::{EnvFilter, fmt};
 use zkml::FloatOnnxLoader;
 
@@ -48,6 +48,21 @@ struct Args {
     /// Quantization strategy to use
     #[arg(short, long, default_value_t = {"inference".to_string()})]
     quantization: String,
+
+    /// Specific input indices to run inference on (comma-separated list)
+    #[arg(long, value_delimiter = ',', value_parser = parse_usize)]
+    run_indices: Option<Vec<usize>>,
+
+    /// Specific indices to use for calibration
+    #[arg(long, value_delimiter = ',', value_parser = parse_usize)]
+    calibration_indices: Option<Vec<usize>>,
+}
+
+// Helper function to parse a single usize
+fn parse_usize(s: &str) -> Result<usize, String> {
+    s.trim()
+        .parse()
+        .map_err(|e| format!("Invalid index: {}", e))
 }
 
 pub fn main() -> anyhow::Result<()> {
@@ -62,7 +77,7 @@ pub fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct InputJSON {
     input_data: Vec<Vec<f32>>,
     output_data: Vec<Vec<f32>>,
@@ -78,6 +93,36 @@ impl InputJSON {
         u.truncate(num_samples);
         u.validate()?;
         Ok(u)
+    }
+
+    fn filter(&self, indices: Option<&Vec<usize>>) -> Self {
+        if let Some(indices) = indices {
+            assert!(
+                indices.iter().all(|i| *i < self.input_data.len()),
+                "Index {} is out of range (max: {})",
+                indices.iter().max().unwrap(),
+                self.input_data.len() - 1
+            );
+            let input_data = indices
+                .iter()
+                .map(|i| self.input_data[*i].clone())
+                .collect();
+            let output_data = indices
+                .iter()
+                .map(|i| self.output_data[*i].clone())
+                .collect();
+            let pytorch_output = indices
+                .iter()
+                .map(|i| self.pytorch_output[*i].clone())
+                .collect();
+            Self {
+                input_data,
+                output_data,
+                pytorch_output,
+            }
+        } else {
+            self.clone()
+        }
     }
 
     fn truncate(&mut self, num_samples: usize) {
@@ -128,7 +173,7 @@ impl InputJSON {
         {
             let accuracy = argmax_compare(expected, pytorch_out);
             accuracies.push(accuracy);
-            println!(
+            debug!(
                 "PyTorch Run {}/{}: \n\t truth {:?} \n\t pytorch {:?}\n\t-> Accuracy: {}",
                 i + 1,
                 self.output_data.len(),
@@ -165,7 +210,7 @@ fn run_float_model(raw_inputs: &InputJSON, model: &Model<f32>) -> f32 {
         let output = model.run_float(input.clone());
         let accuracy = argmax_compare(expected, &output.get_data());
         accuracies.push(accuracy);
-        info!(
+        debug!(
             "Float Run {}/{}: Accuracy: {}",
             i + 1,
             raw_inputs.input_data.len(),
@@ -178,8 +223,10 @@ fn run_float_model(raw_inputs: &InputJSON, model: &Model<f32>) -> f32 {
 
 fn run(args: Args) -> anyhow::Result<()> {
     info!("[+] Reading raw input/output from {}", args.io);
-    let raw_inputs = InputJSON::from(&args.io, args.num_samples).context("loading input:")?;
-    let strategy = quantization_strategy_from(&args, &raw_inputs);
+    let run_inputs = InputJSON::from(&args.io, args.num_samples).context("loading input:")?;
+    let calibration_inputs = run_inputs.filter(args.calibration_indices.as_ref());
+    let run_inputs = run_inputs.filter(args.run_indices.as_ref());
+    let strategy = quantization_strategy_from(&args, &calibration_inputs);
     let strat_name = strategy.name().to_string();
     info!("[+] Reading onnx model");
     let (model, md) = FloatOnnxLoader::new(&args.onnx)
@@ -192,17 +239,17 @@ fn run(args: Args) -> anyhow::Result<()> {
     // Get float accuracy if float model is available
     let float_accuracy = if let Some(ref float_model) = md.float_model {
         info!("[+] Running float model");
-        run_float_model(&raw_inputs, float_model)
+        run_float_model(&run_inputs, float_model)
     } else {
         info!("[!] No float model available");
         0.0
     };
 
     info!("[+] Computing PyTorch accuracy");
-    let num_samples = raw_inputs.output_data.len();
-    let pytorch_accuracy = raw_inputs.compute_pytorch_accuracy();
+    let num_samples = run_inputs.output_data.len();
+    let pytorch_accuracy = run_inputs.compute_pytorch_accuracy();
     info!("[+] Quantizing inputs with strategy: {}", strat_name);
-    let (inputs, given_outputs) = raw_inputs.to_elements(&md);
+    let (inputs, given_outputs) = run_inputs.to_elements(&md);
 
     // Generate context once and measure the time
     let now = time::Instant::now();
@@ -215,15 +262,17 @@ fn run(args: Args) -> anyhow::Result<()> {
     let setup_time = now.elapsed().as_millis();
     info!("STEP: {} took {}ms", CSV_SETUP, setup_time);
 
-    // return Ok(());
     // Collect accuracies for final average
     let mut accuracies = Vec::new();
+    // Track failed inputs
+    let mut failed_inputs = Vec::new();
 
-    for (i, (input, given_output)) in inputs
+    let input_iter = inputs
         .into_iter()
         .zip(given_outputs.into_iter())
-        .enumerate()
-    {
+        .enumerate();
+
+    for (i, (input, given_output)) in input_iter {
         let mut bencher = CSVBencher::from_headers(vec![
             CSV_SETUP,
             CSV_INFERENCE,
@@ -240,7 +289,24 @@ fn run(args: Args) -> anyhow::Result<()> {
         // let input_tensor : Tensor<Element> = Tensor::new(model.input_not_padded.clone(), input);
 
         info!("[+] Running inference");
-        let trace = bencher.r(CSV_INFERENCE, || model.run(input_tensor.clone()));
+        // Handle model.run failures gracefully
+        let trace_result = bencher.r(CSV_INFERENCE, || model.run(input_tensor.clone()));
+
+        // If model.run fails, print the error and continue to the next input
+        let trace = match trace_result {
+            Ok(trace) => trace,
+            Err(e) => {
+                info!(
+                    "[!] Error running inference for input {}/{}: {}",
+                    i + 1,
+                    args.num_samples,
+                    e
+                );
+                failed_inputs.push(i);
+                continue; // Skip to the next input without writing to CSV
+            }
+        };
+
         let output = trace.final_output().clone();
         let accuracy = argmax_compare(&given_output, &output.get_data().to_vec());
         accuracies.push(accuracy);
@@ -301,6 +367,14 @@ fn run(args: Args) -> anyhow::Result<()> {
     );
     info!("PyTorch accuracy: {:.2}%", pytorch_accuracy * 100.0);
 
+    // Report failure statistics
+    info!(
+        "[!] Failed inputs: {}/{} = {:.2}% (indices: {:?})",
+        failed_inputs.len(),
+        num_samples,
+        (failed_inputs.len() as f32 / num_samples as f32) * 100.0,
+        failed_inputs
+    );
     Ok(())
 }
 

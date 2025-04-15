@@ -26,9 +26,6 @@ pub fn pad_model(mut model: Model<Element>) -> Result<Model<Element>> {
         ignore_garbage_pad: None,
         input_shape_og: model.input_not_padded.clone(),
     };
-    println!("\n\nPADDING DENSE\n\n");
-    println!("{:?}", model.describe());
-    println!("input shape {:?}", si);
     model.layers = model
         .layers
         .into_iter()
@@ -38,7 +35,6 @@ pub fn pad_model(mut model: Model<Element>) -> Result<Model<Element>> {
                 Layer::Dense(d) => Ok(Layer::Dense(pad_dense(d, &mut si)?)),
                 Layer::Convolution(c) => Ok(Layer::Convolution(pad_conv(c, &mut si)?)),
                 Layer::Pooling(m) => {
-                    println!("PAD POOLING: input shape {:?}", si);
                     // Make sure that input shape is already padded and is well formed
                     assert!(si.input_shape_padded.iter().all(|d| d.is_power_of_two()));
                     si.input_shape_og = maxpool2d_shape(&si.input_shape_og)?;
@@ -49,7 +45,10 @@ pub fn pad_model(mut model: Model<Element>) -> Result<Model<Element>> {
                 e => Ok(e),
             }
         })
-        .collect::<Result<Vec<_>>>()?.into_iter().filter(|l| l.is_provable()).collect::<Vec<_>>();
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .filter(|l| l.is_provable())
+        .collect::<Vec<_>>();
     Ok(model)
 }
 
@@ -59,7 +58,6 @@ fn reshape(si: &mut ShapeInfo) -> Result<Reshape> {
 }
 
 fn pad_conv(mut c: Convolution<Element>, si: &mut ShapeInfo) -> Result<Convolution<Element>> {
-    println!("PAD CONV: input shape {:?}", si);
     si.input_shape_og = conv2d_shape(&si.input_shape_og, &c.filter.get_shape())?;
     let weight_shape = c.filter.get_shape();
     // Perform basic sanity checks on the tensor dimensions

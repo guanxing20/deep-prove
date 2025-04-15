@@ -1,5 +1,8 @@
 use crate::{
-    layers::{convolution::Convolution, dense::Dense, reshape::Reshape}, padding::pad_model, quantization::{AbsoluteMax, ModelMetadata, ScalingStrategy}, Element
+    Element,
+    layers::{convolution::Convolution, dense::Dense, reshape::Reshape},
+    padding::pad_model,
+    quantization::{AbsoluteMax, ModelMetadata, ScalingStrategy},
 };
 use anyhow::{Context, Error, Result, bail, ensure};
 use itertools::Itertools;
@@ -720,7 +723,7 @@ mod tests {
         let input =
             crate::tensor::Tensor::<f32>::random(vec![model.input_shape()[0]]).quantize(&md.input);
         let input = model.prepare_input(input);
-        let trace = model.run::<F>(input.clone());
+        let trace = model.run::<F>(input.clone()).unwrap();
         println!("Result: {:?}", trace.final_output());
     }
 
@@ -757,7 +760,7 @@ mod tests {
         info!("random input tensor CREATED : {:?}", input.get_shape());
         let input = model.prepare_input(input);
         info!("RUNNING MODEL...");
-        let trace = model.run::<F>(input.clone());
+        let trace = model.run::<F>(input.clone()).unwrap();
         info!("RUNNING MODEL DONE...");
         // println!("Result: {:?}", trace.final_output());
 
@@ -788,7 +791,7 @@ mod tests {
 
     #[test]
     fn test_load_cnn() {
-        //let filepath = "assets/scripts/CNN/cnn-cifar-01.onnx";
+        // let filepath = "assets/scripts/CNN/cnn-cifar-01.onnx";
         let filepath = "bench/model.onnx";
         ModelType::CNN.validate(filepath).unwrap();
         let result = FloatOnnxLoader::new(&filepath)
@@ -801,7 +804,7 @@ mod tests {
         let (model, md) = result.unwrap();
         let input = crate::tensor::Tensor::<f32>::random(model.input_shape()).quantize(&md.input);
         let input = model.prepare_input(input);
-        let trace = model.run::<F>(input.clone());
+        let trace = model.run::<F>(input.clone()).unwrap();
         println!("Result: {:?}", trace.final_output());
 
         let mut tr: BasicTranscript<GoldilocksExt2> = BasicTranscript::new(b"m2vec");

@@ -6,6 +6,8 @@ pub mod pooling;
 pub mod requant;
 pub mod reshape;
 
+use anyhow::Result;
+
 use crate::{
     Element,
     commit::precommit::PolyID,
@@ -247,26 +249,27 @@ impl Layer<Element> {
     /// Run the operation associated with that layer with the given input
     // TODO: move to tensor library : right now it works because we assume there is only Dense
     // layer which is matmul
-    pub fn op<F: ExtensionField>(&self, input: &Tensor<Element>) -> LayerOutput<F> {
+    pub fn op<F: ExtensionField>(&self, input: &Tensor<Element>) -> Result<LayerOutput<F>> {
         let output = match &self {
-            Layer::Dense(ref dense) => LayerOutput::NormalOut(dense.op(input)),
-            Layer::Activation(activation) => LayerOutput::NormalOut(activation.op(input)),
-            Layer::Convolution(ref filter) => LayerOutput::ConvOut(filter.op(input)),
+            Layer::Dense(ref dense) => Ok(LayerOutput::NormalOut(dense.op(input))),
+            Layer::Activation(activation) => Ok(LayerOutput::NormalOut(activation.op(input))),
+            Layer::Convolution(ref filter) => Ok(LayerOutput::ConvOut(filter.op(input))),
             // Layer::Convolution(ref filter) => LayerOutput::NormalOut(input.conv2d(&filter.filter,&filter.bias,1)),
             // Traditional convolution is used for debug purposes. That is because the actual convolution
             // we use relies on the FFT algorithm. This convolution does not have a snark implementation.
             Layer::SchoolBookConvolution(ref conv_pair) => {
                 // LayerOutput::NormalOut(filter.cnn_naive_convolution(input))
-                LayerOutput::NormalOut(input.conv2d(&conv_pair.filter, &conv_pair.bias, 1))
+                Ok(LayerOutput::NormalOut(input.conv2d(
+                    &conv_pair.filter,
+                    &conv_pair.bias,
+                    1,
+                )))
             }
 
-            Layer::Requant(info) => {
-                // NOTE: we assume we have default quant structure as input
-                LayerOutput::NormalOut(info.op(input))
-            }
-            Layer::Pooling(info) => LayerOutput::NormalOut(info.op(input)),
-            Layer::Reshape(reshape) => LayerOutput::NormalOut(reshape.op(input)),
-        };
+            Layer::Requant(info) => info.op(input).map(|r| LayerOutput::NormalOut(r)),
+            Layer::Pooling(info) => Ok(LayerOutput::NormalOut(info.op(input))),
+            Layer::Reshape(reshape) => Ok(LayerOutput::NormalOut(reshape.op(input))),
+        }?;
         match output {
             LayerOutput::NormalOut(ref output) => {
                 println!(
@@ -285,7 +288,7 @@ impl Layer<Element> {
                 );
             }
         }
-        output
+        Ok(output)
     }
 }
 

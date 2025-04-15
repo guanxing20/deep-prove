@@ -17,7 +17,7 @@ use anyhow::{Result, ensure};
 use ark_std::rand;
 use itertools::Itertools;
 use statrs::statistics::{Data, Max, Min, OrderStatistics};
-use tracing::debug;
+use tracing::{debug, info};
 
 use super::ScalingFactor;
 
@@ -70,6 +70,7 @@ impl ScalingStrategy for InferenceObserver {
         // 1. Run the inference multiple times with different inputs
         // TODO: integrate that within model.rs in a more elegant way with inference step - currently problematic
         // because of the generics and FFT requirement to take a field
+        let mut nsamples = 0;
         for (i, input) in inputs.iter().enumerate() {
             // let input_tensor = model.load_input_flat(input.clone());
             let input_tensor = Tensor::new(model.input_not_padded.clone(), input.clone());
@@ -90,7 +91,9 @@ impl ScalingStrategy for InferenceObserver {
                 last_output = layer.run(&last_output);
                 tracker.track(id, last_output.clone());
             }
+            nsamples += 1;
         }
+        info!("InferenceObserver: {} samples observed", nsamples);
         let mut md = MetadataBuilder::new();
         // 2. get the scaling factor of the input
         let (input_min, input_max) = tracker.distribution_info(INPUT_TRACKING_ID);
@@ -124,7 +127,7 @@ impl ScalingStrategy for InferenceObserver {
                         // println!("InferenceObserver: DENSE {} layer output range [{:?}, {:?}]", id, min,max);
                         // println!("InferenceObserver: DENSE {} layer scales: input {:?}, model {:?}, bias {:?}, output {:?} -> scale {:?}", id, last_input_scaling.scale(), model_scaling.scale(), bias_scaling.scale(), output_scaling.scale(), scale);
                         let shift = last_input_scaling.shift(&model_scaling, &output_scaling);
-                        //let quantized_dense = dense.quantize(&model_scaling, Some(&_bias_scaling));
+                        // let quantized_dense = dense.quantize(&model_scaling, Some(&_bias_scaling));
                         let quantized_dense = dense.quantize(&model_scaling, None);
                         let (quantized_min, _quantized_max) =
                             quantized_dense.output_range(*quantization::MIN, *quantization::MAX);
@@ -141,6 +144,12 @@ impl ScalingStrategy for InferenceObserver {
                         let (min, max) = tracker.distribution_info(id);
                         let output_scaling =
                             ScalingFactor::from_absolute_max(min.abs().max(max.abs()), None);
+                        let (quant_min, quant_max) =
+                            (output_scaling.quantize(&min), output_scaling.quantize(&max));
+                        println!(
+                            "InferenceObserver: CONV {} layer output range [{:?}, {:?}]",
+                            id, quant_min, quant_max
+                        );
                         let _bias_scaling = {
                             // bias has to be quantized over integers with double bit length
                             let min_quantized = -(1 << (2 * (*BIT_LEN) - 1)) + 1;
@@ -153,7 +162,7 @@ impl ScalingStrategy for InferenceObserver {
                         // println!("InferenceObserver: CONV {} layer model max weight abs {:?}", id, conv.max_abs_weight());
                         // println!("InferenceObserver: CONV {} layer output range [{:?}, {:?}]", id, min,max);
                         // println!("InferenceObserver: CONV {} layer scales: input {:?}, model {:?}, bias {:?}, output {:?} -> scale {:?}", id, last_input_scaling.scale(), model_scaling.scale(), bias_scaling.scale(), output_scaling.scale(), scale);
-                        //let quantized_conv = conv.quantize(&model_scaling, Some(&_bias_scaling));
+                        // let quantized_conv = conv.quantize(&model_scaling, Some(&_bias_scaling));
                         let quantized_conv = conv.quantize(&model_scaling, None);
                         let shift = last_input_scaling.shift(&model_scaling, &output_scaling);
                         let (quantized_min, _quantized_max) =

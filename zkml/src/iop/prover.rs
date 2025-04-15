@@ -90,7 +90,11 @@ where
         step: &InferenceStep<'b, E, E>,
         info: &LayerCtx<E>,
     ) -> anyhow::Result<Claim<E>> {
-        debug!("PROVER: proving layer {} vs ctx {}", step.layer.to_string(), info.variant_name());
+        debug!(
+            "PROVER: proving layer {} vs ctx {}",
+            step.layer.to_string(),
+            info.variant_name()
+        );
         let claim = match (step.layer, info) {
             (Layer::Dense(dense), LayerCtx::Dense(info)) => {
                 dense.prove_step(self, last_claim, input, &step.output, info)

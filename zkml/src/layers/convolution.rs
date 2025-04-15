@@ -165,7 +165,7 @@ impl Convolution<f32> {
                 distance * 100.0
             );
         }
-        self.filter.max_abs_output() //.max(self.bias.max_abs_output())
+        self.filter.max_abs_output().max(self.bias.max_abs_output())
     }
 
     pub fn float_op(&self, input: &Tensor<f32>) -> Tensor<f32> {
@@ -192,9 +192,9 @@ impl Convolution<Element> {
         let min = -(2u64.pow(exp as u32) as Element);
         let max = 2u64.pow(exp as u32) as Element;
         return (min, max);
-        //let (global_min, global_max) = (Element::MAX, Element::MIN);
+        // let (global_min, global_max) = (Element::MAX, Element::MIN);
         //// iterate over output channels and take the min/max of all of it
-        //return (0..k_n)
+        // return (0..k_n)
         //    .into_iter()
         //    .map(|output| {
         //        let (mut filter_min, mut filter_max) = (0, 0);

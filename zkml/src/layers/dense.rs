@@ -122,14 +122,7 @@ impl Dense<Element> {
         // formula is 2^{2 * BIT_LEN + log(c) + 1} where c is the number of columns and +1 because of the bias
         let ncols = self.matrix.ncols_2d() as u32;
         let power = 2 * (*quantization::BIT_LEN as u32) + ncols.ilog2() + 1;
-        println!(
-            " DENSE POWER {:?} - quantization::BIT_LEN {:?}, ncols.log2() {:?}",
-            power,
-            *quantization::BIT_LEN,
-            ncols.ilog2()
-        );
         let min = -(2u64.pow(power as u32) as Element);
-        println!(" DENSE POWER 2 {:?}", power);
         let max = 2u64.pow(power as u32) as Element;
         return (min, max);
     }
