@@ -7,6 +7,8 @@ pub mod requant;
 pub mod reshape;
 
 use anyhow::Result;
+use itertools::Itertools;
+use statrs::statistics::{Data, Distribution};
 
 use crate::{
     Element,
@@ -280,18 +282,25 @@ impl Layer<Element> {
         match output {
             LayerOutput::NormalOut(ref output) => {
                 println!(
-                    "Layer::{:?}: shape {:?} op: {:?}",
+                    "Layer::{:?}: shape {:?} op: {:?} - min {:?}, max {:?}",
                     self.describe(),
                     output.get_shape(),
-                    &output.get_data()[..output.get_data().len().min(20)]
+                    &output.get_data()[..output.get_data().len().min(10)],
+                    output.get_data().iter().min().unwrap(),
+                    output.get_data().iter().max().unwrap()
                 );
             }
             LayerOutput::ConvOut((ref output, _)) => {
+                let d = Data::new(output.get_data().iter().map(|e| *e as f64).collect_vec());
                 println!(
-                    "Layer::{:?}: shape {:?} op: {:?}",
+                    "Layer::{:?}: shape {:?} op: {:?} - min {:?}, max {:?}, mean {:?}, std {:?}",
                     self.describe(),
                     output.get_shape(),
-                    &output.get_data()[..output.get_data().len().min(20)]
+                    &output.get_data()[..output.get_data().len().min(10)],
+                    output.get_data().iter().min().unwrap(),
+                    output.get_data().iter().max().unwrap(),
+                    d.mean().unwrap(),
+                    d.std_dev().unwrap()
                 );
             }
         }

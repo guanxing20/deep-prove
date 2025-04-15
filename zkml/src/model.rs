@@ -191,11 +191,8 @@ impl<'a, F: ExtensionField> InferenceTrace<'a, Element, F> {
     pub fn dequantized(&self, md: &ModelMetadata) -> InferenceTrace<'a, f32, F> {
         let input = self.input.dequantize(&md.input);
         let mut last_layer_output_scaling = None;
-        println!("DEQUANTIZATION MODEL: {:?}", md.output_layers_scaling);
         let steps = self.steps.iter().map(|step| {
-            println!("DEQUANTIZED STEP {}",step.id);
             if step.layer.needs_requant() {
-                println!("DEQUANTIZED STEP {} needs requant: {}",step.id, step.layer.describe());
                 last_layer_output_scaling = Some(md.layer_output_scaling_factor(step.id));
             }
             let output = step.output.dequantize(last_layer_output_scaling.as_ref().expect("Model must start with a 'need-requant' layer"));

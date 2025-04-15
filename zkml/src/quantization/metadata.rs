@@ -6,6 +6,7 @@ use crate::model::Model;
 
 use super::ScalingFactor;
 
+/// Structure holding the scaling factors of the input and output of each layer 
 #[derive(Debug, Clone)]
 pub struct ModelMetadata {
     pub input: ScalingFactor,

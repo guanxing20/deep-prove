@@ -79,7 +79,7 @@ where
         let mut step_infos = Vec::with_capacity(model.layer_count());
         debug!("Context : layer info generation ...");
         for (id, layer) in model.provable_layers() {
-            println!(
+            debug!(
                 "Context : {}-th layer {}info generation ...",
                 id,
                 layer.describe()

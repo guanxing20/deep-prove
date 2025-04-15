@@ -150,13 +150,7 @@ impl ScalingStrategy for InferenceObserver {
                         let (min, max) = tracker.distribution_info(id);
                         let output_scaling =
                             ScalingFactor::from_absolute_max(min.abs().max(max.abs()), None);
-                        let (quant_min, quant_max) =
-                            (output_scaling.quantize(&min), output_scaling.quantize(&max));
-                        println!(
-                            "InferenceObserver: CONV {} layer output range [{:?}, {:?}]",
-                            step_idx, quant_min, quant_max
-                        );
-                        let _bias_scaling = {
+                                                let _bias_scaling = {
                             // bias has to be quantized over integers with double bit length
                             let min_quantized = -(1 << (2 * (*BIT_LEN) - 1)) + 1;
                             let max_quantized = (1 << (2 * (*BIT_LEN) - 1)) - 1;
@@ -173,6 +167,11 @@ impl ScalingStrategy for InferenceObserver {
                         let shift = last_input_scaling.shift(&model_scaling, &output_scaling);
                         let (quantized_min, _quantized_max) =
                             quantized_conv.output_range(*quantization::MIN, *quantization::MAX);
+                        println!(
+                            "InferenceObserver: CONV {} layer f32 output range [{:?}, {:?}], quantized output range [{:?}, {:?}]",
+                            step_idx, min,max, quantized_min, _quantized_max
+                        );
+
                         md.set_layers_scaling(step_idx, output_scaling);
                         let requant = Requant::new(quantized_min.abs() as usize, shift);
                         // let scale = last_input_scaling.scale() * model_scaling.scale()

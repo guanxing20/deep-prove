@@ -192,9 +192,9 @@ impl Convolution<Element> {
         let min = -(2u64.pow(exp as u32) as Element);
         let max = 2u64.pow(exp as u32) as Element;
         return (min, max);
-        // let (global_min, global_max) = (Element::MAX, Element::MIN);
+        //let (global_min, global_max) = (Element::MAX, Element::MIN);
         //// iterate over output channels and take the min/max of all of it
-        // return (0..k_n)
+        // return (0.._k_n)
         //    .into_iter()
         //    .map(|output| {
         //        let (mut filter_min, mut filter_max) = (0, 0);
@@ -204,8 +204,8 @@ impl Convolution<Element> {
         //                for w in 0..k_w {
         //                    let (ind_min, ind_max) = quantization::max_range_from_weight(
         //                        &self.filter.get(output, input, h, w),
-        //                        &min_input,
-        //                        &max_input,
+        //                        &_min_input,
+        //                        &_max_input,
         //                    );
         //                    filter_min += ind_min;
         //                    filter_max += ind_max;

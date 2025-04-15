@@ -7,6 +7,7 @@ use goldilocks::SmallField;
 use itertools::Itertools;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 use std::env;
 
 use crate::{
@@ -107,6 +108,9 @@ impl ScalingFactor {
         // formula is q = round(r/S) + z
         // let scaled =((value.clamp(self.min,self.max) - self.min) / self.scale()).round() * self.scale() + self.min;
         let scaled = (*value / self.scale()).round() as Element + zero_point;
+        if scaled < self.quantized_domain.0  || scaled > self.quantized_domain.1 {
+            warn!("Quantized value {} from {} is out of range [{}, {}]", scaled, value, self.quantized_domain.0, self.quantized_domain.1);
+        }
         scaled.clamp(self.quantized_domain.0, self.quantized_domain.1)
     }
 
