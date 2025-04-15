@@ -56,7 +56,7 @@ impl Activation {
         &self,
         id: PolyID,
         mut aux: ContextAux,
-    ) -> Option<(LayerCtx<E>, ContextAux)>
+    ) -> (LayerCtx<E>, ContextAux)
     where
         E: ExtensionField + DeserializeOwned,
         E::BaseField: Serialize + DeserializeOwned,
@@ -73,7 +73,7 @@ impl Activation {
                     .sum::<usize>(),
             }),
         };
-        Some((info, aux))
+        (info, aux)
     }
 
     pub(crate) fn prove_step<E: ExtensionField, T: Transcript<E>>(
@@ -106,6 +106,7 @@ impl Activation {
         prover
             .witness_prover
             .add_claim(step.poly_id, claim_acc_proof.extract_claim())?;
+        println!("ACTIVATION: WITNESS Poly ID: {}", step.poly_id);
 
         // Add the proof in
         prover.push_proof(LayerProof::Activation(ActivationProof {

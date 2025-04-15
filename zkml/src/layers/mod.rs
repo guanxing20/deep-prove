@@ -174,6 +174,18 @@ impl<T: Number> Layer<T> {
             Layer::Reshape(ref reshape) => describe_op::<T, Reshape>(reshape),
         }
     }
+    pub fn needs_requant(&self) -> bool {
+        match self {
+            Layer::Dense(..) | Layer::Convolution(..)=> true,
+            _ => false,
+        }
+    }
+    pub fn is_provable(&self) -> bool {
+        match self {
+            Layer::Reshape(..) => false,
+            _ => true,
+        }
+    }
 }
 
 fn describe_op<N: Number, O: Op<N>>(op: &O) -> String {
@@ -223,7 +235,7 @@ impl Layer<Element> {
         &self,
         id: PolyID,
         aux: ContextAux,
-    ) -> Option<(LayerCtx<E>, ContextAux)>
+    ) -> (LayerCtx<E>, ContextAux)
     where
         E: ExtensionField + DeserializeOwned,
         E::BaseField: Serialize + DeserializeOwned,
@@ -235,16 +247,11 @@ impl Layer<Element> {
             Layer::Activation(activation) => activation.step_info(id, aux),
             Layer::Requant(requant) => requant.step_info(id, aux),
             Layer::Pooling(pooling) => pooling.step_info(id, aux),
-            Layer::Reshape(reshape) => reshape.step_info(id, aux),
+            _ => panic!("Layer::step_info: layer {} can not be proven", self.describe()),
         }
     }
 
-    pub fn is_provable(&self) -> bool {
-        match self {
-            Layer::Reshape(..) => false,
-            _ => true,
-        }
-    }
+
 
     /// Run the operation associated with that layer with the given input
     // TODO: move to tensor library : right now it works because we assume there is only Dense

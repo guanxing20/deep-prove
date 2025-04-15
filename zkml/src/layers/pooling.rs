@@ -76,7 +76,7 @@ impl Pooling {
         &self,
         id: PolyID,
         mut aux: ContextAux,
-    ) -> Option<(LayerCtx<E>, ContextAux)>
+    ) -> (LayerCtx<E>, ContextAux)
     where
         E: ExtensionField + DeserializeOwned,
         E::BaseField: Serialize + DeserializeOwned,
@@ -102,7 +102,7 @@ impl Pooling {
                 })
             }
         };
-        Some((info, aux))
+        (info, aux)
     }
     pub fn gen_lookup_witness<E: ExtensionField>(
         &self,
@@ -220,6 +220,7 @@ impl Pooling {
             .witness_prover
             .add_claim(info.poly_id, output_claim)
             .context("unable to add claim")?;
+        println!("POOLING: WITNESS Poly ID: {}", info.poly_id);
         // Now we must do the samething accumulating evals for the input poly as we fix variables on the input poly.
         // The point length is 2 longer because for now we only support MaxPool2D.
 

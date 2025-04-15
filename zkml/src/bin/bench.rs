@@ -306,6 +306,13 @@ fn run(args: Args) -> anyhow::Result<()> {
                 continue; // Skip to the next input without writing to CSV
             }
         };
+        // TEST
+        //{
+        //    let dequantized_trace = trace.dequantized(&md);
+        //    for step in dequantized_trace.steps.iter() {
+        //        println!("DEQUANTIZED STEP {}: output min/max: {}/{}", step.id,step.output.min(), step.output.max());
+        //    }
+        //}
 
         let output = trace.final_output().clone();
         let accuracy = argmax_compare(&given_output, &output.get_data().to_vec());
@@ -320,9 +327,6 @@ fn run(args: Args) -> anyhow::Result<()> {
         );
         if args.skip_proving {
             info!("[+] Skipping proving");
-            bencher.set(CSV_PROVING, 0);
-            bencher.set(CSV_VERIFYING, 0);
-            bencher.set(CSV_PROOF_SIZE, "0.000");
             continue;
         }
         info!("[+] Running prover");

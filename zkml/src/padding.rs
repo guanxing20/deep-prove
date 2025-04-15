@@ -45,10 +45,10 @@ pub fn pad_model(mut model: Model<Element>) -> Result<Model<Element>> {
                 e => Ok(e),
             }
         })
-        .collect::<Result<Vec<_>>>()?
-        .into_iter()
-        .filter(|l| l.is_provable())
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>>>()?;
+        //.into_iter()
+        //.filter(|l| l.is_provable())
+        //.collect::<Vec<_>>();
     Ok(model)
 }
 
@@ -120,7 +120,6 @@ fn pad_dense(mut d: Dense<Element>, si: &mut ShapeInfo) -> Result<Dense<Element>
         nrows
     );
     assert!(si.input_shape_padded.iter().all(|d| d.is_power_of_two()));
-    // NOTE: this eventually should be handled by a reshape layer
     if si.input_shape_padded.len() != 1 {
         si.input_shape_padded = vec![si.input_shape_padded.iter().product()];
         si.input_shape_og = vec![si.input_shape_og.iter().product()];

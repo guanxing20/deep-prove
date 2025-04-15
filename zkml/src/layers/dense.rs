@@ -262,7 +262,7 @@ impl Dense<Element> {
         &self,
         id: PolyID,
         mut ctx_aux: ContextAux,
-    ) -> Option<(LayerCtx<E>, ContextAux)>
+    ) -> (LayerCtx<E>, ContextAux)
     where
         E: ExtensionField + DeserializeOwned,
         E::BaseField: Serialize + DeserializeOwned,
@@ -284,7 +284,7 @@ impl Dense<Element> {
             ]]),
             bias_poly_id: BIAS_POLY_ID + id,
         });
-        Some((dense_info, ctx_aux))
+        (dense_info, ctx_aux)
     }
 }
 

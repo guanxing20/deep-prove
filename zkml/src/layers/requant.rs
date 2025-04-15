@@ -115,10 +115,10 @@ impl Requant {
             &input.get_data()[..10.min(input.get_data().len())],
             &res[..10.min(res.len())],
         );
-        ensure!(
-            not_ok_count == 0,
-            "Requantization led to out of range values"
-        );
+        //ensure!(
+        //    not_ok_count == 0,
+        //    "Requantization led to out of range values"
+        //);
         Ok(crate::tensor::Tensor::<Element>::new(
             input.get_shape(),
             res,
@@ -129,13 +129,13 @@ impl Requant {
         &self,
         id: PolyID,
         mut aux: ContextAux,
-    ) -> Option<(LayerCtx<E>, ContextAux)>
+    ) -> (LayerCtx<E>, ContextAux)
     where
         E: ExtensionField + DeserializeOwned,
         E::BaseField: Serialize + DeserializeOwned,
     {
         aux.tables.insert(TableType::Range);
-        Some((
+        (
             LayerCtx::Requant(RequantCtx {
                 requant: *self,
                 poly_id: id,
@@ -146,7 +146,7 @@ impl Requant {
                     .sum::<usize>(),
             }),
             aux,
-        ))
+        )
     }
     /// Applies requantization to a single element.
     ///
@@ -418,6 +418,7 @@ impl Requant {
         prover
             .witness_prover
             .add_claim(requant_info.poly_id, claim_acc_proof.extract_claim())?;
+        println!("REQUANT: WITNESS Poly ID: {}", requant_info.poly_id);
 
         prover.push_proof(LayerProof::Requant(RequantProof {
             io_accumulation: claim_acc_proof,

@@ -1,14 +1,9 @@
 use super::{ChallengeStorage, Context, Proof, TableProof};
 use crate::{
-    Claim, Element, VectorTranscript,
-    commit::{compute_betas_eval, precommit},
-    layers::{Layer, LayerCtx, LayerProof},
-    lookup::{
-        context::generate_lookup_witnesses,
+    commit::{compute_betas_eval, precommit}, layers::{Layer, LayerCtx, LayerProof}, lookup::{
+        context::{generate_lookup_witnesses, TABLE_POLY_ID_OFFSET},
         logup_gkr::{prover::batch_prove as logup_batch_prove, structs::LogUpInput},
-    },
-    model::{InferenceStep, InferenceTrace},
-    tensor::{Tensor, get_root_of_unity},
+    }, model::{InferenceStep, InferenceTrace}, tensor::{get_root_of_unity, Tensor}, Claim, Element, VectorTranscript
 };
 use anyhow::{anyhow, bail};
 use ff_ext::ExtensionField;
@@ -123,7 +118,7 @@ where
 
     #[timed::timed_instrument(level = "debug")]
     fn prove_tables(&mut self) -> anyhow::Result<()> {
-        let mut poly_id = self.ctx.steps_info.len();
+        let mut poly_id = TABLE_POLY_ID_OFFSET;
 
         self.table_witness
             .iter()
@@ -410,7 +405,8 @@ where
         // return Proof;
     }
 
-    pub fn prove<'b>(mut self, trace: InferenceTrace<'b, Element, E>) -> anyhow::Result<Proof<E>> {
+    pub fn prove<'b>(mut self, full_trace: InferenceTrace<'b, Element, E>) -> anyhow::Result<Proof<E>> {
+        let trace = full_trace.provable_steps();
         // write commitments and polynomials info to transcript
         self.ctx.write_to_transcript(self.transcript)?;
         // then create the context for the witness polys -

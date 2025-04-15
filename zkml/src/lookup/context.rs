@@ -19,6 +19,7 @@ use crate::{
 };
 
 use super::logup_gkr::error::LogUpError;
+pub const TABLE_POLY_ID_OFFSET: usize = 666;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum TableType {
@@ -166,10 +167,8 @@ where
     let mut polys_with_id = Vec::<(usize, Vec<E>)>::new();
     let mut lookups_no_challenges = Vec::<(Vec<Vec<E::BaseField>>, usize, TableType)>::new();
     let column_separator = 1i128 << 32;
-    let mut total_steps = 0;
     debug!("Lookup witness generation: generating poly fields...");
     trace.iter().for_each(|(step_input, step)| {
-        total_steps += 1;
         match step.layer {
             Layer::Activation(..) => {
                 tables.insert(TableType::Relu);
@@ -275,7 +274,7 @@ where
 
     debug!("Lookup witness generation: generating table multiplicities...");
     // calculate the table multiplicities
-    let tables_no_challenges = tables.iter().map(|table_type| {
+    let tables_no_challenges = tables.iter().enumerate().map(|(i,table_type)| {
         let (table_column, column_evals) = table_type.get_merged_table_column::<E>(column_separator);
 
         let table_lookup_data = table_lookups.get(table_type).ok_or(LogUpError::ParamterError(format!("Tried to retrieve lookups for a table of type: {:?}, but no table of that type exists", table_type)))?;
@@ -288,8 +287,7 @@ where
             }
         }).unzip();
 
-        polys_with_id.push((total_steps, mults_ext));
-        total_steps += 1;
+        polys_with_id.push((i + TABLE_POLY_ID_OFFSET, mults_ext));
         Ok((column_evals, multiplicities, *table_type))
     }).collect::<Result<Vec<(Vec<Vec<E::BaseField>>, Vec<E::BaseField>, TableType)>, LogUpError>>()?;
 

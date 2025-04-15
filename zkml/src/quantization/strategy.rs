@@ -102,11 +102,13 @@ impl ScalingStrategy for InferenceObserver {
         md.set_input_scaling(input_scaling);
         let mut last_input_scaling = input_scaling.clone();
         // 2. Create the requant layers from the infered data
+        // manually take care of updating the step_idx since we are adding layers here
+        let mut step_idx = 0;
         let quantized_layers = model
             .layers
             .into_iter()
             .enumerate()
-            .map(|(id, layer)| {
+            .map(|(id,layer)| {
                 match layer {
                     Layer::Dense(dense) => {
                         let model_scaling =
@@ -123,6 +125,8 @@ impl ScalingStrategy for InferenceObserver {
                                 Some((min_quantized, max_quantized)),
                             )
                         };
+                        println!("InferenceObserver: DENSE {} layer",step_idx);
+
                         // println!("InferenceObserver: DENSE {} layer model max weight abs {:?}", id, dense.max_abs_weight());
                         // println!("InferenceObserver: DENSE {} layer output range [{:?}, {:?}]", id, min,max);
                         // println!("InferenceObserver: DENSE {} layer scales: input {:?}, model {:?}, bias {:?}, output {:?} -> scale {:?}", id, last_input_scaling.scale(), model_scaling.scale(), bias_scaling.scale(), output_scaling.scale(), scale);
@@ -134,8 +138,10 @@ impl ScalingStrategy for InferenceObserver {
                         let requant = Requant::new(quantized_min.abs() as usize, shift);
                         // let scale = last_input_scaling.m(&model_scaling, &output_scaling);
                         // requant.set_test_multiplier(scale);
-                        md.set_layers_scaling(id, output_scaling);
+                        md.set_layers_scaling(step_idx, output_scaling);
                         last_input_scaling = output_scaling;
+                        // because we are adding a new layer
+                        step_idx += 2;
                         vec![Layer::Dense(quantized_dense), Layer::Requant(requant)]
                     }
                     Layer::Convolution(conv) => {
@@ -148,7 +154,7 @@ impl ScalingStrategy for InferenceObserver {
                             (output_scaling.quantize(&min), output_scaling.quantize(&max));
                         println!(
                             "InferenceObserver: CONV {} layer output range [{:?}, {:?}]",
-                            id, quant_min, quant_max
+                            step_idx, quant_min, quant_max
                         );
                         let _bias_scaling = {
                             // bias has to be quantized over integers with double bit length
@@ -167,12 +173,14 @@ impl ScalingStrategy for InferenceObserver {
                         let shift = last_input_scaling.shift(&model_scaling, &output_scaling);
                         let (quantized_min, _quantized_max) =
                             quantized_conv.output_range(*quantization::MIN, *quantization::MAX);
-                        md.set_layers_scaling(id, output_scaling);
+                        md.set_layers_scaling(step_idx, output_scaling);
                         let requant = Requant::new(quantized_min.abs() as usize, shift);
                         // let scale = last_input_scaling.scale() * model_scaling.scale()
                         //  / output_scaling.scale();
                         // requant.set_test_multiplier(scale);
                         last_input_scaling = output_scaling;
+                        // because we are adding a new layer
+                        step_idx += 2;
                         vec![Layer::Convolution(quantized_conv), Layer::Requant(requant)]
                     }
                     // Layer::Activation(Activation::Relu(r)) => {
@@ -182,6 +190,8 @@ impl ScalingStrategy for InferenceObserver {
                     //    vec![Layer::Activation(Activation::Relu(r))]
                     //}
                     a => {
+                        println!("InferenceObserver: ANY {} layer {}",step_idx,a.describe());
+                        step_idx += 1;
                         return vec![a.quantize(
                             &last_input_scaling,
                             None, // no scaling factor for bias needed for this layer

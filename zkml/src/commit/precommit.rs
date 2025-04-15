@@ -84,7 +84,7 @@ where
     /// NOTE: it assumes the model's layers are already padded to power of two
     pub fn generate_from_model(m: &Model<Element>) -> anyhow::Result<Self> {
         Self::generate(
-            m.layers()
+            m.provable_layers()
                 .flat_map(|(id, l)| match l {
                     Layer::Dense(dense) => {
                         let evals = dense.matrix.evals_2d();
@@ -199,9 +199,11 @@ where
         assert_eq!(
             claims.len(),
             self.poly_info.len(),
-            "claims.len() = {} vs poly.len() = {}",
+            "claims.len() = {} vs poly.len() = {} -- {:?} vs polys {:?}",
             claims.len(),
-            self.poly_info.len()
+            self.poly_info.len(),
+            claims.iter().map(|c| c.poly_id).collect_vec(),
+            self.poly_info.keys().collect_vec()
         );
         let mut sorted_claims = claims.clone();
         for (idx, claim) in claims.into_iter().enumerate() {

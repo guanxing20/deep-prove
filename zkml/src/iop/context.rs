@@ -78,16 +78,15 @@ where
         };
         let mut step_infos = Vec::with_capacity(model.layer_count());
         debug!("Context : layer info generation ...");
-        for (id, layer) in model.layers() {
-            trace!(
+        for (id, layer) in model.provable_layers() {
+            println!(
                 "Context : {}-th layer {}info generation ...",
                 id,
                 layer.describe()
             );
-            if let Some((info, new_aux)) = layer.step_info(id, ctx_aux.clone()) {
-                step_infos.push(info);
-                ctx_aux = new_aux;
-            }
+            let (info, new_aux) = layer.step_info(id, ctx_aux.clone());
+            step_infos.push(info);
+            ctx_aux = new_aux;
         }
         debug!("Context : commitment generating ...");
         let commit_ctx = precommit::Context::generate_from_model(model)

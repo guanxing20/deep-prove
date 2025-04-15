@@ -109,6 +109,10 @@ impl ScalingFactor {
         let scaled = (*value / self.scale()).round() as Element + zero_point;
         scaled.clamp(self.quantized_domain.0, self.quantized_domain.1)
     }
+
+    pub fn dequantize(&self, value: &Element) -> f32 {
+        *value as f32 * self.scale()
+    }
 }
 
 impl Default for ScalingFactor {

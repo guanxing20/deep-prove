@@ -294,6 +294,10 @@ pub struct Tensor<T> {
 }
 
 impl Tensor<Element> {
+    pub fn dequantize(&self, s: &ScalingFactor) -> Tensor<f32> {
+        let data = self.data.iter().map(|e| s.dequantize(e)).collect::<Vec<_>>();
+        Tensor::new(self.shape.clone(), data)
+    }
     // Create specifically a new convolution. The input shape is needed to compute the
     // output and properly arrange the weights
     pub fn new_conv(shape: Vec<usize>, input_shape: Vec<usize>, data: Vec<Element>) -> Self {
@@ -489,6 +493,7 @@ impl<T> Tensor<T> {
             input_shape: vec![0],
         }
     }
+
     /// Is vector
     pub fn is_vector(&self) -> bool {
         self.get_shape().len() == 1
@@ -627,6 +632,12 @@ impl<T> Tensor<T>
 where
     T: Number,
 {
+    pub fn min(&self) -> T {
+        self.data.iter().fold(T::MAX, |min, x| min.cmp_min(x))
+    }
+    pub fn max(&self) -> T {
+        self.data.iter().fold(T::MIN, |max, x| max.cmp_max(x))
+    }
     pub fn reshape(mut self, new_shape: Vec<usize>) -> Tensor<T> {
         self.shape = new_shape;
         self
@@ -1374,145 +1385,145 @@ where
     }
 }
 
-impl PartialEq for Tensor<Element> {
-    fn eq(&self, other: &Self) -> bool {
-        self.shape == other.shape && self.data == other.data
-    }
-}
-
-impl PartialEq for Tensor<GoldilocksExt2> {
-    fn eq(&self, other: &Self) -> bool {
-        self.shape == other.shape && self.data == other.data
-    }
-}
-
-impl<T: Number> Tensor<T> {
-    pub fn max_value(&self) -> T {
-        self.data.iter().fold(T::MIN, |max, x| max.cmp_max(x))
-    }
-    pub fn min_value(&self) -> T {
-        self.data.iter().fold(T::MAX, |min, x| min.cmp_min(x))
-    }
-    pub fn random(shape: Vec<usize>) -> Self {
-        Self::random_seed(shape, Some(rand::random::<u64>()))
-    }
-
-    /// Creates a random matrix with a given number of rows and cols.
-    /// NOTE: doesn't take a rng as argument because to generate it in parallel it needs be sync +
-    /// sync which is not true for basic rng core.
-    pub fn random_seed(shape: Vec<usize>, seed: Option<u64>) -> Self {
-        let seed = seed.unwrap_or(rand::random::<u64>()); // Use provided seed or default
-        let mut rng = StdRng::seed_from_u64(seed);
-        let size = shape.iter().product();
-        let data = (0..size).map(|_| T::random(&mut rng)).collect();
-        Self {
-            data,
-            shape,
-            input_shape: vec![0],
+    impl PartialEq for Tensor<Element> {
+        fn eq(&self, other: &Self) -> bool {
+            self.shape == other.shape && self.data == other.data
         }
     }
-}
 
-#[cfg(test)]
-mod test {
-
-    use ark_std::rand::{Rng, thread_rng};
-    use goldilocks::GoldilocksExt2;
-
-    use super::super::testing::random_vector;
-
-    use super::*;
-    use multilinear_extensions::mle::MultilinearExtension;
-
-    #[test]
-    fn test_tensor_basic_ops() {
-        let tensor1 = Tensor::new(vec![2, 2], vec![1, 2, 3, 4]);
-        let tensor2 = Tensor::new(vec![2, 2], vec![5, 6, 7, 8]);
-
-        let result_add = tensor1.add(&tensor2);
-        assert_eq!(
-            result_add,
-            Tensor::new(vec![2, 2], vec![6, 8, 10, 12]),
-            "Element-wise addition failed."
-        );
-
-        let result_sub = tensor2.sub(&tensor2);
-        assert_eq!(
-            result_sub,
-            Tensor::zeros(vec![2, 2]),
-            "Element-wise subtraction failed."
-        );
-
-        let result_mul = tensor1.mul(&tensor2);
-        assert_eq!(
-            result_mul,
-            Tensor::new(vec![2, 2], vec![5, 12, 21, 32]),
-            "Element-wise multiplication failed."
-        );
-
-        let result_scalar = tensor1.scalar_mul(&2);
-        assert_eq!(
-            result_scalar,
-            Tensor::new(vec![2, 2], vec![2, 4, 6, 8]),
-            "Element-wise scalar multiplication failed."
-        );
+    impl PartialEq for Tensor<GoldilocksExt2> {
+        fn eq(&self, other: &Self) -> bool {
+            self.shape == other.shape && self.data == other.data
+        }
     }
 
-    #[test]
-    fn test_tensor_matvec() {
-        let matrix = Tensor::new(vec![3, 3], vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
-        let vector = Tensor::new(vec![3], vec![10, 20, 30]);
+    impl<T: Number> Tensor<T> {
+        pub fn max_value(&self) -> T {
+            self.data.iter().fold(T::MIN, |max, x| max.cmp_max(x))
+        }
+        pub fn min_value(&self) -> T {
+            self.data.iter().fold(T::MAX, |min, x| min.cmp_min(x))
+        }
+        pub fn random(shape: Vec<usize>) -> Self {
+            Self::random_seed(shape, Some(rand::random::<u64>()))
+        }
 
-        let result = matrix.matvec(&vector);
-
-        assert_eq!(
-            result,
-            Tensor::new(vec![3], vec![140, 320, 500]),
-            "Matrix-vector multiplication failed."
-        );
+        /// Creates a random matrix with a given number of rows and cols.
+        /// NOTE: doesn't take a rng as argument because to generate it in parallel it needs be sync +
+        /// sync which is not true for basic rng core.
+        pub fn random_seed(shape: Vec<usize>, seed: Option<u64>) -> Self {
+            let seed = seed.unwrap_or(rand::random::<u64>()); // Use provided seed or default
+            let mut rng = StdRng::seed_from_u64(seed);
+            let size = shape.iter().product();
+            let data = (0..size).map(|_| T::random(&mut rng)).collect();
+            Self {
+                data,
+                shape,
+                input_shape: vec![0],
+            }
+        }
     }
 
-    #[test]
-    fn test_tensor_matmul() {
-        let matrix_a = Tensor::new(vec![3, 3], vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
-        let matrix_b = Tensor::new(vec![3, 3], vec![10, 20, 30, 40, 50, 60, 70, 80, 90]);
+    #[cfg(test)]
+    mod test {
 
-        let result = matrix_a.matmul(&matrix_b);
+        use ark_std::rand::{Rng, thread_rng};
+        use goldilocks::GoldilocksExt2;
 
-        assert_eq!(
-            result,
-            Tensor::new(vec![3, 3], vec![
-                300, 360, 420, 660, 810, 960, 1020, 1260, 1500
-            ]),
-            "Matrix-matrix multiplication failed."
-        );
-    }
+        use super::super::testing::random_vector;
 
-    #[test]
-    fn test_tensor_transpose() {
-        let matrix_a = Tensor::new(vec![3, 4], vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
-        let matrix_b = Tensor::new(vec![4, 3], vec![1, 5, 9, 2, 6, 10, 3, 7, 11, 4, 8, 12]);
+        use super::*;
+        use multilinear_extensions::mle::MultilinearExtension;
 
-        let result = matrix_a.transpose();
+        #[test]
+        fn test_tensor_basic_ops() {
+            let tensor1 = Tensor::new(vec![2, 2], vec![1, 2, 3, 4]);
+            let tensor2 = Tensor::new(vec![2, 2], vec![5, 6, 7, 8]);
 
-        assert_eq!(result, matrix_b, "Matrix transpose failed.");
-    }
+            let result_add = tensor1.add(&tensor2);
+            assert_eq!(
+                result_add,
+                Tensor::new(vec![2, 2], vec![6, 8, 10, 12]),
+                "Element-wise addition failed."
+            );
 
-    #[test]
-    fn test_tensor_next_pow_of_two() {
-        let shape = vec![3usize, 3];
-        let mat = Tensor::<Element>::random_seed(shape.clone(), Some(213));
-        // println!("{}", mat);
-        let new_shape = vec![shape[0].next_power_of_two(), shape[1].next_power_of_two()];
-        let new_mat = mat.pad_next_power_of_two();
-        assert_eq!(
-            new_mat.get_shape(),
-            new_shape,
-            "Matrix padding to next power of two failed."
-        );
-    }
+            let result_sub = tensor2.sub(&tensor2);
+            assert_eq!(
+                result_sub,
+                Tensor::zeros(vec![2, 2]),
+                "Element-wise subtraction failed."
+            );
 
-    impl Tensor<Element> {
+            let result_mul = tensor1.mul(&tensor2);
+            assert_eq!(
+                result_mul,
+                Tensor::new(vec![2, 2], vec![5, 12, 21, 32]),
+                "Element-wise multiplication failed."
+            );
+
+            let result_scalar = tensor1.scalar_mul(&2);
+            assert_eq!(
+                result_scalar,
+                Tensor::new(vec![2, 2], vec![2, 4, 6, 8]),
+                "Element-wise scalar multiplication failed."
+            );
+        }
+
+        #[test]
+        fn test_tensor_matvec() {
+            let matrix = Tensor::new(vec![3, 3], vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
+            let vector = Tensor::new(vec![3], vec![10, 20, 30]);
+
+            let result = matrix.matvec(&vector);
+
+            assert_eq!(
+                result,
+                Tensor::new(vec![3], vec![140, 320, 500]),
+                "Matrix-vector multiplication failed."
+            );
+        }
+
+        #[test]
+        fn test_tensor_matmul() {
+            let matrix_a = Tensor::new(vec![3, 3], vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
+            let matrix_b = Tensor::new(vec![3, 3], vec![10, 20, 30, 40, 50, 60, 70, 80, 90]);
+
+            let result = matrix_a.matmul(&matrix_b);
+
+            assert_eq!(
+                result,
+                Tensor::new(vec![3, 3], vec![
+                    300, 360, 420, 660, 810, 960, 1020, 1260, 1500
+                ]),
+                "Matrix-matrix multiplication failed."
+            );
+        }
+
+        #[test]
+        fn test_tensor_transpose() {
+            let matrix_a = Tensor::new(vec![3, 4], vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+            let matrix_b = Tensor::new(vec![4, 3], vec![1, 5, 9, 2, 6, 10, 3, 7, 11, 4, 8, 12]);
+
+            let result = matrix_a.transpose();
+
+            assert_eq!(result, matrix_b, "Matrix transpose failed.");
+        }
+
+        #[test]
+        fn test_tensor_next_pow_of_two() {
+            let shape = vec![3usize, 3];
+            let mat = Tensor::<Element>::random_seed(shape.clone(), Some(213));
+            // println!("{}", mat);
+            let new_shape = vec![shape[0].next_power_of_two(), shape[1].next_power_of_two()];
+            let new_mat = mat.pad_next_power_of_two();
+            assert_eq!(
+                new_mat.get_shape(),
+                new_shape,
+                "Matrix padding to next power of two failed."
+            );
+        }
+
+        impl Tensor<Element> {
         pub fn get_2d(&self, i: usize, j: usize) -> Element {
             assert!(self.is_matrix() == true);
             self.data[i * self.get_shape()[1] + j]

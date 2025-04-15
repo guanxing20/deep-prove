@@ -9,13 +9,16 @@ use super::ScalingFactor;
 #[derive(Debug, Clone)]
 pub struct ModelMetadata {
     pub input: ScalingFactor,
-    layers_scaling: HashMap<usize, ScalingFactor>,
+    pub(crate) output_layers_scaling: HashMap<usize, ScalingFactor>,
     pub float_model: Option<Model<f32>>,
 }
 
 impl ModelMetadata {
     pub fn output_scaling_factor(&self) -> ScalingFactor {
-        self.layers_scaling[self.layers_scaling.keys().max().unwrap()].clone()
+        self.output_layers_scaling[self.output_layers_scaling.keys().max().unwrap()].clone()
+    }
+    pub fn layer_output_scaling_factor(&self, layer_id: usize) -> ScalingFactor {
+        self.output_layers_scaling.get(&layer_id).expect(&format!("Layer {} not found", layer_id)).clone()
     }
 }
 
@@ -43,7 +46,7 @@ impl MetadataBuilder {
     pub fn build(self) -> ModelMetadata {
         ModelMetadata {
             input: self.input_scaling.unwrap(),
-            layers_scaling: self.layers_scaling,
+            output_layers_scaling: self.layers_scaling,
             float_model: None,
         }
     }

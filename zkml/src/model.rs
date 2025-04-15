@@ -1,8 +1,5 @@
 use crate::{
-    Element,
-    layers::{Layer, LayerOutput},
-    quantization::TensorFielder,
-    tensor::{ConvData, Number, Tensor},
+    layers::{Layer, LayerOutput}, quantization::{ModelMetadata, TensorFielder}, tensor::{ConvData, Number, Tensor}, Element
 };
 use anyhow::Result;
 use ff_ext::ExtensionField;
@@ -84,6 +81,9 @@ impl<T: Number> Model<T> {
 
     pub fn layers(&self) -> impl DoubleEndedIterator<Item = (StepIdx, &Layer<T>)> {
         self.layers.iter().enumerate()
+    }
+    pub fn provable_layers(&self) -> impl DoubleEndedIterator<Item = (StepIdx, &Layer<T>)> {
+        self.layers.iter().enumerate().filter(|(_, l)| (*l).is_provable())
     }
 
     pub fn input_not_padded(&self) -> Vec<usize> {
@@ -172,6 +172,45 @@ pub struct InferenceTrace<'a, E, F: ExtensionField> {
 }
 
 impl<'a, F: ExtensionField> InferenceTrace<'a, Element, F> {
+    pub fn provable_steps(&self) -> Self {
+        let mut filtered_steps = Vec::new();
+        for step in self.steps.iter() { 
+            if step.layer.is_provable() {
+                filtered_steps.push(step.clone());
+            } else {
+                // we want the output of this step to be the output of the previous step 
+                let last_idx = filtered_steps.len() - 1;
+                filtered_steps[last_idx].output = step.output.clone();
+            }
+        }
+        InferenceTrace {
+            steps: filtered_steps,
+            input: self.input.clone(),
+        }
+    }
+    pub fn dequantized(&self, md: &ModelMetadata) -> InferenceTrace<'a, f32, F> {
+        let input = self.input.dequantize(&md.input);
+        let mut last_layer_output_scaling = None;
+        println!("DEQUANTIZATION MODEL: {:?}", md.output_layers_scaling);
+        let steps = self.steps.iter().map(|step| {
+            println!("DEQUANTIZED STEP {}",step.id);
+            if step.layer.needs_requant() {
+                println!("DEQUANTIZED STEP {} needs requant: {}",step.id, step.layer.describe());
+                last_layer_output_scaling = Some(md.layer_output_scaling_factor(step.id));
+            }
+            let output = step.output.dequantize(last_layer_output_scaling.as_ref().expect("Model must start with a 'need-requant' layer"));
+            InferenceStep {
+                id: step.id,
+                layer: step.layer,
+                output,
+                conv_data: step.conv_data.clone(),
+            }
+        }).collect();
+        InferenceTrace {
+            steps,
+            input,
+        }
+    }
     pub fn to_field(self) -> InferenceTrace<'a, F, F> {
         let input = self.input.to_fields();
         let field_steps = self
@@ -285,6 +324,7 @@ impl<'t, 'a, E, F: ExtensionField> DoubleEndedIterator for InferenceTraceIterato
     }
 }
 
+#[derive(Clone)]
 pub struct InferenceStep<'a, E, F: ExtensionField> {
     pub id: StepIdx,
     /// Reference to the layer that produced this step
@@ -294,6 +334,12 @@ pub struct InferenceStep<'a, E, F: ExtensionField> {
     /// Output produced by this layer
     pub output: Tensor<E>,
     pub conv_data: ConvData<F>,
+}
+
+impl<'a, E, F: ExtensionField> InferenceStep<'a, E, F> {
+    pub fn is_provable(&self) -> bool {
+        self.layer.is_provable()
+    }
 }
 
 // Add a specific implementation for f32 models

@@ -229,7 +229,7 @@ impl Convolution<Element> {
         &self,
         id: PolyID,
         mut aux: ContextAux,
-    ) -> Option<(LayerCtx<E>, ContextAux)>
+    ) -> (LayerCtx<E>, ContextAux)
     where
         E: ExtensionField + DeserializeOwned,
         E::BaseField: Serialize + DeserializeOwned,
@@ -288,7 +288,7 @@ impl Convolution<Element> {
             kx: self.kx(),
             filter_size: self.filter_size(),
         });
-        Some((conv_info, aux))
+        (conv_info, aux)
     }
 
     // Prove convolution of a CNN network. This is a convolution between in a 3D matrix X of dimension k_x * n_x * n_x
@@ -717,13 +717,13 @@ impl SchoolBookConvCtx {
         &self,
         _id: PolyID,
         aux: ContextAux,
-    ) -> Option<(LayerCtx<E>, ContextAux)>
+    ) -> (LayerCtx<E>, ContextAux)
     where
         E::BaseField: Serialize + DeserializeOwned,
         E: ExtensionField + Serialize + DeserializeOwned,
     {
         let conv_info = LayerCtx::SchoolBookConvolution(SchoolBookConvCtx);
-        Some((conv_info, aux))
+        (conv_info, aux)
     }
 }
 
