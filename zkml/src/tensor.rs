@@ -1306,7 +1306,9 @@ where
     ) -> Self {
         assert!(
             conv_shape_og.len() == 3 && conv_shape_pad.len() == 3,
-            "Expects conv2d shape output to be "
+            "Expects conv2d shape output to be 3d: conv_shape_og: {:?}, conv_shape_pad: {:?}",
+            conv_shape_og.len(),
+            conv_shape_pad.len()
         );
         assert!(mat_shp_pad.len() == 2 && self.shape.len() == 2);
 

@@ -141,12 +141,12 @@ fn pad_dense(mut d: Dense<Element>, si: &mut ShapeInfo) -> Result<Dense<Element>
     let ncols = new_cols.next_power_of_two();
     let nrows = d.matrix.nrows_2d().next_power_of_two();
 
-    if let Some(ref conv_shapes) = si.ignore_garbage_pad.as_ref() {
-        let conv_shape_og = conv_shapes.0.clone();
-        let conv_shape_pad = conv_shapes.1.clone();
+    if let Some(ref previous_shape) = si.ignore_garbage_pad.as_ref() {
+        let previous_input_shape_og = previous_shape.0.clone();
+        let previous_input_shape_padded = previous_shape.1.clone();
         d.matrix = d
             .matrix
-            .pad_matrix_to_ignore_garbage(&conv_shape_og, &conv_shape_pad, &vec![nrows, ncols]);
+            .pad_matrix_to_ignore_garbage(&previous_input_shape_og, &previous_input_shape_padded, &vec![nrows, ncols]);
         si.ignore_garbage_pad = None;
     } else {
         d.matrix.reshape_to_fit_inplace_2d(vec![nrows, ncols]);

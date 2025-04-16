@@ -355,7 +355,7 @@ impl Model<f32> {
 pub(crate) mod test {
     use crate::{layers::{
         activation::{Activation, Relu}, convolution::Convolution, dense::Dense, pooling::{Maxpool2D, Pooling, MAXPOOL2D_KERNEL_SIZE}, Layer
-    }, tensor::ConvData};
+    }, onnx_parse::conv2d_shape, tensor::ConvData};
     use ark_std::rand::{Rng, RngCore, thread_rng};
     use ff_ext::ExtensionField;
     use goldilocks::GoldilocksExt2;
@@ -545,8 +545,9 @@ pub(crate) mod test {
             conv1.clone(),
             padded_bias1.clone(),
         );
-        let input = Tensor::random(input_shape_padded);
-        let (fft_output,_) : (Tensor<Element>, ConvData<F>) = fft_conv.op::<GoldilocksExt2>(&input);
+        let input = Tensor::random(input_shape.clone());
+        let padded_input = input.pad_next_power_of_two();
+        let (fft_output,_) : (Tensor<Element>, ConvData<F>) = fft_conv.op::<GoldilocksExt2>(&padded_input);
         // just normal convolution
         let normal_output = input.conv2d(&w1, &bias1, 1);
 
@@ -557,16 +558,24 @@ pub(crate) mod test {
         let ncols = flat_normal_output.shape[0];
         let nrows = 10;
         let dense_shape = vec![nrows,ncols];
-        let dense_shape_padded = dense_shape.iter().map(|x| x.next_power_of_two()).collect::<Vec<usize>>();
         let dense = Dense::new(
             Tensor::new(dense_shape.clone(),vec![1; dense_shape.iter().product()]),
             Tensor::zeros(vec![dense_shape[0]])
         );
-        let mut padded_dense = dense.clone().pad_next_power_of_two();
-        padded_dense.matrix = padded_dense.matrix.pad_matrix_to_ignore_garbage(&conv_shape_og, &conv_shape_pad, &dense_shape_padded);
-        let clear_fft_output = padded_dense.op(&flat_fft_output);
-        let clear_normal_output = dense.op(&flat_normal_output);
-        assert_eq!(clear_fft_output.get_data(), clear_normal_output.get_data());
+        // create the padded version:
+        // take the "conv2d"input shape
+        let conv_input_shape = conv2d_shape(&input_shape, &w1.get_shape()).unwrap();
+        let conv_input_shape_padded = conv_input_shape.iter().map(|x| x.next_power_of_two()).collect::<Vec<usize>>();
+        let dense_shape_padded = vec![nrows.next_power_of_two(), flat_fft_output.shape[0].next_power_of_two()];
+        let mut padded_dense = dense.clone();
+        padded_dense.matrix = padded_dense.matrix.pad_matrix_to_ignore_garbage(
+            &conv_input_shape, &conv_input_shape_padded, &dense_shape_padded);
+        let padded_nrows = padded_dense.nrows();
+        padded_dense.bias = padded_dense.bias.pad_1d(padded_nrows);
+        let no_garbage_fft_output = padded_dense.op(&flat_fft_output);
+        let no_garbage_normal_output = dense.op(&flat_normal_output);
+        let max_rows = dense.nrows();
+        assert_eq!(&no_garbage_fft_output.get_data()[..max_rows], &no_garbage_normal_output.get_data()[..]);
         //let ignore_garbage = create_ignore_garbage(input_shape, input_shape_padded);
 
 
