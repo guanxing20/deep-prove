@@ -657,6 +657,7 @@ where
             input_shape: vec![0],
         }
     }
+
     /// Element-wise addition
     pub fn add(&self, other: &Tensor<T>) -> Tensor<T> {
         assert!(self.shape == other.shape, "Shape mismatch for addition.");
@@ -1430,6 +1431,8 @@ where
         use ark_std::rand::{Rng, thread_rng};
         use goldilocks::GoldilocksExt2;
 
+        use crate::onnx_parse::conv2d_shape;
+
         use super::super::testing::random_vector;
 
         use super::*;
@@ -1580,6 +1583,8 @@ where
 
     type E = GoldilocksExt2;
 
+    
+
     #[test]
     fn test_conv() {
         for i in 0..3 {
@@ -1603,7 +1608,6 @@ where
                         let big_x = Tensor::new(vec![k_x, n_x, n_x], vec![3; n_x * n_x * k_x]); //random_vector(n_x*n_x*k_x));
                         let (out_2, _) = filter_1.fft_conv::<GoldilocksExt2>(&big_x);
                         let out_1 = filter_2.cnn_naive_convolution(&big_x);
-
                         check_tensor_consistency(out_1, out_2);
                     }
                 }

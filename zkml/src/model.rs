@@ -353,13 +353,9 @@ impl Model<f32> {
 
 #[cfg(test)]
 pub(crate) mod test {
-    use crate::layers::{
-        Layer,
-        activation::{Activation, Relu},
-        convolution::Convolution,
-        dense::Dense,
-        pooling::{MAXPOOL2D_KERNEL_SIZE, Maxpool2D, Pooling},
-    };
+    use crate::{layers::{
+        activation::{Activation, Relu}, convolution::Convolution, dense::Dense, pooling::{Maxpool2D, Pooling, MAXPOOL2D_KERNEL_SIZE}, Layer
+    }, tensor::ConvData};
     use ark_std::rand::{Rng, RngCore, thread_rng};
     use ff_ext::ExtensionField;
     use goldilocks::GoldilocksExt2;
@@ -508,6 +504,75 @@ pub(crate) mod test {
     fn random_vector_quant(n: usize) -> Vec<Element> {
         // vec![thread_rng().gen_range(-128..128); n]
         random_vector(n)
+    }
+    pub fn create_ignore_garbage(og_shape: Vec<usize>, padded_shape: Vec<usize>) -> Tensor<Element> {
+        assert_eq!(padded_shape.len(), og_shape.len());
+        assert_eq!(padded_shape.len(), 3);
+        let n = padded_shape.iter().product();
+        let mut data : Vec<Element> = vec![0; n];
+        for i in 0..padded_shape[0] {
+            for j in 0..padded_shape[1] {
+                for k in 0..padded_shape[2] {
+                    let index = i * padded_shape[1] * padded_shape[2] + j * padded_shape[2] + k;
+                    if i < og_shape[0] && j < og_shape[1] && k < og_shape[2] {
+                        data[index] = 1;
+                    }
+                }
+            }
+        }
+        Tensor::new(padded_shape, data)
+    }
+    #[test]
+    fn test_cnn_padding_garbage() {
+        let input_shape : Vec<usize>= vec![1, 23,23];
+        let conv_shape_og :Vec<usize> = vec![7, 1, 3, 3]; 
+
+        let input_shape_padded = input_shape.iter().map(|x| x.next_power_of_two()).collect::<Vec<usize>>();
+        let conv_shape_pad = conv_shape_og.iter().map(|x| x.next_power_of_two()).collect::<Vec<usize>>();
+
+        // wieght of the filter
+        let w1 = Tensor::random(conv_shape_og.clone());
+        // creation of the padded and fft'd convolution
+        let padded_w1 = w1.pad_next_power_of_two();
+        let conv1 = Tensor::new_conv(
+            conv_shape_pad.clone(),
+            input_shape.clone(),
+            padded_w1.get_data().to_vec(),
+        );
+        let bias1: Tensor<Element> = Tensor::zeros(vec![conv_shape_og[0]]);
+        let padded_bias1 = bias1.pad_next_power_of_two();
+        let fft_conv = Convolution::new(
+            conv1.clone(),
+            padded_bias1.clone(),
+        );
+        let input = Tensor::random(input_shape_padded);
+        let (fft_output,_) : (Tensor<Element>, ConvData<F>) = fft_conv.op::<GoldilocksExt2>(&input);
+        // just normal convolution
+        let normal_output = input.conv2d(&w1, &bias1, 1);
+
+        // dense output to ignore garbage
+        let flat_fft_output = fft_output.flatten();
+        let flat_normal_output = normal_output.flatten();
+        // dense layer should have exactly the same number of columns as the flat normal output
+        let ncols = flat_normal_output.shape[0];
+        let nrows = 10;
+        let dense_shape = vec![nrows,ncols];
+        let dense_shape_padded = dense_shape.iter().map(|x| x.next_power_of_two()).collect::<Vec<usize>>();
+        let dense = Dense::new(
+            Tensor::new(dense_shape.clone(),vec![1; dense_shape.iter().product()]),
+            Tensor::zeros(vec![dense_shape[0]])
+        );
+        let mut padded_dense = dense.clone().pad_next_power_of_two();
+        padded_dense.matrix = padded_dense.matrix.pad_matrix_to_ignore_garbage(&conv_shape_og, &conv_shape_pad, &dense_shape_padded);
+        let clear_fft_output = padded_dense.op(&flat_fft_output);
+        let clear_normal_output = dense.op(&flat_normal_output);
+        assert_eq!(clear_fft_output.get_data(), clear_normal_output.get_data());
+        //let ignore_garbage = create_ignore_garbage(input_shape, input_shape_padded);
+
+
+        //assert_eq!(fft_output.get_shape(), normal_output.get_shape());
+        //assert_eq!(fft_output.data.len(), normal_output.data.len());
+        //assert!(fft_output.data == normal_output.data);
     }
 
     #[test]
