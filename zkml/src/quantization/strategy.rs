@@ -167,13 +167,27 @@ impl ScalingStrategy for InferenceObserver {
                         let shift = last_input_scaling.shift(&model_scaling, &output_scaling);
                         let (quantized_min, _quantized_max) =
                             quantized_conv.output_range(*quantization::MIN, *quantization::MAX);
-                        println!(
-                            "InferenceObserver: CONV {} layer f32 output range [{:?}, {:?}], quantized output range [{:?}, {:?}]",
-                            step_idx, min,max, quantized_min, _quantized_max
-                        );
+                        //println!(
+                        //    "InferenceObserver: CONV {} layer f32 output range [{:?}, {:?}], quantized output range [{:?}, {:?}]",
+                        //    step_idx, min,max, quantized_min, _quantized_max
+                        //);
 
                         md.set_layers_scaling(step_idx, output_scaling);
                         let requant = Requant::new(quantized_min.abs() as usize, shift);
+                        {
+                            // TEST
+                            let all_data = tracker.data_for(id);
+                            let quantized_data = all_data.iter().map(|x| output_scaling.quantize(x)).collect_vec();
+                            let max_quantized = quantized_data.iter().max().unwrap();
+                            let min_quantized = quantized_data.iter().min().unwrap();
+                            println!("InferenceObserver: CONV {} layer f32 output quantized: min {},max {}", step_idx, min_quantized, max_quantized);
+                            let max_weight = quantized_conv.filter.max_value();
+                            let min_weight = quantized_conv.filter.min_value();
+                            let max_bias = quantized_conv.bias.max_value();
+                            let min_bias = quantized_conv.bias.min_value();
+                            println!("InferenceObserver: CONV {} layer f32 weight quantized: min {},max {}", step_idx, min_weight, max_weight);
+                            println!("InferenceObserver: CONV {} layer f32 bias quantized: min {},max {}", step_idx, min_bias, max_bias);
+                        }
                         // let scale = last_input_scaling.scale() * model_scaling.scale()
                         //  / output_scaling.scale();
                         // requant.set_test_multiplier(scale);
@@ -223,6 +237,13 @@ impl InferenceTracker {
             .entry(layer_index)
             .or_insert(Vec::new())
             .extend(output.get_data().iter().map(|x| *x as f64));
+    }
+
+    fn data_for(&self, layer_index: usize) -> Vec<f32> {
+        self.data
+            .get(&layer_index)
+            .expect(&format!("No data for layer {:?}", layer_index))
+            .iter().map(|x| *x as f32).collect_vec()
     }
 
     /// Returns the 0.05 and 0.95 quantiles of the distribution of the output values of the layer.

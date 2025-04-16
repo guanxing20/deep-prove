@@ -1,8 +1,5 @@
 use crate::{
-    Element,
-    layers::{convolution::Convolution, dense::Dense, reshape::Reshape},
-    padding::pad_model,
-    quantization::{AbsoluteMax, ModelMetadata, ScalingStrategy},
+    layers::{convolution::Convolution, dense::Dense, reshape::Reshape}, padding::pad_model, quantization::{AbsoluteMax, ModelMetadata, ScalingStrategy}, Element
 };
 use anyhow::{Context, Error, Result, bail, ensure};
 use itertools::Itertools;
@@ -791,7 +788,7 @@ mod tests {
 
     #[test]
     fn test_load_cnn() {
-        // let filepath = "assets/scripts/CNN/cnn-cifar-01.onnx";
+        //let filepath = "assets/scripts/CNN/cnn-cifar-01.onnx";
         let filepath = "bench/model.onnx";
         ModelType::CNN.validate(filepath).unwrap();
         let result = FloatOnnxLoader::new(&filepath)

@@ -181,6 +181,7 @@ impl Convolution<Element> {
     pub fn op<E: ExtensionField>(&self, input: &Tensor<Element>) -> (Tensor<Element>, ConvData<E>) {
         let (output, proving_data) = self.filter.fft_conv(input);
         (self.add_bias(&output), proving_data)
+        //(output, proving_data)
     }
 
     /// Returns the min and max output range of the convolution layer for a given input range.
