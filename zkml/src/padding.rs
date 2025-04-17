@@ -46,9 +46,9 @@ pub fn pad_model(mut model: Model<Element>) -> Result<Model<Element>> {
             }
         })
         .collect::<Result<Vec<_>>>()?;
-        //.into_iter()
-        //.filter(|l| l.is_provable())
-        //.collect::<Vec<_>>();
+    //.into_iter()
+    //.filter(|l| l.is_provable())
+    //.collect::<Vec<_>>();
     Ok(model)
 }
 
@@ -144,9 +144,11 @@ fn pad_dense(mut d: Dense<Element>, si: &mut ShapeInfo) -> Result<Dense<Element>
     if let Some(ref previous_shape) = si.ignore_garbage_pad.as_ref() {
         let previous_input_shape_og = previous_shape.0.clone();
         let previous_input_shape_padded = previous_shape.1.clone();
-        d.matrix = d
-            .matrix
-            .pad_matrix_to_ignore_garbage(&previous_input_shape_og, &previous_input_shape_padded, &vec![nrows, ncols]);
+        d.matrix = d.matrix.pad_matrix_to_ignore_garbage(
+            &previous_input_shape_og,
+            &previous_input_shape_padded,
+            &vec![nrows, ncols],
+        );
         si.ignore_garbage_pad = None;
     } else {
         d.matrix.reshape_to_fit_inplace_2d(vec![nrows, ncols]);

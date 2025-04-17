@@ -2,9 +2,9 @@ pub mod activation;
 pub mod common;
 pub mod convolution;
 pub mod dense;
+pub mod hadamard;
 pub mod pooling;
 pub mod requant;
-pub mod hadamard;
 pub mod reshape;
 
 use anyhow::Result;
@@ -179,7 +179,7 @@ impl<T: Number> Layer<T> {
     }
     pub fn needs_requant(&self) -> bool {
         match self {
-            Layer::Dense(..) | Layer::Convolution(..)=> true,
+            Layer::Dense(..) | Layer::Convolution(..) => true,
             _ => false,
         }
     }
@@ -234,11 +234,7 @@ impl Layer<f32> {
 }
 
 impl Layer<Element> {
-    pub(crate) fn step_info<E>(
-        &self,
-        id: PolyID,
-        aux: ContextAux,
-    ) -> (LayerCtx<E>, ContextAux)
+    pub(crate) fn step_info<E>(&self, id: PolyID, aux: ContextAux) -> (LayerCtx<E>, ContextAux)
     where
         E: ExtensionField + DeserializeOwned,
         E::BaseField: Serialize + DeserializeOwned,
@@ -250,11 +246,12 @@ impl Layer<Element> {
             Layer::Activation(activation) => activation.step_info(id, aux),
             Layer::Requant(requant) => requant.step_info(id, aux),
             Layer::Pooling(pooling) => pooling.step_info(id, aux),
-            _ => panic!("Layer::step_info: layer {} can not be proven", self.describe()),
+            _ => panic!(
+                "Layer::step_info: layer {} can not be proven",
+                self.describe()
+            ),
         }
     }
-
-
 
     /// Run the operation associated with that layer with the given input
     // TODO: move to tensor library : right now it works because we assume there is only Dense

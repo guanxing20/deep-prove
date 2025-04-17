@@ -243,7 +243,9 @@ impl InferenceTracker {
         self.data
             .get(&layer_index)
             .expect(&format!("No data for layer {:?}", layer_index))
-            .iter().map(|x| *x as f32).collect_vec()
+            .iter()
+            .map(|x| *x as f32)
+            .collect_vec()
     }
 
     /// Returns the 0.05 and 0.95 quantiles of the distribution of the output values of the layer.

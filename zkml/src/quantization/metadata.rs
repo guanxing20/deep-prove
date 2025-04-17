@@ -6,7 +6,7 @@ use crate::model::Model;
 
 use super::ScalingFactor;
 
-/// Structure holding the scaling factors of the input and output of each layer 
+/// Structure holding the scaling factors of the input and output of each layer
 #[derive(Debug, Clone)]
 pub struct ModelMetadata {
     pub input: ScalingFactor,
@@ -19,7 +19,10 @@ impl ModelMetadata {
         self.output_layers_scaling[self.output_layers_scaling.keys().max().unwrap()].clone()
     }
     pub fn layer_output_scaling_factor(&self, layer_id: usize) -> ScalingFactor {
-        self.output_layers_scaling.get(&layer_id).expect(&format!("Layer {} not found", layer_id)).clone()
+        self.output_layers_scaling
+            .get(&layer_id)
+            .expect(&format!("Layer {} not found", layer_id))
+            .clone()
     }
 }
 

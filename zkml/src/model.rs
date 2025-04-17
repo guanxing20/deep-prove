@@ -1,5 +1,8 @@
 use crate::{
-    layers::{Layer, LayerOutput}, quantization::{ModelMetadata, TensorFielder}, tensor::{ConvData, Number, Tensor}, Element
+    Element,
+    layers::{Layer, LayerOutput},
+    quantization::{ModelMetadata, TensorFielder},
+    tensor::{ConvData, Number, Tensor},
 };
 use anyhow::Result;
 use ff_ext::ExtensionField;
@@ -83,7 +86,10 @@ impl<T: Number> Model<T> {
         self.layers.iter().enumerate()
     }
     pub fn provable_layers(&self) -> impl DoubleEndedIterator<Item = (StepIdx, &Layer<T>)> {
-        self.layers.iter().enumerate().filter(|(_, l)| (*l).is_provable())
+        self.layers
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| (*l).is_provable())
     }
 
     pub fn input_not_padded(&self) -> Vec<usize> {
@@ -174,11 +180,11 @@ pub struct InferenceTrace<'a, E, F: ExtensionField> {
 impl<'a, F: ExtensionField> InferenceTrace<'a, Element, F> {
     pub fn provable_steps(&self) -> Self {
         let mut filtered_steps = Vec::new();
-        for step in self.steps.iter() { 
+        for step in self.steps.iter() {
             if step.layer.is_provable() {
                 filtered_steps.push(step.clone());
             } else {
-                // we want the output of this step to be the output of the previous step 
+                // we want the output of this step to be the output of the previous step
                 let last_idx = filtered_steps.len() - 1;
                 filtered_steps[last_idx].output = step.output.clone();
             }
@@ -191,22 +197,27 @@ impl<'a, F: ExtensionField> InferenceTrace<'a, Element, F> {
     pub fn dequantized(&self, md: &ModelMetadata) -> InferenceTrace<'a, f32, F> {
         let input = self.input.dequantize(&md.input);
         let mut last_layer_output_scaling = None;
-        let steps = self.steps.iter().map(|step| {
-            if step.layer.needs_requant() {
-                last_layer_output_scaling = Some(md.layer_output_scaling_factor(step.id));
-            }
-            let output = step.output.dequantize(last_layer_output_scaling.as_ref().expect("Model must start with a 'need-requant' layer"));
-            InferenceStep {
-                id: step.id,
-                layer: step.layer,
-                output,
-                conv_data: step.conv_data.clone(),
-            }
-        }).collect();
-        InferenceTrace {
-            steps,
-            input,
-        }
+        let steps = self
+            .steps
+            .iter()
+            .map(|step| {
+                if step.layer.needs_requant() {
+                    last_layer_output_scaling = Some(md.layer_output_scaling_factor(step.id));
+                }
+                let output = step.output.dequantize(
+                    last_layer_output_scaling
+                        .as_ref()
+                        .expect("Model must start with a 'need-requant' layer"),
+                );
+                InferenceStep {
+                    id: step.id,
+                    layer: step.layer,
+                    output,
+                    conv_data: step.conv_data.clone(),
+                }
+            })
+            .collect();
+        InferenceTrace { steps, input }
     }
     pub fn to_field(self) -> InferenceTrace<'a, F, F> {
         let input = self.input.to_fields();
@@ -353,9 +364,17 @@ impl Model<f32> {
 
 #[cfg(test)]
 pub(crate) mod test {
-    use crate::{layers::{
-        activation::{Activation, Relu}, convolution::Convolution, dense::Dense, pooling::{Maxpool2D, Pooling, MAXPOOL2D_KERNEL_SIZE}, Layer
-    }, onnx_parse::conv2d_shape, tensor::ConvData};
+    use crate::{
+        layers::{
+            Layer,
+            activation::{Activation, Relu},
+            convolution::Convolution,
+            dense::Dense,
+            pooling::{MAXPOOL2D_KERNEL_SIZE, Maxpool2D, Pooling},
+        },
+        onnx_parse::conv2d_shape,
+        tensor::ConvData,
+    };
     use ark_std::rand::{Rng, RngCore, thread_rng};
     use ff_ext::ExtensionField;
     use goldilocks::GoldilocksExt2;
@@ -505,7 +524,6 @@ pub(crate) mod test {
         // vec![thread_rng().gen_range(-128..128); n]
         random_vector(n)
     }
-
 
     #[test]
     fn test_cnn() {
