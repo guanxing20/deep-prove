@@ -4,15 +4,48 @@
 //! a module that can be used within other layers. FOr example it is used within
 //! convolution.
 
+use anyhow::{Result, ensure};
 use ff_ext::ExtensionField;
 use multilinear_extensions::{
     mle::{IntoMLE, MultilinearExtension},
-    virtual_poly::VirtualPolynomial,
+    virtual_poly::{VPAuxInfo, VirtualPolynomial},
 };
-use sumcheck::structs::IOPProverState;
+use sumcheck::structs::{IOPProof, IOPProverState, IOPVerifierState};
 use transcript::Transcript;
 
 use crate::{Claim, Element, Tensor, commit::compute_betas_eval};
+
+struct HadamardCtx<F: ExtensionField> {
+    sumcheck_aux: VPAuxInfo<F>,
+}
+
+impl<F: ExtensionField> HadamardCtx<F> {
+    pub fn new(v1: &Tensor<Element>, v2: &Tensor<Element>) -> Self {
+        assert_eq!(v1.get_shape(), v2.get_shape());
+        let num_vars = v1.get_data().len().ilog2() as usize;
+        Self { sumcheck_aux: VPAuxInfo::from_mle_list_dimensions(&vec![vec![num_vars,num_vars,num_vars]]) }
+    }
+}
+
+struct HadamardProof<F: ExtensionField> {
+    sumcheck: IOPProof<F>,
+    individual_claim: Vec<F>,
+}
+
+impl<F: ExtensionField> HadamardProof<F> {
+    pub fn random_point(&self) -> Vec<F> {
+        self.sumcheck.point.clone()
+    }
+    pub fn v1_eval(&self) -> F {
+        self.individual_claim[0]
+    }
+    pub fn v2_eval(&self) -> F {
+        self.individual_claim[1]
+    }
+    pub fn beta_eval(&self) -> F {
+        self.individual_claim[2]
+    }
+}
 
 // - v1, the two input vectors
 // - v3 = v1 ° v2, the output vector
@@ -30,7 +63,7 @@ pub fn prove<F: ExtensionField, T: Transcript<F>>(
     output_claim: Claim<F>,
     v1: Tensor<Element>,
     v2: Tensor<Element>,
-) -> Claim<F> {
+) -> HadamardProof<F> {
     assert_eq!(
         output_claim.point.len(),
         v1.get_data().len().ilog2() as usize
@@ -53,12 +86,44 @@ pub fn prove<F: ExtensionField, T: Transcript<F>>(
         let given_eval = output_claim.eval;
         computed_eval == given_eval
     });
-    output_claim
+    HadamardProof {
+        sumcheck: proof,
+        individual_claim: state.get_mle_final_evaluations(),
+    }
+}
+
+fn verify<F: ExtensionField, T: Transcript<F>>(
+    ctx: &HadamardCtx<F>,
+    transcript: &mut T,
+    proof: &HadamardProof<F>,
+    output_claim: Claim<F>,
+    expected_v2_eval: F,
+) -> Result<Claim<F>> {
+    let _subclaim = IOPVerifierState::<F>::verify(
+        output_claim.eval,
+        &proof.sumcheck,
+        &ctx.sumcheck_aux,
+        transcript,
+    );
+    // TODO: closed formula for beta evaluation
+    let beta = compute_betas_eval(&output_claim.point).into_mle();
+    let beta_eval = beta.evaluate(&proof.sumcheck.point);
+    // [v1,v2,beta]
+    ensure!(
+        beta_eval == proof.beta_eval(),
+        "Hadamard verification failed for beta eval"
+    );
+    ensure!(
+        expected_v2_eval == proof.v2_eval(),
+        "Hadamard verification failed for v2 eval"
+    );
+    Ok(Claim::new(proof.sumcheck.point.clone(), proof.v1_eval())) 
 }
 
 #[cfg(test)]
 mod test {
     use goldilocks::GoldilocksExt2;
+    use tract_onnx::data_resolver::default;
     use transcript::BasicTranscript;
 
     use super::*;
@@ -73,9 +138,16 @@ mod test {
         let r = random_field_vector(n.next_power_of_two().ilog2() as usize);
         let expected_output = v1.mul(&v2);
         let output_mle = expected_output.to_mle_flat::<GoldilocksExt2>();
-        let expected_eval = output_mle.evaluate(&r);
-        let output_claim = Claim::new(r, expected_eval);
-        let output_claim = prove(&mut transcript, output_claim, v1, v2);
-        println!("output_claim: {:?}", output_claim);
+        let output_eval = output_mle.evaluate(&r);
+        let output_claim = Claim::new(r, output_eval);
+        let proof = prove(&mut transcript, output_claim.clone(), v1.clone(), v2.clone());
+
+
+        let ctx = HadamardCtx::new(&v1, &v2);
+        let v2_eval = v2.to_mle_flat::<GoldilocksExt2>().evaluate(&proof.random_point());
+        let input_claim = verify(&ctx, &mut default_transcript(), &proof, output_claim, v2_eval).unwrap();
+        let expected_v1_eval = v1.to_mle_flat::<GoldilocksExt2>().evaluate(&input_claim.point);
+        assert_eq!(expected_v1_eval, input_claim.eval);
+
     }
 }
