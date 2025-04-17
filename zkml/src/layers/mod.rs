@@ -4,6 +4,7 @@ pub mod convolution;
 pub mod dense;
 pub mod pooling;
 pub mod requant;
+pub mod hadamard;
 pub mod reshape;
 
 use anyhow::Result;

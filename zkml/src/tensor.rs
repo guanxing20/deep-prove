@@ -284,6 +284,18 @@ where
             output,
         }
     }
+
+    pub fn output_as_element(&self, n_x: usize) -> Vec<Element> {
+        self.output
+            .iter()
+            .map(|e| {
+                index_u(e.as_slice(), n_x)
+                    .map(|e| e.into_element())
+                    .collect::<Vec<_>>()
+            })
+            .flatten()
+            .collect::<Vec<_>>()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -419,19 +431,12 @@ impl Tensor<Element> {
             .unzip();
         // TODO: remove the requirement to keep the output value intact
         let output = out.clone();
-        let out_element = out
-            .into_par_iter()
-            .map(|e| {
-                index_u(e.as_slice(), n_x)
-                    .map(|e| e.into_element())
-                    .collect::<Vec<_>>()
-            })
-            .flatten()
-            .collect::<Vec<_>>();
-
+        let conv_data = ConvData::new(real_input, input, x_vec, prod, output);
+        println!("INSIDE CONV FFT: x.shape = {:?}",x.shape);
+        let out_element = conv_data.output_as_element(n_x);
         return (
             Tensor::new(vec![self.shape[0], n_x, n_x], out_element),
-            ConvData::new(real_input, input, x_vec, prod, output),
+            conv_data,
         );
     }
 
@@ -467,6 +472,10 @@ impl Tensor<Element> {
         let num_vars = self.nrows_2d().ilog2() + self.ncols_2d().ilog2();
         DenseMultilinearExtension::from_evaluations_ext_vec(num_vars as usize, self.evals_2d())
     }
+
+    pub fn to_mle_flat<F: ExtensionField>(&self) -> DenseMultilinearExtension<F> {
+        DenseMultilinearExtension::from_evaluations_ext_vec(self.data.len().ilog2() as usize, self.evals_flat())
+    }
 }
 
 impl Tensor<f32> {
@@ -485,7 +494,10 @@ impl<T> Tensor<T> {
     pub fn new(shape: Vec<usize>, data: Vec<T>) -> Self {
         assert!(
             shape.iter().product::<usize>() == data.len(),
-            "Shape does not match data length."
+            "Shape does not match data length: shape {:?}->{}vs data.len() {}",
+            shape,
+            shape.iter().product::<usize>(),
+            data.len()
         );
         Self {
             data,
