@@ -762,11 +762,138 @@ pub fn phi_eval<E: ExtensionField>(
     return eval;
 }
 
+pub fn create_ignore_garbage(mut og_shape: Vec<usize>, padded_shape: Vec<usize>) -> Tensor<Element> {
+        if og_shape.len() == 4 {
+            og_shape.remove(0);
+        }
+        assert_eq!(padded_shape.len(), og_shape.len());
+        assert_eq!(padded_shape.len(), 3);
+        let n = padded_shape.iter().product();
+        let mut data : Vec<Element> = vec![0; n];
+        for i in 0..padded_shape[0] {
+            for j in 0..padded_shape[1] {
+                for k in 0..padded_shape[2] {
+                    let index = i * padded_shape[1] * padded_shape[2] + j * padded_shape[2] + k;
+                    if i < og_shape[0] && j < og_shape[1] && k < og_shape[2] {
+                        data[index] = 1;
+                    }
+                }
+            }
+        }
+        Tensor::new(padded_shape, data)
+    }
+
 #[cfg(test)]
 mod test {
-    use crate::layers::dense;
+    use goldilocks::GoldilocksExt2;
+
+    use crate::{layers::dense::{self, Dense}, onnx_parse::conv2d_shape};
 
     use super::*;
+
+    fn split_garbage(fft_output: &Tensor<Element>, not_padded_shape: &[usize]) -> (Vec<Element>,Vec<Element>) {
+        let mut not_padded_shape = not_padded_shape.to_vec();
+        not_padded_shape.remove(0);
+        let mut garbage = Vec::new();
+        let mut valid = Vec::new();
+        for i in 0..fft_output.shape[0] {
+            for j in 0..fft_output.shape[1] {
+                for k in 0..fft_output.shape[2] {
+                    let index = i * fft_output.shape[1] * fft_output.shape[2] + j * fft_output.shape[2] + k;
+                    let elem = fft_output.data[index];
+                    if !(i < not_padded_shape[0] && j < not_padded_shape[1] && k < not_padded_shape[2]) {
+                        garbage.push(elem);
+                    } else {
+                        valid.push(elem);
+                    }
+                }
+            }
+        }
+        (valid,garbage)
+    }
+    #[test]
+    fn test_cnn_padding_garbage() {
+        let input_shape : Vec<usize>= vec![1, 23,23];
+        let conv_shape_og :Vec<usize> = vec![7, 1, 3, 3]; 
+
+        let input_shape_padded = input_shape.iter().map(|x| x.next_power_of_two()).collect::<Vec<usize>>();
+        let conv_shape_pad = conv_shape_og.iter().map(|x| x.next_power_of_two()).collect::<Vec<usize>>();
+
+        // wieght of the filter
+        let w1 = Tensor::random(conv_shape_og.clone());
+        // creation of the padded and fft'd convolution
+        let padded_w1 = w1.pad_next_power_of_two();
+        let conv1 = Tensor::new_conv(
+            conv_shape_pad.clone(),
+            input_shape.clone(),
+            padded_w1.get_data().to_vec(),
+        );
+        let bias1: Tensor<Element> = Tensor::zeros(vec![conv_shape_og[0]]);
+        let padded_bias1 = bias1.pad_next_power_of_two();
+        let fft_conv = Convolution::new(
+            conv1.clone(),
+            padded_bias1.clone(),
+        );
+        let input = Tensor::random(input_shape.clone());
+        let padded_input = input.pad_next_power_of_two();
+        let (fft_output,_) : (Tensor<Element>, ConvData<_>) = fft_conv.op::<GoldilocksExt2>(&padded_input);
+        // just normal convolution
+        let normal_output = input.conv2d(&w1, &bias1, 1);
+
+        // Flatten for the dense layer
+        let flat_fft_output = fft_output.flatten();
+        let flat_normal_output = normal_output.flatten();
+        // Check that the garbage and valid parts are correct
+        let (valid,garbage) = split_garbage(&fft_output, &normal_output.get_shape());
+        assert!(valid.len() == flat_normal_output.get_data().len());
+        assert!(valid == flat_normal_output.get_data().to_vec());
+        // some garbage can be 0 due to padding but fft garbage produces necessarily non zero values
+        assert!(!garbage.iter().all(|x| *x == 0));
+        // Now create the tensor that will cancel out the garbage
+        let garbage_destroyer = create_ignore_garbage(normal_output.get_shape(), fft_output.get_shape());
+        let flat_garbage_destroyer = garbage_destroyer.flatten();
+        let no_garbage_fft_output = flat_garbage_destroyer.mul(&flat_fft_output);
+        // NOTE: a bit of a hack to recreate but the functione xpects the real conv shape not the flattened one
+        let (valid,garbage) = split_garbage(
+            &Tensor::new(fft_output.get_shape(),no_garbage_fft_output.get_data().to_vec()), 
+            &normal_output.get_shape()
+        );
+        // at this point the garbage should be all zeros and the valid should be the same as the non fft output as before
+        assert!(garbage.iter().all(|x| *x == 0));
+        assert!(valid == flat_normal_output.get_data().to_vec());
+
+        // dense output to REMOVE garbage - even tho it is only zero now we still need to remove it to get the right shape
+        // dense layer should have exactly the same number of columns as the flat normal output
+        let ncols = flat_normal_output.shape[0];
+        let nrows = 10;
+        let dense_shape = vec![nrows,ncols];
+        let dense = Dense::new(
+            Tensor::new(dense_shape.clone(),vec![1; dense_shape.iter().product()]),
+            Tensor::zeros(vec![dense_shape[0]])
+        );
+        // create the padded version:
+        // take the "conv2d"input shape
+        let conv_input_shape = conv2d_shape(&input_shape, &w1.get_shape()).unwrap();
+        let conv_input_shape_padded = conv_input_shape.iter().map(|x| x.next_power_of_two()).collect::<Vec<usize>>();
+        let dense_shape_padded = vec![nrows.next_power_of_two(), flat_fft_output.shape[0].next_power_of_two()];
+        let mut padded_dense = dense.clone();
+        padded_dense.matrix = padded_dense.matrix.pad_matrix_to_ignore_garbage(
+            &conv_input_shape, &conv_input_shape_padded, &dense_shape_padded);
+        let padded_nrows = padded_dense.nrows();
+        padded_dense.bias = padded_dense.bias.pad_1d(padded_nrows);
+        //let no_garbage_fft_output = padded_dense.op(&flat_fft_output);
+        let no_garbage_fft_output = padded_dense.op(&no_garbage_fft_output);
+        let no_garbage_normal_output = dense.op(&flat_normal_output);
+        let max_rows = dense.nrows();
+        assert_eq!(&no_garbage_fft_output.get_data()[..max_rows], &no_garbage_normal_output.get_data()[..]);
+        assert!(no_garbage_fft_output.get_data()[max_rows..].iter().all(|x| *x == 0));
+        //let ignore_garbage = create_ignore_garbage(input_shape, input_shape_padded);
+
+
+        //assert_eq!(fft_output.get_shape(), normal_output.get_shape());
+        //assert_eq!(fft_output.data.len(), normal_output.data.len());
+        //assert!(fft_output.data == normal_output.data);
+    }
 
     #[test]
     fn test_conv_offset_poly_id() {
