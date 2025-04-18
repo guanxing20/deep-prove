@@ -6,7 +6,7 @@ use crate::{
     lookup::logup_gkr::{prover::batch_prove as logup_batch_prove, verifier::verify_logup_proof},
     quantization,
 };
-use anyhow::{Result, anyhow, ensure};
+use anyhow::{Result, anyhow};
 use ff::Field;
 use ff_ext::ExtensionField;
 use gkr::util::ceil_log2;

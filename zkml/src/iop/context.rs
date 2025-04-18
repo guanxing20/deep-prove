@@ -11,7 +11,7 @@ use itertools::Itertools;
 use mpcs::BasefoldCommitment;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::collections::BTreeSet;
-use tracing::{debug, trace};
+use tracing::debug;
 use transcript::Transcript;
 
 /// Info related to the lookup protocol tables.

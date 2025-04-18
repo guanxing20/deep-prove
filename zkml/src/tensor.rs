@@ -1452,7 +1452,6 @@ mod test {
     use ark_std::rand::{Rng, thread_rng};
     use goldilocks::GoldilocksExt2;
 
-    use crate::onnx_parse::conv2d_shape;
 
     use super::super::testing::random_vector;
 

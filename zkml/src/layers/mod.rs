@@ -26,7 +26,7 @@ use crate::{
     tensor::{ConvData, Number, Tensor},
 };
 use activation::ActivationCtx;
-use common::{Op, ProvableOp, QuantizableOp};
+use common::{Op,  QuantizableOp};
 use convolution::{ConvCtx, ConvProof, SchoolBookConvCtx};
 use dense::{DenseCtx, DenseProof};
 use ff_ext::ExtensionField;

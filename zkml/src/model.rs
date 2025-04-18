@@ -372,8 +372,6 @@ pub(crate) mod test {
             dense::Dense,
             pooling::{MAXPOOL2D_KERNEL_SIZE, Maxpool2D, Pooling},
         },
-        onnx_parse::conv2d_shape,
-        tensor::ConvData,
     };
     use ark_std::rand::{Rng, RngCore, thread_rng};
     use ff_ext::ExtensionField;

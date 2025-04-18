@@ -20,6 +20,7 @@ pub trait QuantizableOp: Op<f32> {
     fn quantize(&self, s: &ScalingFactor, bias_s: Option<&ScalingFactor>) -> Layer<Element>;
 }
 
+#[allow(unused)]
 pub(crate) trait ProvableOp: Op<Element> {
     fn step_info<E: ExtensionField>(
         &self,

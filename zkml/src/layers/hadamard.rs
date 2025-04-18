@@ -15,7 +15,7 @@ use transcript::Transcript;
 
 use crate::{Claim, Element, Tensor, commit::compute_betas_eval};
 
-struct HadamardCtx<F: ExtensionField> {
+pub struct HadamardCtx<F: ExtensionField> {
     sumcheck_aux: VPAuxInfo<F>,
 }
 
@@ -27,21 +27,25 @@ impl<F: ExtensionField> HadamardCtx<F> {
     }
 }
 
-struct HadamardProof<F: ExtensionField> {
+pub struct HadamardProof<F: ExtensionField> {
     sumcheck: IOPProof<F>,
     individual_claim: Vec<F>,
 }
 
 impl<F: ExtensionField> HadamardProof<F> {
+    #[allow(unused)]
     pub fn random_point(&self) -> Vec<F> {
         self.sumcheck.point.clone()
     }
+    #[allow(unused)]
     pub fn v1_eval(&self) -> F {
         self.individual_claim[0]
     }
+    #[allow(unused)]
     pub fn v2_eval(&self) -> F {
         self.individual_claim[1]
     }
+    #[allow(unused)]
     pub fn beta_eval(&self) -> F {
         self.individual_claim[2]
     }
@@ -58,6 +62,7 @@ impl<F: ExtensionField> HadamardProof<F> {
 //   - v1 is the output of the conv
 // . - v2 clearing garbage tensor. the verifier can evaluate v2 and eq easily
 //   - the v1 claim is now passed to the previous layer (we prove in reverse)
+#[allow(unused)]
 pub fn prove<F: ExtensionField, T: Transcript<F>>(
     transcript: &mut T,
     output_claim: Claim<F>,
@@ -92,7 +97,8 @@ pub fn prove<F: ExtensionField, T: Transcript<F>>(
     }
 }
 
-fn verify<F: ExtensionField, T: Transcript<F>>(
+#[allow(unused)]
+pub fn verify<F: ExtensionField, T: Transcript<F>>(
     ctx: &HadamardCtx<F>,
     transcript: &mut T,
     proof: &HadamardProof<F>,
@@ -123,8 +129,6 @@ fn verify<F: ExtensionField, T: Transcript<F>>(
 #[cfg(test)]
 mod test {
     use goldilocks::GoldilocksExt2;
-    use tract_onnx::data_resolver::default;
-    use transcript::BasicTranscript;
 
     use super::*;
     use crate::{default_transcript, testing::random_field_vector};
