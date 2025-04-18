@@ -364,14 +364,12 @@ impl Model<f32> {
 
 #[cfg(test)]
 pub(crate) mod test {
-    use crate::{
-        layers::{
-            Layer,
-            activation::{Activation, Relu},
-            convolution::Convolution,
-            dense::Dense,
-            pooling::{MAXPOOL2D_KERNEL_SIZE, Maxpool2D, Pooling},
-        },
+    use crate::layers::{
+        Layer,
+        activation::{Activation, Relu},
+        convolution::Convolution,
+        dense::Dense,
+        pooling::{MAXPOOL2D_KERNEL_SIZE, Maxpool2D, Pooling},
     };
     use ark_std::rand::{Rng, RngCore, thread_rng};
     use ff_ext::ExtensionField;

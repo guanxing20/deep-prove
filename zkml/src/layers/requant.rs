@@ -115,7 +115,7 @@ impl Requant {
             &input.get_data()[..10.min(input.get_data().len())],
             &res[..10.min(res.len())],
         );
-        //ensure!(
+        // ensure!(
         //    not_ok_count == 0,
         //    "Requantization led to out of range values"
         //);

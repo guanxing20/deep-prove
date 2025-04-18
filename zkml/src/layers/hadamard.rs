@@ -23,7 +23,11 @@ impl<F: ExtensionField> HadamardCtx<F> {
     pub fn new(v1: &Tensor<Element>, v2: &Tensor<Element>) -> Self {
         assert_eq!(v1.get_shape(), v2.get_shape());
         let num_vars = v1.get_data().len().ilog2() as usize;
-        Self { sumcheck_aux: VPAuxInfo::from_mle_list_dimensions(&vec![vec![num_vars,num_vars,num_vars]]) }
+        Self {
+            sumcheck_aux: VPAuxInfo::from_mle_list_dimensions(&vec![vec![
+                num_vars, num_vars, num_vars,
+            ]]),
+        }
     }
 }
 
@@ -123,7 +127,7 @@ pub fn verify<F: ExtensionField, T: Transcript<F>>(
         expected_v2_eval == proof.v2_eval(),
         "Hadamard verification failed for v2 eval"
     );
-    Ok(Claim::new(proof.sumcheck.point.clone(), proof.v1_eval())) 
+    Ok(Claim::new(proof.sumcheck.point.clone(), proof.v1_eval()))
 }
 
 #[cfg(test)]
@@ -144,16 +148,31 @@ mod test {
         let output_mle = expected_output.to_mle_flat::<GoldilocksExt2>();
         let output_eval = output_mle.evaluate(&r);
         let output_claim = Claim::new(r, output_eval);
-        let proof = prove(&mut transcript, output_claim.clone(), v1.clone(), v2.clone());
-
+        let proof = prove(
+            &mut transcript,
+            output_claim.clone(),
+            v1.clone(),
+            v2.clone(),
+        );
 
         let ctx = HadamardCtx::new(&v1, &v2);
         // NOTE: find closed formula to evaluate it efficiently OR use PCS
-        let v2_eval = v2.to_mle_flat::<GoldilocksExt2>().evaluate(&proof.random_point());
+        let v2_eval = v2
+            .to_mle_flat::<GoldilocksExt2>()
+            .evaluate(&proof.random_point());
         // NOTE: this has to be done by the component integrating the hadamard logic
         // normally by verifying this input claim via another sumcheck.
-        let input_claim = verify(&ctx, &mut default_transcript(), &proof, output_claim, v2_eval).unwrap();
-        let expected_v1_eval = v1.to_mle_flat::<GoldilocksExt2>().evaluate(&input_claim.point);
+        let input_claim = verify(
+            &ctx,
+            &mut default_transcript(),
+            &proof,
+            output_claim,
+            v2_eval,
+        )
+        .unwrap();
+        let expected_v1_eval = v1
+            .to_mle_flat::<GoldilocksExt2>()
+            .evaluate(&input_claim.point);
         assert_eq!(expected_v1_eval, input_claim.eval);
     }
 }
