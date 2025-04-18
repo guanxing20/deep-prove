@@ -106,7 +106,6 @@ impl Activation {
         prover
             .witness_prover
             .add_claim(step.poly_id, claim_acc_proof.extract_claim())?;
-        println!("ACTIVATION: WITNESS Poly ID: {}", step.poly_id);
 
         // Add the proof in
         prover.push_proof(LayerProof::Activation(ActivationProof {

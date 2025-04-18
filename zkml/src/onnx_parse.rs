@@ -1,8 +1,5 @@
 use crate::{
-    Element,
-    layers::{convolution::Convolution, dense::Dense, reshape::Reshape},
-    padding::pad_model,
-    quantization::{AbsoluteMax, ModelMetadata, ScalingStrategy},
+    layers::{activation::{Activation, Relu}, convolution::Convolution, dense::Dense, pooling::{Maxpool2D, Pooling, MAXPOOL2D_KERNEL_SIZE}, reshape::Reshape, Layer}, padding::pad_model, quantization::{AbsoluteMax, ModelMetadata, ScalingStrategy}, Element
 };
 use anyhow::{Context, Error, Result, bail, ensure};
 use itertools::Itertools;
@@ -19,11 +16,6 @@ use tract_onnx::pb::{
 };
 
 use crate::{
-    layers::{
-        Layer,
-        activation::{Activation, Relu},
-        pooling::{MAXPOOL2D_KERNEL_SIZE, Maxpool2D, Pooling},
-    },
     model::Model,
 };
 
@@ -780,6 +772,7 @@ mod tests {
         let io = IO::new(input.to_fields(), output.to_fields());
         verify::<_, _>(ctx, proof, io, &mut verifier_transcript).unwrap();
     }
+
 
     #[test]
     fn test_is_cnn() {

@@ -11,7 +11,7 @@ use itertools::Itertools;
 use mpcs::BasefoldCommitment;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::collections::BTreeSet;
-use tracing::debug;
+use tracing::{debug, trace};
 use transcript::Transcript;
 
 /// Info related to the lookup protocol tables.
@@ -79,12 +79,12 @@ where
         let mut step_infos = Vec::with_capacity(model.layer_count());
         debug!("Context : layer info generation ...");
         for (id, layer) in model.provable_layers() {
-            debug!(
+            trace!(
                 "Context : {}-th layer {}info generation ...",
                 id,
                 layer.describe()
             );
-            let (info, new_aux) = layer.step_info(id, ctx_aux.clone());
+            let (info, new_aux) = layer.step_info(id, ctx_aux);
             step_infos.push(info);
             ctx_aux = new_aux;
         }

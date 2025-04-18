@@ -76,6 +76,10 @@ pub struct ConvProof<E: ExtensionField> {
 }
 
 impl<T: Number> Convolution<T> {
+    pub fn new(filter: Tensor<T>, bias: Tensor<T>) -> Self {
+        assert_eq!(filter.kw(), bias.get_shape()[0]);
+        Self { filter, bias }
+    }
     pub fn add_bias(&self, conv_out: &Tensor<T>) -> Tensor<T> {
         let mut arr = conv_out.data.clone();
         assert_eq!(conv_out.data.len(), conv_out.kw() * conv_out.filter_size());
@@ -174,10 +178,6 @@ impl Convolution<f32> {
 }
 
 impl Convolution<Element> {
-    pub fn new(filter: Tensor<Element>, bias: Tensor<Element>) -> Self {
-        Self { filter, bias }
-    }
-
     pub fn op<E: ExtensionField>(&self, input: &Tensor<Element>) -> (Tensor<Element>, ConvData<E>) {
         let (output, proving_data) = self.filter.fft_conv(input);
         (self.add_bias(&output), proving_data)

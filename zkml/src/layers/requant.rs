@@ -15,7 +15,7 @@ use multilinear_extensions::mle::{IntoMLE, MultilinearExtension};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use statrs::statistics::{Data, Distribution};
 use std::ops::{Add, Mul, Sub};
-use tracing::warn;
+use tracing::{debug, warn};
 use transcript::Transcript;
 
 use crate::{
@@ -105,7 +105,7 @@ impl Requant {
         // and we can observe values being null'd, e.g. set to 0 very quickly. Which messes up the distribution and
         // thus the inference.
         let stats = (d.mean().unwrap(), d.variance().unwrap());
-        println!(
+        debug!(
             "AFTER REQUANT: shift {} : {:.2} % OUT OF RANGE (over total {})-> stats mean {:?} var {:?} \n\t->{:?}\n\t->{:?}",
             self.right_shift,
             not_ok_count as f32 / res.len() as f32 * 100.0,
@@ -115,7 +115,7 @@ impl Requant {
             &input.get_data()[..10.min(input.get_data().len())],
             &res[..10.min(res.len())],
         );
-        // ensure!(
+        //ensure!(
         //    not_ok_count == 0,
         //    "Requantization led to out of range values"
         //);

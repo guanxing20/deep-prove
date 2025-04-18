@@ -8,7 +8,11 @@ pub mod requant;
 pub mod reshape;
 
 use anyhow::Result;
+use ff_ext::ExtensionField;
 use itertools::Itertools;
+use pooling::{PoolingCtx, PoolingProof};
+use requant::RequantCtx;
+use reshape::Reshape;
 use statrs::statistics::{Data, Distribution};
 
 use crate::{
@@ -29,10 +33,6 @@ use activation::ActivationCtx;
 use common::{Op,  QuantizableOp};
 use convolution::{ConvCtx, ConvProof, SchoolBookConvCtx};
 use dense::{DenseCtx, DenseProof};
-use ff_ext::ExtensionField;
-use pooling::{PoolingCtx, PoolingProof};
-use requant::RequantCtx;
-use reshape::Reshape;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::Sha256;
 

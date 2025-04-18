@@ -220,7 +220,6 @@ impl Pooling {
             .witness_prover
             .add_claim(info.poly_id, output_claim)
             .context("unable to add claim")?;
-        println!("POOLING: WITNESS Poly ID: {}", info.poly_id);
         // Now we must do the samething accumulating evals for the input poly as we fix variables on the input poly.
         // The point length is 2 longer because for now we only support MaxPool2D.
 
@@ -446,7 +445,7 @@ impl Maxpool2D {
     ) -> Vec<Vec<E::BaseField>> {
         let padded_input = input.pad_next_power_of_two();
 
-        let padded_output = self.op(input).pad_next_power_of_two();
+        let padded_output = self.op(&input).pad_next_power_of_two();
         let padded_input_shape = padded_input.get_shape();
 
         let new_fixed = (0..padded_input_shape[2] << 1)
