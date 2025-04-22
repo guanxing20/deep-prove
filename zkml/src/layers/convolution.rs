@@ -204,7 +204,9 @@ impl Convolution<f32> {
 
 impl Convolution<Element> {
     pub fn op<E: ExtensionField>(&self, input: &Tensor<Element>) -> (Tensor<Element>, ConvData<E>) {
-        let (output, proving_data) = self.filter.fft_conv(input);
+        let padded_input = input.pad_next_power_of_two();
+        let weight_padded = self.filter.pad_next_power_of_two();
+        let (output, proving_data) = weight_padded.fft_conv(&padded_input);
         (self.add_bias(&output), proving_data)
         // create a new tensor that clears out the garbage values in the output, e.g. set all to 0
         // this is necessary since the garbage might be of any value and we need to restrict the range of the output
@@ -1374,7 +1376,8 @@ mod test {
         (valid, garbage)
     }
 
-    /// Test that check if just taking from input and conv not padded
+    /// Test that check if just taking shapes from input and conv not padded we can manipualte input 
+    /// and filter to run it in padded world with FFT based convolution.
     #[test]
     fn test_conv_unpadded_to_padded() {
         let input_shape: Vec<usize> = vec![1, 23, 23];

@@ -69,9 +69,7 @@ impl FloatOnnxLoader {
         }
         let (quantized_model, mut md) = self.scaling_strategy.quantize(float_model)?;
         md.float_model = kept_float;
-        let padded_model = pad_model(quantized_model)?;
-        // let padded_model = quantized_model;
-        Ok((padded_model, md))
+        Ok((quantized_model, md))
     }
 }
 // Supported operators

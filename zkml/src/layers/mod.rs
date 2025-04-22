@@ -6,6 +6,7 @@ pub mod hadamard;
 pub mod pooling;
 pub mod requant;
 pub mod reshape;
+pub mod matvec;
 
 use anyhow::Result;
 use ff_ext::ExtensionField;

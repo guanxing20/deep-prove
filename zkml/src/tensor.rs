@@ -8,7 +8,7 @@ use ff::Field;
 use ff_ext::ExtensionField;
 use goldilocks::GoldilocksExt2;
 use itertools::Itertools;
-use multilinear_extensions::mle::DenseMultilinearExtension;
+use multilinear_extensions::mle::{DenseMultilinearExtension, IntoMLE};
 use rayon::{
     iter::{
         IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator,
@@ -1535,6 +1535,7 @@ impl<T: Number> Tensor<T> {
         }
     }
 }
+
 
 #[cfg(test)]
 mod test {
