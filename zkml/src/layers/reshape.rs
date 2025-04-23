@@ -14,8 +14,8 @@ use super::{
 pub struct Reshape;
 
 impl<N: Number> Op<N> for Reshape {
-    fn output_shape(&self) -> Vec<usize> {
-        vec![1]
+    fn output_shape(&self, input_shape: &[usize]) -> Vec<usize> {
+        vec![input_shape.iter().product::<usize>()]
     }
     fn op(&self, input: &Tensor<N>) -> Tensor<N> {
         input.flatten()

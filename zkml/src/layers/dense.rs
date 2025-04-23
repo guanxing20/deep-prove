@@ -1,3 +1,5 @@
+use std::cmp::Ordering;
+
 use crate::{
     Claim, Prover,
     iop::{context::ContextAux, verifier::Verifier},
@@ -20,13 +22,15 @@ use transcript::Transcript;
 
 use crate::{Element, tensor::Tensor};
 
+use super::common::Op;
+
 /// Bias to compute the bias ID polynomials. Since originally we take the index of each
 /// layer to be the index of the layer, we need to add a bias to avoid collision with other
 /// layers poly id.
 pub(crate) const BIAS_POLY_ID: PolyID = 100_000;
 
 /// Description of the layer
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug,Serialize,Deserialize)]
 pub struct Dense<T> {
     pub matrix: Tensor<T>,
     pub bias: Tensor<T>,
@@ -81,6 +85,17 @@ impl<T: Number> Dense<T> {
         let matrix = self.matrix.pad_next_power_of_two();
         let bias = self.bias.pad_1d(matrix.nrows_2d());
         Self { matrix, bias }
+    }
+
+    pub fn output_shape(&self, _input_shape: &[usize]) -> Vec<usize> {
+        vec![1,self.matrix.nrows_2d()]
+    }
+    pub fn describe(&self) -> String {
+        format!("Dense: ({}x{}) + bias ({})", 
+                self.matrix.nrows_2d(), 
+                self.matrix.ncols_2d(),
+                !self.bias.get_data().iter().all(|x| x.compare(&T::default()) == Ordering::Equal)
+        )
     }
 }
 
@@ -367,6 +382,7 @@ impl<E: ExtensionField> DenseProof<E> {
     }
 }
 
+    
 #[cfg(test)]
 mod test {
     use super::*;

@@ -12,7 +12,7 @@ pub trait Op<N: Number>:
     Clone + std::fmt::Debug + Sync + Send + Serialize + DeserializeOwned
 {
     fn describe(&self) -> String;
-    fn output_shape(&self) -> Vec<usize>;
+    fn output_shape(&self, input_shape: &[usize]) -> Vec<usize>;
     fn op(&self, input: &Tensor<N>) -> Tensor<N>;
 }
 

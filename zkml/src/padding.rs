@@ -1,10 +1,7 @@
 use anyhow::{Context, Result, ensure};
 
 use crate::{
-    Element,
-    layers::{Layer, convolution::Convolution, dense::Dense, reshape::Reshape},
-    model::Model,
-    onnx_parse::{check_filter, conv2d_shape, maxpool2d_shape},
+    layers::{convolution::{conv2d_shape, Convolution}, dense::Dense, reshape::Reshape, Layer}, model::Model, onnx_parse::{check_filter, safe_conv2d_shape, safe_maxpool2d_shape}, Element
 };
 type GarbagePad = Option<(Vec<usize>, Vec<usize>)>;
 type Shape = Vec<usize>;
@@ -37,8 +34,8 @@ pub fn pad_model(mut model: Model<Element>) -> Result<Model<Element>> {
                 Layer::Pooling(m) => {
                     // Make sure that input shape is already padded and is well formed
                     assert!(si.input_shape_padded.iter().all(|d| d.is_power_of_two()));
-                    si.input_shape_og = maxpool2d_shape(&si.input_shape_og)?;
-                    si.input_shape_padded = maxpool2d_shape(&si.input_shape_padded)?;
+                    si.input_shape_og = safe_maxpool2d_shape(&si.input_shape_og)?;
+                    si.input_shape_padded = safe_maxpool2d_shape(&si.input_shape_padded)?;
                     Ok(Layer::Pooling(m))
                 }
                 Layer::Reshape(_) => Ok(Layer::<Element>::Reshape(reshape(&mut si)?)),
@@ -58,7 +55,7 @@ fn reshape(si: &mut ShapeInfo) -> Result<Reshape> {
 }
 
 fn pad_conv(mut c: Convolution<Element>, si: &mut ShapeInfo) -> Result<Convolution<Element>> {
-    si.input_shape_og = conv2d_shape(&si.input_shape_og, &c.filter.get_shape())?;
+    si.input_shape_og = safe_conv2d_shape(&si.input_shape_og, &c.filter.get_shape())?;
     let weight_shape = c.filter.get_shape();
     // Perform basic sanity checks on the tensor dimensions
     check_filter(&weight_shape).context("filter shape test failed:")?;
@@ -101,7 +98,7 @@ fn pad_conv(mut c: Convolution<Element>, si: &mut ShapeInfo) -> Result<Convoluti
 
     // let layer = Layer::SchoolBookConvolution(Convolution::new(weight, _bias));
 
-    let output_shape = conv2d_shape(&si.input_shape_padded, &dims)?;
+    let output_shape = safe_conv2d_shape(&si.input_shape_padded, &dims)?;
     si.input_shape_padded = output_shape
         .iter()
         .map(|i| i.next_power_of_two())

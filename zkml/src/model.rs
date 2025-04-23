@@ -140,10 +140,12 @@ impl Model<Element> {
         &'a self,
         input: Tensor<Element>,
     ) -> Result<InferenceTrace<'a, Element, E>> {
-        let mut trace = InferenceTrace::<Element, E>::new(input);
+        let mut trace = InferenceTrace::<Element, E>::new(input,self.input_not_padded.clone());
+        let mut unpadded_input_shape = self.input_not_padded.clone();
         for (id, layer) in self.layers() {
             let input = trace.last_input();
-            let output = layer.op(input)?;
+            let output = layer.op(input, &unpadded_input_shape)?;
+            unpadded_input_shape = layer.output_shape(&unpadded_input_shape);
             match output {
                 LayerOutput::NormalOut(output) => {
                     let conv_data = ConvData::default();
@@ -152,6 +154,7 @@ impl Model<Element> {
                         output,
                         id,
                         conv_data,
+                        unpadded_shape: unpadded_input_shape.clone(),
                     };
                     trace.push_step(step);
                 }
@@ -161,6 +164,7 @@ impl Model<Element> {
                         output,
                         id,
                         conv_data,
+                        unpadded_shape: unpadded_input_shape.clone(),
                     };
                     trace.push_step(step);
                 }
@@ -175,6 +179,7 @@ pub struct InferenceTrace<'a, E, F: ExtensionField> {
     pub steps: Vec<InferenceStep<'a, E, F>>,
     /// The initial input to the model
     input: Tensor<E>,
+    unpadded_shape: Vec<usize>,
 }
 
 impl<'a, F: ExtensionField> InferenceTrace<'a, Element, F> {
@@ -192,6 +197,7 @@ impl<'a, F: ExtensionField> InferenceTrace<'a, Element, F> {
         InferenceTrace {
             steps: filtered_steps,
             input: self.input.clone(),
+            unpadded_shape: self.unpadded_shape.clone(),
         }
     }
     pub fn dequantized(&self, md: &ModelMetadata) -> InferenceTrace<'a, f32, F> {
@@ -214,10 +220,11 @@ impl<'a, F: ExtensionField> InferenceTrace<'a, Element, F> {
                     layer: step.layer,
                     output,
                     conv_data: step.conv_data.clone(),
+                    unpadded_shape: step.unpadded_shape.clone(),
                 }
             })
             .collect();
-        InferenceTrace { steps, input }
+        InferenceTrace { steps, input, unpadded_shape: self.unpadded_shape.clone() }
     }
     pub fn to_field(self) -> InferenceTrace<'a, F, F> {
         let input = self.input.to_fields();
@@ -229,20 +236,24 @@ impl<'a, F: ExtensionField> InferenceTrace<'a, Element, F> {
                 layer: step.layer,
                 output: step.output.to_fields(),
                 conv_data: step.conv_data.clone(),
+                unpadded_shape: step.unpadded_shape.clone(),
             })
             .collect::<Vec<_>>();
         InferenceTrace {
             steps: field_steps,
             input,
+            unpadded_shape: self.unpadded_shape.clone(),
         }
     }
 }
 
 impl<'a, E, F: ExtensionField> InferenceTrace<'a, E, F> {
-    fn new(input: Tensor<E>) -> Self {
+    /// The input must be the already padded input tensor via `Model::prepare_input`
+    fn new(input: Tensor<E>, unpadded_shape: Vec<usize>) -> Self {
         Self {
             steps: Default::default(),
             input,
+            unpadded_shape,
         }
     }
 
@@ -341,6 +352,11 @@ pub struct InferenceStep<'a, E, F: ExtensionField> {
     pub layer: &'a Layer<Element>,
     /// Output produced by this layer
     pub output: Tensor<E>,
+    /// Shape of the output in the unpadded domain. This is useful for proving
+    /// and eliminating some side effects of padding during proving.
+    pub unpadded_shape: Vec<usize>,
+    /// Convolution data - is set to default if not a convolution layer
+    /// TODO: move that to an Option
     pub conv_data: ConvData<F>,
 }
 
@@ -430,9 +446,11 @@ pub(crate) mod test {
                     panic!("random selection shouldn't be in that case");
                 }
             }
-            let input_dims = model.layers.first().unwrap().shape();
+            let Some(model_shape) = model.layers.first().unwrap().model_shape() else {
+                panic!("Model must start with a dense layer");
+            };
             // ncols since matrix2vector is summing over the columns
-            let input = Tensor::random(vec![input_dims[1]]);
+            let input = Tensor::random(vec![model_shape[1]]);
             (model, input)
         }
 

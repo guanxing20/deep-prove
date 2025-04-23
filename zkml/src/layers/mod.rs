@@ -120,32 +120,36 @@ where
 }
 
 impl<T: Number> Layer<T> {
-    /// TODO: this method should be renamed to output_shape. THe internals of the layer should only be disclosed
-    /// for some node but not all (e.g. reshape doesn't have an internal shape).
-    pub fn shape(&self) -> Vec<usize> {
+    pub fn output_shape(&self, input_shape: &[usize]) -> Vec<usize> {
+        match self {
+            Layer::Dense(ref dense) => dense.output_shape(input_shape),
+            Layer::Convolution(ref filter) => filter.output_shape(input_shape),
+            Layer::SchoolBookConvolution(ref filter) => filter.output_shape(input_shape),
+            Layer::Activation(Activation::Relu(_)) => input_shape.to_vec(),
+            Layer::Requant(info) => input_shape.to_vec(),
+            Layer::Pooling(Pooling::Maxpool2D(info)) => info.output_shape(input_shape),
+            Layer::Reshape(ref r) => <Reshape as Op<T>>::output_shape(r, input_shape),
+        }
+    }
+    /// Returns the shape of the layer as used in the model. If the layer do NOT have a shape per se,
+    /// e.g. RELU for example, it returns None.
+    pub fn model_shape(&self) -> Option<Vec<usize>> {
         match &self {
-            Layer::Dense(ref dense) => vec![dense.matrix.nrows_2d(), dense.matrix.ncols_2d()],
+            Layer::Dense(ref dense) => Some(dense.matrix.get_shape()),
 
-            Layer::Convolution(ref filter) => filter.get_shape(),
-            Layer::SchoolBookConvolution(ref filter) => filter.get_shape(),
+            Layer::Convolution(ref filter) => Some(filter.get_shape()),
+            Layer::SchoolBookConvolution(ref filter) => Some(filter.get_shape()),
 
-            Layer::Activation(Activation::Relu(_)) => Relu::shape(),
-            Layer::Requant(info) => info.shape(),
-            Layer::Pooling(Pooling::Maxpool2D(info)) => vec![info.kernel_size, info.kernel_size],
-            Layer::Reshape(ref _reshape) => vec![1],
+            Layer::Activation(Activation::Relu(_)) => None,
+            Layer::Requant(info) => None,
+            Layer::Pooling(Pooling::Maxpool2D(info)) => Some(vec![info.kernel_size, info.kernel_size]),
+            Layer::Reshape(ref _reshape) => None,
         }
     }
 
     pub fn describe(&self) -> String {
         match &self {
-            Layer::Dense(ref dense) => {
-                format!(
-                    "Dense: ({},{})",
-                    dense.matrix.nrows_2d(),
-                    dense.matrix.ncols_2d(),
-                    // matrix.fmt_integer()
-                )
-            }
+            Layer::Dense(ref dense) => dense.describe(),
             Layer::Convolution(ref filter) => {
                 format!(
                     "Conv: ({},{},{},{})",
@@ -175,7 +179,7 @@ impl<T: Number> Layer<T> {
                 "MaxPool2D{{ kernel size: {}, stride: {} }}",
                 info.kernel_size, info.stride
             ),
-            Layer::Reshape(ref reshape) => describe_op::<T, Reshape>(reshape),
+            Layer::Reshape(ref reshape) => <Reshape as Op<T>>::describe(reshape),
         }
     }
     pub fn needs_requant(&self) -> bool {
@@ -190,10 +194,6 @@ impl<T: Number> Layer<T> {
             _ => true,
         }
     }
-}
-
-fn describe_op<N: Number, O: Op<N>>(op: &O) -> String {
-    format!("{}: {:?}", op.describe(), op.output_shape())
 }
 
 impl Layer<f32> {
@@ -257,11 +257,11 @@ impl Layer<Element> {
     /// Run the operation associated with that layer with the given input
     // TODO: move to tensor library : right now it works because we assume there is only Dense
     // layer which is matmul
-    pub fn op<F: ExtensionField>(&self, input: &Tensor<Element>) -> Result<LayerOutput<F>> {
+    pub fn op<F: ExtensionField>(&self, input: &Tensor<Element>, unpadded_shape: &[usize]) -> Result<LayerOutput<F>> {
         let output = match &self {
             Layer::Dense(ref dense) => Ok(LayerOutput::NormalOut(dense.op(input))),
             Layer::Activation(activation) => Ok(LayerOutput::NormalOut(activation.op(input))),
-            Layer::Convolution(ref filter) => Ok(LayerOutput::ConvOut(filter.op(input))),
+            Layer::Convolution(ref filter) => Ok(LayerOutput::ConvOut(filter.op(input, unpadded_shape))),
             // Layer::Convolution(ref filter) => LayerOutput::NormalOut(input.conv2d(&filter.filter,&filter.bias,1)),
             // Traditional convolution is used for debug purposes. That is because the actual convolution
             // we use relies on the FFT algorithm. This convolution does not have a snark implementation.

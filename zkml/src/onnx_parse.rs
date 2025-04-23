@@ -1,15 +1,7 @@
 use crate::{
-    Element,
     layers::{
-        Layer,
-        activation::{Activation, Relu},
-        convolution::Convolution,
-        dense::Dense,
-        pooling::{MAXPOOL2D_KERNEL_SIZE, Maxpool2D, Pooling},
-        reshape::Reshape,
-    },
-    padding::pad_model,
-    quantization::{AbsoluteMax, ModelMetadata, ScalingStrategy},
+        activation::{Activation, Relu}, convolution::{conv2d_shape, Convolution}, dense::Dense, pooling::{maxpool2d_shape, Maxpool2D, Pooling, MAXPOOL2D_KERNEL_SIZE}, reshape::Reshape, Layer
+    }, padding::pad_model, quantization::{AbsoluteMax, ModelMetadata, ScalingStrategy}, Element
 };
 use anyhow::{Context, Error, Result, bail, ensure};
 use itertools::Itertools;
@@ -68,8 +60,9 @@ impl FloatOnnxLoader {
             kept_float = Some(float_model.clone());
         }
         let (quantized_model, mut md) = self.scaling_strategy.quantize(float_model)?;
+        let padded_model = pad_model(quantized_model)?;
         md.float_model = kept_float;
-        Ok((quantized_model, md))
+        Ok((padded_model, md))
     }
 }
 // Supported operators
@@ -218,6 +211,15 @@ fn model_input_shape(graph: &GraphProto) -> Vec<usize> {
     input_shape
 }
 
+pub fn safe_conv2d_shape(input_shape: &[usize], filter_shape: &[usize]) -> Result<Vec<usize>> {
+    let result = check_filter(filter_shape);
+    assert!(result.is_ok(), "conv2d: Failed {:?}", result.unwrap_err());
+
+    check_cnn_input(input_shape).context("conv2d: invalid input shape")?;
+
+    Ok(conv2d_shape(input_shape, filter_shape))
+}
+
 pub fn check_filter(filter_shape: &[usize]) -> Result<()> {
     ensure!(filter_shape.len() == 4, "Filter should be 4D tensor.");
     ensure!(
@@ -233,38 +235,10 @@ pub fn check_cnn_input(input_shape: &[usize]) -> Result<()> {
     Ok(())
 }
 
-/// Assumes stride=1, padding=0, and dilation=1
-/// https://pytorch.org/docs/stable/generated/torch.nn.Conv2d.html
-pub fn conv2d_shape(input_shape: &[usize], filter_shape: &[usize]) -> Result<Vec<usize>> {
-    let result = check_filter(filter_shape);
-    assert!(result.is_ok(), "conv2d: Failed {:?}", result.unwrap_err());
 
-    check_cnn_input(input_shape).context("conv2d: invalid input shape")?;
-
-    let stride = 1usize;
-    let padding = 0usize;
-    let dilation = 1usize;
-
-    let h_in = input_shape[2];
-    let kernel = filter_shape[2];
-    let h_out = (h_in + 2 * padding - dilation * (kernel - 1) - 1) / stride + 1;
-    Ok(vec![filter_shape[0], h_out, h_out])
-}
-
-/// Assumes kernel=2, stride=2, padding=0, and dilation=1
-/// https://pytorch.org/docs/stable/generated/torch.nn.MaxPool2d.html
-pub fn maxpool2d_shape(input_shape: &[usize]) -> Result<Vec<usize>> {
+pub fn safe_maxpool2d_shape(input_shape: &[usize]) -> Result<Vec<usize>> {
     check_cnn_input(input_shape).context("maxpool2d: invalid input shape")?;
-
-    let stride = 2usize;
-    let padding = 0usize;
-    let kernel = 2usize;
-    let dilation = 1usize;
-
-    let d1 = input_shape[0];
-    let d2 = (input_shape[1] + 2 * padding - dilation * (kernel - 1) - 1) / stride + 1;
-
-    Ok(vec![d1, d2, d2])
+    Ok(maxpool2d_shape(input_shape))
 }
 
 /// Enum representing the different types of models that can be loaded
@@ -399,7 +373,7 @@ pub fn load_float_model(filepath: &str) -> Result<Model<f32>> {
                 //    bias.get_shape(),
                 //    weights.get4d()
                 //);
-                input_shape_og = conv2d_shape(&input_shape_og, &weights.get_shape())?;
+                input_shape_og = safe_conv2d_shape(&input_shape_og, &weights.get_shape())?;
                 let weight_shape = weights.get_shape();
                 // Perform basic sanity checks on the tensor dimensions
                 let shape_test = check_filter(&weight_shape);
@@ -455,7 +429,7 @@ pub fn load_float_model(filepath: &str) -> Result<Model<f32>> {
                 debug!("EXTRACTIONG conv2d time: {:?}", now.elapsed());
             }
             op if DOWNSAMPLING.contains(&op) => {
-                input_shape_og = maxpool2d_shape(&input_shape_og)?;
+                input_shape_og = safe_maxpool2d_shape(&input_shape_og)?;
                 // Make sure that input shape is already padded and is well formed
                 // assert!(input_shape_padded.iter().all(|d| d.is_power_of_two()));
 

@@ -17,6 +17,7 @@ use rayon::{
     prelude::ParallelSlice,
     slice::ParallelSliceMut,
 };
+use serde::{Deserialize, Serialize};
 use std::{
     cmp::{Ordering, PartialEq},
     fmt::{self, Debug},
@@ -298,7 +299,7 @@ where
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Tensor<T> {
     pub data: Vec<T>,
     pub shape: Vec<usize>,
@@ -663,6 +664,10 @@ impl<T> Tensor<T> {
     ///
     pub fn get_data(&self) -> &[T] {
         &self.data
+    }
+
+    pub fn get_data_into(self) -> Vec<T> {
+        self.data
     }
     pub fn kx(&self) -> usize {
         self.shape[1]
@@ -1419,8 +1424,7 @@ where
             conv_shape_og.len(),
             conv_shape_pad.len()
         );
-        assert!(mat_shp_pad.len() == 2 && self.shape.len() == 2);
-
+        assert!(mat_shp_pad.len() == 2 && self.shape.len() == 2, "Expects matrix to be 2d: mat_shp_pad: {:?}, self.shape: {:?}", mat_shp_pad.len(), self.shape.len());
         let mat_shp_og = self.get_shape();
 
         let new_data: Vec<T> = (0..mat_shp_pad[0] * mat_shp_pad[1])

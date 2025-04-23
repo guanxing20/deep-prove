@@ -436,6 +436,10 @@ impl Maxpool2D {
         input.maxpool2d(self.kernel_size, self.stride)
     }
 
+    pub fn output_shape(&self, input_shape: &[usize]) -> Vec<usize> {
+        maxpool2d_shape(input_shape)
+    }
+
     /// Computes MLE evaluations related to proving Maxpool function.
     /// The outputs of this function are the four polynomials corresponding to the input to the Maxpool, each with two variables fixed
     /// so that PROD (Output - poly_i) == 0 at every evaluation point.
@@ -524,6 +528,20 @@ impl Maxpool2D {
     }
 }
 
+
+/// Assumes kernel=2, stride=2, padding=0, and dilation=1
+/// https://pytorch.org/docs/stable/generated/torch.nn.MaxPool2d.html
+pub fn maxpool2d_shape(input_shape: &[usize]) -> Vec<usize> {
+    let stride = 2usize;
+    let padding = 0usize;
+    let kernel = 2usize;
+    let dilation = 1usize;
+
+    let d1 = input_shape[0];
+    let d2 = (input_shape[1] + 2 * padding - dilation * (kernel - 1) - 1) / stride + 1;
+
+    vec![d1, d2, d2]
+}
 #[cfg(test)]
 mod tests {
     use crate::{commit::compute_betas_eval, default_transcript};
