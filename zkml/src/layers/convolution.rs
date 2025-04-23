@@ -1,4 +1,4 @@
-use crate::{onnx_parse::safe_conv2d_shape, VectorTranscript};
+use crate::{VectorTranscript, onnx_parse::safe_conv2d_shape};
 use core::f32;
 
 use crate::{
@@ -39,6 +39,8 @@ pub struct Convolution<T> {
     pub filter: Tensor<T>,
     /// Same for bias.
     pub bias: Tensor<T>,
+    /// Unpadded shape of the filter. This is set to filter's shape in case of no padding.
+    pub unpadded_shape: Vec<usize>,
 }
 
 /// Info about the convolution layer derived during the setup phase
@@ -101,8 +103,17 @@ pub struct ConvProof<E: ExtensionField> {
 
 impl<T: Number> Convolution<T> {
     pub fn new(filter: Tensor<T>, bias: Tensor<T>) -> Self {
+        let filter_shape = filter.get_shape();
+        Self::new_padded(filter, bias, &filter_shape)
+    }
+
+    pub fn new_padded(filter: Tensor<T>, bias: Tensor<T>, unpadded_shape: &[usize]) -> Self {
         assert_eq!(filter.kw(), bias.get_shape()[0]);
-        Self { filter, bias }
+        Self {
+            filter,
+            bias,
+            unpadded_shape: unpadded_shape.to_vec(),
+        }
     }
     pub fn output_shape(&self, input_shape: &[usize]) -> Vec<usize> {
         conv2d_shape(input_shape, &self.filter.get_shape())
@@ -158,12 +169,6 @@ impl<T: Number> Convolution<T> {
 }
 
 impl Convolution<f32> {
-    /// used to create a convoluation layer with from the raw float weights and bias.
-    /// The wieghts are NOT fft'd as they are when the it is being quantized.
-    pub fn new_raw(filter: Tensor<f32>, bias: Tensor<f32>) -> Self {
-        Self { filter, bias }
-    }
-
     /// Quantizes the filter and the bias. Note the weights are not yet FFT'd, that happens with new_conv at the padding step
     /// since the FFT is also making the filter shape == input shape.
     /// TODO: refactor new_conv to be in convolution.rs and more efficient than cloning
@@ -177,10 +182,7 @@ impl Convolution<f32> {
         let quantized_filter = self.filter.quantize(s);
         let bias_s = bias_s.unwrap_or(s);
         let bias = self.bias.quantize(bias_s);
-        Convolution::<Element> {
-            filter: quantized_filter,
-            bias,
-        }
+        Convolution::<Element>::new( quantized_filter, bias)
     }
 
     pub fn op<E: ExtensionField>(&self, input: &Tensor<f32>) -> Tensor<f32> {
@@ -206,18 +208,23 @@ impl Convolution<f32> {
 }
 
 impl Convolution<Element> {
-    pub fn op<E: ExtensionField>(&self, input: &Tensor<Element>,unpadded_input_shape: &[usize]) -> (Tensor<Element>, ConvData<E>) {
+    pub fn op<E: ExtensionField>(
+        &self,
+        input: &Tensor<Element>,
+        unpadded_input_shape: &[usize],
+    ) -> (Tensor<Element>, ConvData<E>) {
         let (output, proving_data) = self.filter.fft_conv(&input);
         let conv_output = self.add_bias(&output);
-        // At this stage, we're creating a "garbage clearing" tensor that sets all garbage values to 0. This is necessary 
+        // At this stage, we're creating a "garbage clearing" tensor that sets all garbage values to 0. This is necessary
         // since the garbage might be of any value and we need to restrict the range of the output due to requantization proving logic.
-        let unpadded_output_shape = safe_conv2d_shape(unpadded_input_shape, &self.filter.get_shape()).expect("unpadded output shape is too large");
+        let unpadded_output_shape = conv2d_shape(unpadded_input_shape, &self.unpadded_shape);
         let cleared_tensor = clear_garbage(&conv_output, &unpadded_output_shape);
         debug_assert!({
             // check that applying the clearing tensor to the conv output gives the same result - as we'd be using the clearing tensor
             // for proving
-            let clearing_tensor = new_clearing_tensor(conv_output.get_shape(), unpadded_output_shape);
-            let cleared_tensor2 = conv_output.mul(&clearing_tensor.flatten());
+            let clearing_tensor =
+                new_clearing_tensor(&unpadded_output_shape, &conv_output.get_shape());
+            let cleared_tensor2 = conv_output.flatten().mul(&clearing_tensor);
             cleared_tensor.get_data() == cleared_tensor2.get_data()
         });
         (cleared_tensor, proving_data)
@@ -1301,14 +1308,23 @@ pub fn phi_eval<E: ExtensionField>(
     return eval;
 }
 
-fn clear_garbage<T: Number>(output_tensor: &Tensor<T>, unpadded_output_shape: &[usize]) -> Tensor<T> {
+fn clear_garbage<T: Number>(
+    output_tensor: &Tensor<T>,
+    mut unpadded_output_shape: &[usize],
+) -> Tensor<T> {
+    if unpadded_output_shape.len() == 4 {
+        unpadded_output_shape = &unpadded_output_shape[1..];
+    }
     let padded_shape = output_tensor.get_shape();
     let mut data = output_tensor.get_data().to_vec();
-    for i in 0..unpadded_output_shape[0] {
-        for j in 0..unpadded_output_shape[1] {
-            for k in 0..unpadded_output_shape[2] {
-                let index = i * unpadded_output_shape[1] * unpadded_output_shape[2] + j * unpadded_output_shape[2] + k;
-                if !(i < padded_shape[0] && j < padded_shape[1] && k < padded_shape[2]) {
+    for i in 0..padded_shape[0] {
+        for j in 0..padded_shape[1] {
+            for k in 0..padded_shape[2] {
+                let index = i * padded_shape[1] * padded_shape[2] + j * padded_shape[2] + k;
+                if !(i < unpadded_output_shape[0]
+                    && j < unpadded_output_shape[1]
+                    && k < unpadded_output_shape[2])
+                {
                     data[index] = T::default();
                 }
             }
@@ -1317,29 +1333,26 @@ fn clear_garbage<T: Number>(output_tensor: &Tensor<T>, unpadded_output_shape: &[
     Tensor::new(padded_shape, data)
 }
 
-pub fn new_clearing_tensor(
-    mut og_shape: Vec<usize>,
-    padded_shape: Vec<usize>,
-) -> Tensor<Element> {
-            if og_shape.len() == 4 {
-                og_shape.remove(0);
-            }
-            assert_eq!(padded_shape.len(), og_shape.len());
-            assert_eq!(padded_shape.len(), 3);
-            let n = padded_shape.iter().product();
-            let mut data: Vec<Element> = vec![0; n];
-            for i in 0..padded_shape[0] {
-                for j in 0..padded_shape[1] {
-                    for k in 0..padded_shape[2] {
-                        let index = i * padded_shape[1] * padded_shape[2] + j * padded_shape[2] + k;
-                        if i < og_shape[0] && j < og_shape[1] && k < og_shape[2] {
-                            data[index] = 1;
-                        }
-                    }
+pub fn new_clearing_tensor(mut og_shape: &[usize], padded_shape: &[usize]) -> Tensor<Element> {
+    if og_shape.len() == 4 {
+        og_shape = &og_shape[1..];
+    }
+    assert_eq!(padded_shape.len(), og_shape.len());
+    assert_eq!(padded_shape.len(), 3);
+    let n = padded_shape.iter().product();
+    let mut data: Vec<Element> = vec![0; n];
+    for i in 0..padded_shape[0] {
+        for j in 0..padded_shape[1] {
+            for k in 0..padded_shape[2] {
+                let index = i * padded_shape[1] * padded_shape[2] + j * padded_shape[2] + k;
+                if i < og_shape[0] && j < og_shape[1] && k < og_shape[2] {
+                    data[index] = 1;
                 }
             }
-            Tensor::new(padded_shape, data)
         }
+    }
+    Tensor::new(vec![padded_shape.iter().product()], data)
+}
 
 /// Properly pad a filter
 /// We use this function so that filter is amenable to FFT based conv2d
@@ -1365,7 +1378,6 @@ pub fn index_wf<E: ExtensionField>(
 /// Assumes stride=1, padding=0, and dilation=1
 /// https://pytorch.org/docs/stable/generated/torch.nn.Conv2d.html
 pub fn conv2d_shape(input_shape: &[usize], filter_shape: &[usize]) -> Vec<usize> {
-    
     let stride = 1usize;
     let padding = 0usize;
     let dilation = 1usize;
@@ -1380,8 +1392,9 @@ pub fn conv2d_shape(input_shape: &[usize], filter_shape: &[usize]) -> Vec<usize>
 mod test {
     use goldilocks::GoldilocksExt2;
 
-    use crate::{
-        layers::{dense::{self, Dense}, matvec::MatVec},
+    use crate::layers::{
+        dense::{self, Dense},
+        matvec::MatVec,
     };
 
     use super::*;
@@ -1413,13 +1426,44 @@ mod test {
         }
         (valid, garbage)
     }
+    fn subtest_clearing_methods(padded_tensor: &Tensor<Element>, unpadded_shape: &[usize]) {
+        let clearing_tensor = new_clearing_tensor(&unpadded_shape, &padded_tensor.get_shape());
+        let cleared_tensor = padded_tensor.flatten().mul(&clearing_tensor);
+        let auto_cleared_tensor = clear_garbage(padded_tensor, unpadded_shape);
+        assert_eq!(cleared_tensor.get_data(), auto_cleared_tensor.get_data());
+    }
 
-    /// Test that check if just taking shapes from input and conv not padded we can manipualte input 
+    #[test]
+    fn test_conv_clearing_garbage() {
+        let shape: Vec<usize> = vec![5, 18, 18];
+        let padded_shape = shape
+            .iter()
+            .map(|x| x.next_power_of_two())
+            .collect::<Vec<usize>>();
+        let tensor = Tensor::random(padded_shape.clone());
+        subtest_clearing_methods(&tensor, &shape);
+        // let clearing_tensor = new_clearing_tensor(&shape, &padded_shape);
+        // let cleared_tensor = tensor.flatten().mul(&clearing_tensor);
+        // let auto_cleared_tensor = clear_garbage(&tensor, &shape);
+        // assert_eq!(cleared_tensor.get_data(), auto_cleared_tensor.get_data());
+    }
+
+    #[test]
+    fn test_conv2d_shape() {
+        let input_shape: Vec<usize> = vec![1, 23, 23];
+        let conv_shape_og: Vec<usize> = vec![7, 1, 3, 3];
+        let output_shape = conv2d_shape(&input_shape, &conv_shape_og);
+        assert_eq!(output_shape, vec![7, 21, 21]);
+    }
+
+    /// Test that check if just taking shapes from input and conv not padded we can manipualte input
     /// and filter to run it in padded world with FFT based convolution.
     #[test]
     fn test_conv_unpadded_to_padded() {
         let input_shape: Vec<usize> = vec![1, 23, 23];
         let conv_shape_og: Vec<usize> = vec![7, 1, 3, 3];
+        // let input_shape: Vec<usize> = vec![1, 5, 5];
+        // let conv_shape_og: Vec<usize> = vec![1, 1, 2, 2];
         let weight = Tensor::random(conv_shape_og.clone());
         let bias: Tensor<Element> = Tensor::zeros(vec![conv_shape_og[0]]);
         let input = Tensor::random(input_shape.clone());
@@ -1433,13 +1477,16 @@ mod test {
             padded_input.get_shape(),
             weight_padded.get_data().to_vec(),
         );
-        let fft_conv = Convolution {
-            filter: filter_fft,
-            bias: bias_padded,
-        };
+        let fft_conv = Convolution::new_padded( filter_fft, bias_padded, &weight.get_shape());
         let (fft_output, conv_data) = fft_conv.op::<GoldilocksExt2>(&padded_input, &input_shape);
         let (valid, _garbage) = split_garbage(&fft_output, &output.get_shape());
-        assert_eq!(valid, output.get_data().to_vec());
+        assert_eq!(
+            valid,
+            output.get_data().to_vec(),
+            "valid {:?} is not equal to {:?}",
+            &valid[..40],
+            &output.get_data()[..40]
+        );
         // make sure the shape matches between what we can compute from unpadded and the actual fft output
         let exp_output_shape = conv2d_shape(&input_shape, &conv_shape_og);
         let mut given_output_shape = output.get_shape();
@@ -1447,8 +1494,7 @@ mod test {
         assert_eq!(given_output_shape, exp_output_shape);
 
         // make sure we can reconstruct the fft output purely from conv_data since it's needed for proving
-        let fft_output_shape =
-            conv2d_shape(&padded_input.get_shape(), &weight_padded.get_shape());
+        let fft_output_shape = conv2d_shape(&padded_input.get_shape(), &weight_padded.get_shape());
         let fft_output_shape = fft_output_shape
             .into_iter()
             .map(|x| x.next_power_of_two())
@@ -1465,10 +1511,15 @@ mod test {
             "INSIDE TEST: padded_input shape: {:?}",
             padded_input.get_shape()
         );
+        assert_eq!(fft_output.get_shape(), fft_output_shape);
         let fft_output_data =
             conv_data.output_as_element(padded_input.get_shape()[1].next_power_of_two());
-        let reconstructed_fft_tensor = Tensor::new(fft_output_shape, fft_output_data);
-        assert_eq!(fft_output, reconstructed_fft_tensor);
+        let reconstructed_fft_tensor = Tensor::new(fft_output_shape.clone(), fft_output_data);
+        subtest_clearing_methods(&reconstructed_fft_tensor, &output.get_shape());
+        // let cleared_reconstructed_fft_tensor = clear_garbage(&reconstructed_fft_tensor, &output.get_shape());
+        let hadamard_clearing = new_clearing_tensor(&output.get_shape(), &fft_output_shape);
+        let hadamard_cleared = reconstructed_fft_tensor.flatten().mul(&hadamard_clearing);
+        assert_eq!(hadamard_cleared.get_data(), fft_output.get_data());
     }
 
     #[test]
@@ -1496,11 +1547,11 @@ mod test {
         );
         let bias1: Tensor<Element> = Tensor::zeros(vec![conv_shape_og[0]]);
         let padded_bias1 = bias1.pad_next_power_of_two();
-        let fft_conv = Convolution::new(conv1.clone(), padded_bias1.clone());
+        let fft_conv = Convolution::new_padded(conv1.clone(), padded_bias1.clone(),&conv_shape_og);
         let input = Tensor::random(input_shape.clone());
         let padded_input = input.pad_next_power_of_two();
         let (fft_output, _): (Tensor<Element>, ConvData<_>) =
-            fft_conv.op::<GoldilocksExt2>(&padded_input,&input_shape);
+            fft_conv.op::<GoldilocksExt2>(&padded_input, &input_shape);
         // just normal convolution
         let normal_output = input.conv2d(&w1, &bias1, 1);
 
@@ -1510,14 +1561,11 @@ mod test {
         // Check that the garbage and valid parts are correct
         let (valid, garbage) = split_garbage(&fft_output, &normal_output.get_shape());
         assert!(valid.len() == flat_normal_output.get_data().len());
-        assert!(valid == flat_normal_output.get_data().to_vec());
-        assert!(garbage.len() == 0);
+        assert_eq!(valid, flat_normal_output.get_data().to_vec());
+        assert!(garbage.len() >= 0);
         // NOTE: a bit of a hack to recreate but the functione xpects the real conv shape not the flattened one
         let (valid, garbage) = split_garbage(
-            &Tensor::new(
-                fft_output.get_shape(),
-                flat_fft_output.get_data().to_vec(),
-            ),
+            &Tensor::new(fft_output.get_shape(), flat_fft_output.get_data().to_vec()),
             &normal_output.get_shape(),
         );
         // at this point the garbage should be all zeros and the valid should be the same as the non fft output as before

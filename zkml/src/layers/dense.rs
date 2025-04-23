@@ -30,7 +30,7 @@ use super::common::Op;
 pub(crate) const BIAS_POLY_ID: PolyID = 100_000;
 
 /// Description of the layer
-#[derive(Clone, Debug,Serialize,Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Dense<T> {
     pub matrix: Tensor<T>,
     pub bias: Tensor<T>,
@@ -88,13 +88,18 @@ impl<T: Number> Dense<T> {
     }
 
     pub fn output_shape(&self, _input_shape: &[usize]) -> Vec<usize> {
-        vec![1,self.matrix.nrows_2d()]
+        vec![1, self.matrix.nrows_2d()]
     }
     pub fn describe(&self) -> String {
-        format!("Dense: ({}x{}) + bias ({})", 
-                self.matrix.nrows_2d(), 
-                self.matrix.ncols_2d(),
-                !self.bias.get_data().iter().all(|x| x.compare(&T::default()) == Ordering::Equal)
+        format!(
+            "Dense: ({}x{}) + bias ({})",
+            self.matrix.nrows_2d(),
+            self.matrix.ncols_2d(),
+            !self
+                .bias
+                .get_data()
+                .iter()
+                .all(|x| x.compare(&T::default()) == Ordering::Equal)
         )
     }
 }
@@ -382,7 +387,6 @@ impl<E: ExtensionField> DenseProof<E> {
     }
 }
 
-    
 #[cfg(test)]
 mod test {
     use super::*;

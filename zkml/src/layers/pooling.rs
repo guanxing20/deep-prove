@@ -528,7 +528,6 @@ impl Maxpool2D {
     }
 }
 
-
 /// Assumes kernel=2, stride=2, padding=0, and dilation=1
 /// https://pytorch.org/docs/stable/generated/torch.nn.MaxPool2d.html
 pub fn maxpool2d_shape(input_shape: &[usize]) -> Vec<usize> {

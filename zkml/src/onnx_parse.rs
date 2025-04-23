@@ -1,7 +1,15 @@
 use crate::{
+    Element,
     layers::{
-        activation::{Activation, Relu}, convolution::{conv2d_shape, Convolution}, dense::Dense, pooling::{maxpool2d_shape, Maxpool2D, Pooling, MAXPOOL2D_KERNEL_SIZE}, reshape::Reshape, Layer
-    }, padding::pad_model, quantization::{AbsoluteMax, ModelMetadata, ScalingStrategy}, Element
+        Layer,
+        activation::{Activation, Relu},
+        convolution::{Convolution, conv2d_shape},
+        dense::Dense,
+        pooling::{MAXPOOL2D_KERNEL_SIZE, Maxpool2D, Pooling, maxpool2d_shape},
+        reshape::Reshape,
+    },
+    padding::pad_model,
+    quantization::{AbsoluteMax, ModelMetadata, ScalingStrategy},
 };
 use anyhow::{Context, Error, Result, bail, ensure};
 use itertools::Itertools;
@@ -235,7 +243,6 @@ pub fn check_cnn_input(input_shape: &[usize]) -> Result<()> {
     Ok(())
 }
 
-
 pub fn safe_maxpool2d_shape(input_shape: &[usize]) -> Result<Vec<usize>> {
     check_cnn_input(input_shape).context("maxpool2d: invalid input shape")?;
     Ok(maxpool2d_shape(input_shape))
@@ -416,7 +423,7 @@ pub fn load_float_model(filepath: &str) -> Result<Model<f32>> {
 
                 // this is the non fft'd convolution layer
                 // let layer = Layer::SchoolBookConvolution(Convolution { filter: weights, bias: bias });
-                let layer = Layer::Convolution(Convolution::new_raw(weights, bias));
+                let layer = Layer::Convolution(Convolution::new(weights, bias));
                 // let layer = Layer::SchoolBookConvolution(Convolution::new(weight, _bias));
 
                 layers.push(layer);

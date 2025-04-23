@@ -1,26 +1,28 @@
 use anyhow::ensure;
-use multilinear_extensions::mle::MultilinearExtension;
-use multilinear_extensions::mle::IntoMLE;
 use ff_ext::ExtensionField;
 use itertools::Itertools;
-use multilinear_extensions::virtual_poly::{VPAuxInfo, VirtualPolynomial};
-use serde::de::DeserializeOwned;
-use serde::Serialize;
-use sumcheck::structs::IOPProverState;
-use sumcheck::structs::{IOPProof, IOPVerifierState};
+use multilinear_extensions::{
+    mle::{IntoMLE, MultilinearExtension},
+    virtual_poly::{VPAuxInfo, VirtualPolynomial},
+};
+use serde::{Serialize, de::DeserializeOwned};
+use sumcheck::structs::{IOPProof, IOPProverState, IOPVerifierState};
 use transcript::Transcript;
 
-use crate::quantization::Fieldizer;
-use crate::quantization::TensorFielder;
-use crate::{iop::{context::ContextAux, verifier::Verifier}, tensor::Number, Claim, Element, Prover, Tensor};
+use crate::{
+    Claim, Element, Prover, Tensor,
+    iop::{context::ContextAux, verifier::Verifier},
+    quantization::{Fieldizer, TensorFielder},
+    tensor::Number,
+};
 
-/// A matrix vector multiplication proving logic where the matrix is NOT committed to, i.e. 
-/// the verifier will have to evaluate himself the matrix at a random point. 
+/// A matrix vector multiplication proving logic where the matrix is NOT committed to, i.e.
+/// the verifier will have to evaluate himself the matrix at a random point.
 /// NOTE: this can be changed down the line to provide flexibility but right now we don't need it.
 pub struct MatVec<T> {
     matrix: Tensor<T>,
 }
-pub struct MatVecProof<E: ExtensionField>{
+pub struct MatVecProof<E: ExtensionField> {
     sumcheck: IOPProof<E>,
     evaluations: Vec<E>,
 }
@@ -53,35 +55,57 @@ impl<T: Number> MatVec<T> {
 }
 
 impl MatVec<Element> {
-    pub fn prove<E,T>(
+    pub fn prove<E, T>(
         &self,
         transcript: &mut T,
         last_claim: &Claim<E>,
         input: &Tensor<E>,
-    ) -> anyhow::Result<(MatVecProof<E>, Claim<E>)> 
+    ) -> anyhow::Result<(MatVecProof<E>, Claim<E>)>
     where
-    E: ExtensionField + Serialize + DeserializeOwned + Number,
-    E::BaseField: Serialize + DeserializeOwned,
-    T: Transcript<E> {
+        E: ExtensionField + Serialize + DeserializeOwned + Number,
+        E::BaseField: Serialize + DeserializeOwned,
+        T: Transcript<E>,
+    {
         let (nrows, ncols) = (self.matrix.nrows_2d(), self.matrix.ncols_2d());
-        assert_eq!(nrows.ilog2() as usize, last_claim.point.len(),"invalid last_claim dimension: mat {}x{} vs {}", nrows, ncols, last_claim.point.len());
-        assert_eq!(ncols, input.get_data().len(), "invalid input dimension: mat {}x{} vs {}", nrows, ncols, input.get_data().len());
+        assert_eq!(
+            nrows.ilog2() as usize,
+            last_claim.point.len(),
+            "invalid last_claim dimension: mat {}x{} vs {}",
+            nrows,
+            ncols,
+            last_claim.point.len()
+        );
+        assert_eq!(
+            ncols,
+            input.get_data().len(),
+            "invalid input dimension: mat {}x{} vs {}",
+            nrows,
+            ncols,
+            input.get_data().len()
+        );
         let mut mat_mle = self.matrix.to_mle_2d();
         mat_mle.fix_high_variables_in_place(&last_claim.point);
         let input_mle = input.get_data().to_vec().into_mle();
         assert_eq!(mat_mle.num_vars(), input_mle.num_vars());
         let num_vars = input_mle.num_vars();
         let mut vp = VirtualPolynomial::<E>::new(num_vars);
-        println!("num_vars: {}, vp.aux_info: {:?}", num_vars,vp.aux_info);
+        println!("num_vars: {}, vp.aux_info: {:?}", num_vars, vp.aux_info);
         vp.add_mle_list(vec![mat_mle.into(), input_mle.into()], E::ONE);
-        //let tmp_transcript = prover.transcript.clone();
+        // let tmp_transcript = prover.transcript.clone();
         #[allow(deprecated)]
-        let (proof,state) = IOPProverState::<E>::prove_parallel(vp, transcript);
-        debug_assert!( {
-            let output = self.matrix.clone().to_fields().matvec(&input);
-            let claimed_sum = output.get_data().to_vec().into_mle().evaluate(&last_claim.point);
-            proof.extract_sum() == claimed_sum
-        },"invalid sumcheck proof for matvec?");
+        let (proof, state) = IOPProverState::<E>::prove_parallel(vp, transcript);
+        debug_assert!(
+            {
+                let output = self.matrix.clone().to_fields().matvec(&input);
+                let claimed_sum = output
+                    .get_data()
+                    .to_vec()
+                    .into_mle()
+                    .evaluate(&last_claim.point);
+                proof.extract_sum() == claimed_sum
+            },
+            "invalid sumcheck proof for matvec?"
+        );
         let claim = Claim {
             point: proof.point.clone(),
             // [mat, vec] -> we want the vector evaluation for the next layer
@@ -91,9 +115,8 @@ impl MatVec<Element> {
             sumcheck: proof,
             evaluations: state.get_mle_final_evaluations(),
         };
-        Ok((proof,claim))
+        Ok((proof, claim))
     }
-
 
     pub fn evaluate_matrix_at<E: ExtensionField>(&self, point: &[E]) -> E {
         self.matrix.to_mle_2d().evaluate(point)
@@ -101,28 +124,35 @@ impl MatVec<Element> {
 }
 
 pub fn verify<E: ExtensionField, T: Transcript<E>>(
-        transcript: &mut T,
-        last_claim: &Claim<E>,
-        proof: &MatVecProof<E>,
-        aux_info: &VPAuxInfo<E>,
-        // function that returns the evaluation of the matrix at a given point. the verifier is able to succinctly 
-        // evaluate the matrix at a given point or just naively.
-        eval_matrix_at: impl FnOnce(&[E]) -> E,
-    ) -> anyhow::Result<Claim<E>> 
-    where
+    transcript: &mut T,
+    last_claim: &Claim<E>,
+    proof: &MatVecProof<E>,
+    aux_info: &VPAuxInfo<E>,
+    // function that returns the evaluation of the matrix at a given point. the verifier is able to succinctly
+    // evaluate the matrix at a given point or just naively.
+    eval_matrix_at: impl FnOnce(&[E]) -> E,
+) -> anyhow::Result<Claim<E>>
+where
     E: ExtensionField + Serialize + DeserializeOwned,
     E::BaseField: Serialize + DeserializeOwned,
-    T: Transcript<E> {
-        println!("VERIFY aux_info: {:?}", aux_info);
-        let subclaim = IOPVerifierState::<E>::verify(last_claim.eval, &proof.sumcheck, aux_info, transcript);
-        let matrix_point = subclaim.point_flat().iter().chain(last_claim.point.iter()).cloned().collect_vec();
-        let matrix_eval = eval_matrix_at(&matrix_point);
-        ensure!(proof.matrix_eval() == matrix_eval);
-        Ok(Claim {
-            point: subclaim.point_flat(),
-            eval: proof.vec_eval(),
-        })
-    }
+    T: Transcript<E>,
+{
+    println!("VERIFY aux_info: {:?}", aux_info);
+    let subclaim =
+        IOPVerifierState::<E>::verify(last_claim.eval, &proof.sumcheck, aux_info, transcript);
+    let matrix_point = subclaim
+        .point_flat()
+        .iter()
+        .chain(last_claim.point.iter())
+        .cloned()
+        .collect_vec();
+    let matrix_eval = eval_matrix_at(&matrix_point);
+    ensure!(proof.matrix_eval() == matrix_eval);
+    Ok(Claim {
+        point: subclaim.point_flat(),
+        eval: proof.vec_eval(),
+    })
+}
 
 #[cfg(test)]
 mod test {
@@ -144,11 +174,23 @@ mod test {
         let output = matvec.op(&input);
         let mut transcript = default_transcript::<F>();
         let output_point = random_field_vector(output.get_data().len().ilog2() as usize);
-        let output_claim = Claim::new(output_point.clone(),output.to_mle_flat().evaluate(&output_point));
-        let (proof, claim) = matvec.prove(&mut transcript, &output_claim, &input.clone().to_fields()).expect("proving should work");
+        let output_claim = Claim::new(
+            output_point.clone(),
+            output.to_mle_flat().evaluate(&output_point),
+        );
+        let (proof, claim) = matvec
+            .prove(&mut transcript, &output_claim, &input.clone().to_fields())
+            .expect("proving should work");
         let input_eval = input.to_mle_flat().evaluate(&claim.point);
         assert_eq!(input_eval, claim.eval);
-        let input_claim = verify(&mut default_transcript(),&output_claim,&proof, &matvec.aux_info(),|point| matvec.evaluate_matrix_at(point)).expect("verification failed");
-        assert_eq!(claim,input_claim);
+        let input_claim = verify(
+            &mut default_transcript(),
+            &output_claim,
+            &proof,
+            &matvec.aux_info(),
+            |point| matvec.evaluate_matrix_at(point),
+        )
+        .expect("verification failed");
+        assert_eq!(claim, input_claim);
     }
 }

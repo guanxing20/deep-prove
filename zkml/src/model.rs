@@ -140,7 +140,7 @@ impl Model<Element> {
         &'a self,
         input: Tensor<Element>,
     ) -> Result<InferenceTrace<'a, Element, E>> {
-        let mut trace = InferenceTrace::<Element, E>::new(input,self.input_not_padded.clone());
+        let mut trace = InferenceTrace::<Element, E>::new(input, self.input_not_padded.clone());
         let mut unpadded_input_shape = self.input_not_padded.clone();
         for (id, layer) in self.layers() {
             let input = trace.last_input();
@@ -224,7 +224,11 @@ impl<'a, F: ExtensionField> InferenceTrace<'a, Element, F> {
                 }
             })
             .collect();
-        InferenceTrace { steps, input, unpadded_shape: self.unpadded_shape.clone() }
+        InferenceTrace {
+            steps,
+            input,
+            unpadded_shape: self.unpadded_shape.clone(),
+        }
     }
     pub fn to_field(self) -> InferenceTrace<'a, F, F> {
         let input = self.input.to_fields();

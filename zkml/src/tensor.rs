@@ -303,7 +303,7 @@ where
 pub struct Tensor<T> {
     pub data: Vec<T>,
     pub shape: Vec<usize>,
-    real_shape: Vec<usize>,
+    og_shape: Vec<usize>,
 }
 
 impl Tensor<Element> {
@@ -349,7 +349,7 @@ impl Tensor<Element> {
         Self {
             data,                                      /* Note that field elements are back into Element */
             shape: vec![shape[0], shape[1], n_w, n_w], // nw is the padded version of the input
-            real_shape,
+            og_shape: real_shape,
         }
     }
     /// Recall that weights are not plain text to the "snark". Rather it is FFT(weights).
@@ -598,7 +598,7 @@ impl<T> Tensor<T> {
         Self {
             data,
             shape,
-            real_shape: vec![0],
+            og_shape: vec![0],
         }
     }
 
@@ -659,7 +659,7 @@ impl<T> Tensor<T> {
     /// TODO: Remove it
     pub fn get_input_shape(&self) -> Vec<usize> {
         assert!(self.shape.len() > 0, "Empty tensor");
-        self.real_shape.clone()
+        self.og_shape.clone()
     }
     ///
     pub fn get_data(&self) -> &[T] {
@@ -678,8 +678,11 @@ impl<T> Tensor<T> {
     pub fn nw(&self) -> usize {
         self.shape[2]
     }
-    pub fn real_nw(&self) -> usize{
-        self.real_shape[2]
+    pub fn real_nw(&self) -> usize {
+        self.og_shape[2]
+    }
+    pub fn real_shape(&self) -> Vec<usize> {
+        self.og_shape.clone()
     }
     // Returns the size of an individual filter
     pub fn filter_size(&self) -> usize {
@@ -698,7 +701,7 @@ where
         Self {
             data: new_data,
             shape: new_shape,
-            real_shape: vec![0],
+            og_shape: vec![0],
         }
     }
     pub fn matix_from_coeffs(data: Vec<Vec<T>>) -> anyhow::Result<Self> {
@@ -714,7 +717,7 @@ where
         Ok(Self {
             data,
             shape,
-            real_shape: vec![0],
+            og_shape: vec![0],
         })
     }
     /// Returns the boolean iterator indicating the given row in the right endianness to be
@@ -768,7 +771,7 @@ where
             // data: vec![T::zero(); size],
             data: vec![Default::default(); size],
             shape,
-            real_shape: vec![0],
+            og_shape: vec![0],
         }
     }
 
@@ -782,7 +785,7 @@ where
 
         Tensor {
             shape: self.shape.clone(),
-            real_shape: vec![0],
+            og_shape: vec![0],
             data,
         }
     }
@@ -796,7 +799,7 @@ where
 
         Tensor {
             shape: self.shape.clone(),
-            real_shape: vec![0],
+            og_shape: vec![0],
             data,
         }
     }
@@ -804,7 +807,9 @@ where
     pub fn mul(&self, other: &Tensor<T>) -> Tensor<T> {
         assert!(
             self.shape == other.shape,
-            "Shape mismatch for multiplication."
+            "Shape mismatch for multiplication: {:?} != {:?}",
+            self.shape,
+            other.shape
         );
         let data = self
             .data
@@ -815,7 +820,7 @@ where
 
         Tensor {
             shape: self.shape.clone(),
-            real_shape: vec![0],
+            og_shape: vec![0],
             data,
         }
     }
@@ -823,7 +828,7 @@ where
     pub fn scalar_mul(&self, scalar: &T) -> Tensor<T> {
         Tensor {
             shape: self.shape.clone(),
-            real_shape: vec![0],
+            og_shape: vec![0],
             data: self.data.par_iter().map(|x| *x * *scalar).collect(),
         }
     }
@@ -1244,7 +1249,7 @@ where
         Tensor {
             data: output,
             shape: new_shape,
-            real_shape: vec![0],
+            og_shape: vec![0],
         }
     }
 
@@ -1293,7 +1298,7 @@ where
         let padded_maxpool_tensor = Tensor {
             data: padded_maxpool_data,
             shape: self.get_shape(),
-            real_shape: vec![0],
+            og_shape: vec![0],
         };
 
         (maxpool_result, padded_maxpool_tensor)
@@ -1360,7 +1365,7 @@ where
         Tensor {
             data: output,
             shape: out_shape,
-            real_shape: vec![0],
+            og_shape: vec![0],
         }
     }
 }
@@ -1424,7 +1429,12 @@ where
             conv_shape_og.len(),
             conv_shape_pad.len()
         );
-        assert!(mat_shp_pad.len() == 2 && self.shape.len() == 2, "Expects matrix to be 2d: mat_shp_pad: {:?}, self.shape: {:?}", mat_shp_pad.len(), self.shape.len());
+        assert!(
+            mat_shp_pad.len() == 2 && self.shape.len() == 2,
+            "Expects matrix to be 2d: mat_shp_pad: {:?}, self.shape: {:?}",
+            mat_shp_pad.len(),
+            self.shape.len()
+        );
         let mat_shp_og = self.get_shape();
 
         let new_data: Vec<T> = (0..mat_shp_pad[0] * mat_shp_pad[1])
@@ -1535,11 +1545,10 @@ impl<T: Number> Tensor<T> {
         Self {
             data,
             shape,
-            real_shape: vec![0],
+            og_shape: vec![0],
         }
     }
 }
-
 
 #[cfg(test)]
 mod test {

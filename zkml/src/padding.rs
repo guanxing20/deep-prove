@@ -1,7 +1,15 @@
 use anyhow::{Context, Result, ensure};
 
 use crate::{
-    layers::{convolution::{conv2d_shape, Convolution}, dense::Dense, reshape::Reshape, Layer}, model::Model, onnx_parse::{check_filter, safe_conv2d_shape, safe_maxpool2d_shape}, Element
+    Element,
+    layers::{
+        Layer,
+        convolution::{Convolution, conv2d_shape},
+        dense::Dense,
+        reshape::Reshape,
+    },
+    model::Model,
+    onnx_parse::{check_filter, safe_conv2d_shape, safe_maxpool2d_shape},
 };
 type GarbagePad = Option<(Vec<usize>, Vec<usize>)>;
 type Shape = Vec<usize>;

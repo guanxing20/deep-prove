@@ -3,10 +3,10 @@ pub mod common;
 pub mod convolution;
 pub mod dense;
 pub mod hadamard;
+pub mod matvec;
 pub mod pooling;
 pub mod requant;
 pub mod reshape;
-pub mod matvec;
 
 use anyhow::Result;
 use ff_ext::ExtensionField;
@@ -142,7 +142,9 @@ impl<T: Number> Layer<T> {
 
             Layer::Activation(Activation::Relu(_)) => None,
             Layer::Requant(info) => None,
-            Layer::Pooling(Pooling::Maxpool2D(info)) => Some(vec![info.kernel_size, info.kernel_size]),
+            Layer::Pooling(Pooling::Maxpool2D(info)) => {
+                Some(vec![info.kernel_size, info.kernel_size])
+            }
             Layer::Reshape(ref _reshape) => None,
         }
     }
@@ -257,11 +259,17 @@ impl Layer<Element> {
     /// Run the operation associated with that layer with the given input
     // TODO: move to tensor library : right now it works because we assume there is only Dense
     // layer which is matmul
-    pub fn op<F: ExtensionField>(&self, input: &Tensor<Element>, unpadded_shape: &[usize]) -> Result<LayerOutput<F>> {
+    pub fn op<F: ExtensionField>(
+        &self,
+        input: &Tensor<Element>,
+        unpadded_shape: &[usize],
+    ) -> Result<LayerOutput<F>> {
         let output = match &self {
             Layer::Dense(ref dense) => Ok(LayerOutput::NormalOut(dense.op(input))),
             Layer::Activation(activation) => Ok(LayerOutput::NormalOut(activation.op(input))),
-            Layer::Convolution(ref filter) => Ok(LayerOutput::ConvOut(filter.op(input, unpadded_shape))),
+            Layer::Convolution(ref filter) => {
+                Ok(LayerOutput::ConvOut(filter.op(input, unpadded_shape)))
+            }
             // Layer::Convolution(ref filter) => LayerOutput::NormalOut(input.conv2d(&filter.filter,&filter.bias,1)),
             // Traditional convolution is used for debug purposes. That is because the actual convolution
             // we use relies on the FFT algorithm. This convolution does not have a snark implementation.
