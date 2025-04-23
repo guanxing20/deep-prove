@@ -14,6 +14,12 @@ use crate::{
 type GarbagePad = Option<(Vec<usize>, Vec<usize>)>;
 type Shape = Vec<usize>;
 
+#[derive(Clone, Debug, Copy)]
+pub enum PaddingMode {
+    NoPadding,
+    Padding,
+}
+
 #[derive(Clone, Debug)]
 struct ShapeInfo {
     input_shape_padded: Shape,
@@ -51,6 +57,7 @@ pub fn pad_model(mut model: Model<Element>) -> Result<Model<Element>> {
             }
         })
         .collect::<Result<Vec<_>>>()?;
+    model.padding = PaddingMode::Padding;
     //.into_iter()
     //.filter(|l| l.is_provable())
     //.collect::<Vec<_>>();
@@ -96,13 +103,12 @@ fn pad_conv(mut c: Convolution<Element>, si: &mut ShapeInfo) -> Result<Convoluti
     // weight.update_input_shape(&input_shape_padded);
 
     let dims = c.filter.get_shape();
-    // NOTE: This is a bit of a hack but given we compute the new padded filter shape at the same time we do the fft
-    // we just do both here.
-    c.filter = crate::tensor::Tensor::new_conv(
+    let new_filter = crate::tensor::Tensor::new_conv(
         c.filter.get_shape(),
         si.input_shape_padded.clone(),
         c.filter.get_data().to_vec(),
     );
+    let new_conv = Convolution::new_padded(new_filter, c.bias, &weight_shape);
 
     // let layer = Layer::SchoolBookConvolution(Convolution::new(weight, _bias));
 
@@ -111,7 +117,7 @@ fn pad_conv(mut c: Convolution<Element>, si: &mut ShapeInfo) -> Result<Convoluti
         .iter()
         .map(|i| i.next_power_of_two())
         .collect::<Vec<_>>();
-    Ok(c)
+    Ok(new_conv)
 }
 
 fn pad_dense(mut d: Dense<Element>, si: &mut ShapeInfo) -> Result<Dense<Element>> {

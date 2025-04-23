@@ -27,6 +27,7 @@ use crate::{
         pooling::Pooling,
         requant::{Requant, RequantProof},
     },
+    padding::PaddingMode,
     quantization::ScalingFactor,
     tensor::{ConvData, Number, Tensor},
 };
@@ -120,11 +121,13 @@ where
 }
 
 impl<T: Number> Layer<T> {
-    pub fn output_shape(&self, input_shape: &[usize]) -> Vec<usize> {
+    pub fn output_shape(&self, input_shape: &[usize], padding_mode: PaddingMode) -> Vec<usize> {
         match self {
             Layer::Dense(ref dense) => dense.output_shape(input_shape),
-            Layer::Convolution(ref filter) => filter.output_shape(input_shape),
-            Layer::SchoolBookConvolution(ref filter) => filter.output_shape(input_shape),
+            Layer::Convolution(ref filter) => filter.output_shape(input_shape, padding_mode),
+            Layer::SchoolBookConvolution(ref filter) => {
+                filter.output_shape(input_shape, padding_mode)
+            }
             Layer::Activation(Activation::Relu(_)) => input_shape.to_vec(),
             Layer::Requant(info) => input_shape.to_vec(),
             Layer::Pooling(Pooling::Maxpool2D(info)) => info.output_shape(input_shape),

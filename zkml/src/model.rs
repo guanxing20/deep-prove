@@ -1,6 +1,7 @@
 use crate::{
     Element,
     layers::{Layer, LayerOutput},
+    padding::PaddingMode,
     quantization::{ModelMetadata, TensorFielder},
     tensor::{ConvData, Number, Tensor},
 };
@@ -17,6 +18,10 @@ pub type StepIdx = usize;
 /// produces each token one by one.
 #[derive(Clone, Debug)]
 pub struct Model<T> {
+    /// Whether the model is already padded or not. Normally, if it's a Model<Element>, it's padded as we only
+    /// support padded inference for the moment.
+    /// TODO: clarify this with f32 models
+    pub padding: PaddingMode,
     pub input_not_padded: Vec<usize>,
     pub(crate) padded_in_shape: Vec<usize>,
     pub(crate) layers: Vec<Layer<T>>,
@@ -32,6 +37,7 @@ impl<T: Number> Model<T> {
             input_not_padded: input_not_padded_shape,
             padded_in_shape: input_padded_shape,
             layers,
+            padding: PaddingMode::Padding,
         }
     }
     pub fn new() -> Self {
@@ -43,6 +49,7 @@ impl<T: Number> Model<T> {
             input_not_padded: Vec::new(),
             padded_in_shape: Vec::new(),
             layers: Default::default(),
+            padding: PaddingMode::Padding,
         }
     }
 
@@ -140,12 +147,30 @@ impl Model<Element> {
         &'a self,
         input: Tensor<Element>,
     ) -> Result<InferenceTrace<'a, Element, E>> {
-        let mut trace = InferenceTrace::<Element, E>::new(input, self.input_not_padded.clone());
-        let mut unpadded_input_shape = self.input_not_padded.clone();
+        #[cfg(test)]
+        let unpadded_input_shape = {
+            if self.input_not_padded.len() == 0 {
+                input.get_shape()
+            } else {
+                self.input_not_padded.clone()
+            }
+        };
+        #[cfg(not(test))]
+        let unpadded_input_shape = self.input_not_padded.clone();
+        let mut trace = InferenceTrace::<Element, E>::new(input, unpadded_input_shape.clone());
+        let mut unpadded_input_shape = unpadded_input_shape;
         for (id, layer) in self.layers() {
+            println!(
+                "MODEL RUN: at layer {} -> INPUT unpadded shape: {:?}",
+                id, unpadded_input_shape
+            );
             let input = trace.last_input();
             let output = layer.op(input, &unpadded_input_shape)?;
-            unpadded_input_shape = layer.output_shape(&unpadded_input_shape);
+            unpadded_input_shape = layer.output_shape(&unpadded_input_shape, self.padding);
+            println!(
+                "MODEL RUN: at layer {} -> OUTPUT unpadded shape: {:?}",
+                id, unpadded_input_shape
+            );
             match output {
                 LayerOutput::NormalOut(output) => {
                     let conv_data = ConvData::default();
@@ -384,13 +409,9 @@ impl Model<f32> {
 
 #[cfg(test)]
 pub(crate) mod test {
-    use crate::layers::{
-        Layer,
-        activation::{Activation, Relu},
-        convolution::Convolution,
-        dense::Dense,
-        pooling::{MAXPOOL2D_KERNEL_SIZE, Maxpool2D, Pooling},
-    };
+    use crate::{layers::{
+        activation::{Activation, Relu}, convolution::{conv2d_shape, padded_conv2d_shape, Convolution}, dense::Dense, pooling::{Maxpool2D, Pooling, MAXPOOL2D_KERNEL_SIZE}, Layer
+    }, padding::PaddingMode};
     use ark_std::rand::{Rng, RngCore, thread_rng};
     use ff_ext::ExtensionField;
     use goldilocks::GoldilocksExt2;
@@ -589,20 +610,41 @@ pub(crate) mod test {
         let trad_conv3: Tensor<i128> = Tensor::new(shape3.clone(), w3.clone());
 
         let mut model = Model::new();
-        model.add_layer(Layer::Convolution(Convolution::new(
+        model.add_layer(Layer::Convolution(Convolution::new_padded(
             conv1.clone(),
             bias1.clone(),
+            &shape1,
         )));
-        model.add_layer(Layer::Convolution(Convolution::new(
+        model.add_layer(Layer::Convolution(Convolution::new_padded(
             conv2.clone(),
             bias2.clone(),
+            &shape2,
         )));
-        model.add_layer(Layer::Convolution(Convolution::new(
+        model.add_layer(Layer::Convolution(Convolution::new_padded(
             conv3.clone(),
             bias3.clone(),
+            &shape3,
         )));
 
         let input = Tensor::new(vec![1, 32, 32], random_vector_quant(1024));
+        /// TEST
+        let test_conv = Convolution::new(conv1.clone(), bias1.clone());
+        let (o1, _) = test_conv.op::<F>(&input.clone(), &input.get_shape());
+        let regular_filter = Tensor::new(shape1.clone(), w1.clone());
+        let regular_o1 = input.conv2d(&regular_filter, &bias1, 1);
+        let o1bis = padded_conv2d_shape(&input.get_shape(), &shape1);
+        let model_o1 = test_conv.output_shape(&input.get_shape(), model.padding);
+        let expected_o1 = test_conv.output_shape(&input.get_shape(), PaddingMode::Padding);
+        println!(
+            "MODEL: regular_o1: {:?} vs o1: {:?} vs o1bis: {:?} vs model_o1 (padding {:?}) {:?} vs expected_o1 {:?}",
+            regular_o1.get_shape(),
+            o1.get_shape(),
+            o1bis,
+            model.padding,
+            model_o1,
+            expected_o1
+        );
+        /// END TEST
         let trace: crate::model::InferenceTrace<'_, _, GoldilocksExt2> =
             model.run::<F>(input.clone()).unwrap();
 
