@@ -315,9 +315,9 @@ impl Tensor<Element> {
             .collect::<Vec<_>>();
         Tensor::new(self.shape.clone(), data)
     }
-    // Create specifically a new convolution. The input shape is needed to compute the
-    // output and properly arrange the weights
-    pub fn new_conv(shape: Vec<usize>, input_shape: Vec<usize>, data: Vec<Element>) -> Self {
+    pub fn into_fft_conv(self, input_shape: Vec<usize>) -> Self {
+        let shape = self.shape;
+        let data = self.data;
         assert!(
             shape.iter().product::<usize>() == data.len(),
             "Shape does not match data length."
@@ -329,28 +329,17 @@ impl Tensor<Element> {
         );
         let real_shape = shape.clone();
         let n_w = (input_shape[1] - shape[2] + 1).next_power_of_two();
-        // let i0 = input_shape[0];
-        // let s2 = shape[2];
-        // let rdata = &data[..];
-        // let w_fft = (0..shape[0])
-        // .into_par_iter()
-        // .flat_map(move |i| {
-        // (0..i0).into_par_iter().flat_map(move |j| {
-        // let range =
-        // (i * i0 * s2 * s2 + j * s2 * s2)..(i * i0 * s2 * s2 + (j + 1) * s2 * s2);
-        // let mut w = index_w(&rdata[range], s2, n_w, 2 * n_w * n_w)
-        // .collect::<Vec<GoldilocksExt2>>();
-        // fft(&mut w, false);
-        // w.into_par_iter().map(|e| e.into_element())
-        // })
-        // })
-        // .collect::<Vec<_>>();
-
         Self {
             data,                                      /* Note that field elements are back into Element */
             shape: vec![shape[0], shape[1], n_w, n_w], // nw is the padded version of the input
             og_shape: real_shape,
         }
+    }
+    // Create specifically a new convolution. The input shape is needed to compute the
+    // output and properly arrange the weights
+    #[deprecated]
+    pub fn new_conv(shape: Vec<usize>, input_shape: Vec<usize>, data: Vec<Element>) -> Self {
+        Tensor::new(shape, data).into_fft_conv(input_shape)
     }
     /// Recall that weights are not plain text to the "snark". Rather it is FFT(weights).
     /// Aka there is no need to compute the FFT(input) "in-circuit".

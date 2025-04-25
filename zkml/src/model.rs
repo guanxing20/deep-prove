@@ -409,9 +409,16 @@ impl Model<f32> {
 
 #[cfg(test)]
 pub(crate) mod test {
-    use crate::{layers::{
-        activation::{Activation, Relu}, convolution::{conv2d_shape, padded_conv2d_shape, Convolution}, dense::Dense, pooling::{Maxpool2D, Pooling, MAXPOOL2D_KERNEL_SIZE}, Layer
-    }, padding::PaddingMode};
+    use crate::{
+        layers::{
+            Layer,
+            activation::{Activation, Relu},
+            convolution::{Convolution, conv2d_shape, padded_conv2d_shape},
+            dense::Dense,
+            pooling::{MAXPOOL2D_KERNEL_SIZE, Maxpool2D, Pooling},
+        },
+        padding::PaddingMode,
+    };
     use ark_std::rand::{Rng, RngCore, thread_rng};
     use ff_ext::ExtensionField;
     use goldilocks::GoldilocksExt2;
