@@ -1704,19 +1704,12 @@ mod test {
                         let k_w = 1 << l;
                         let n_x = 1 << j;
                         let k_x = 1 << i;
-                        let rand_vec = random_vector(n_w * n_w * k_x * k_w);
-                        let filter_1 = Tensor::new_conv(
-                            vec![k_w, k_x, n_w, n_w],
-                            vec![k_x, n_x, n_x],
-                            rand_vec.iter().map(|&x| x as Element).collect(),
-                        );
-                        let filter_2 = Tensor::new(
-                            vec![k_w, k_x, n_w, n_w],
-                            rand_vec.iter().map(|&x| x as Element).collect(),
-                        );
+                        let filter1 = Tensor::random( vec![k_w, k_x, n_w, n_w]);
+                        let filter2 = filter1.clone();
+                        let filter1 = filter1.into_fft_conv(& vec![k_x, n_x, n_x]);
                         let big_x = Tensor::new(vec![k_x, n_x, n_x], vec![3; n_x * n_x * k_x]); //random_vector(n_x*n_x*k_x));
-                        let (out_2, _) = filter_1.fft_conv::<GoldilocksExt2>(&big_x);
-                        let out_1 = filter_2.cnn_naive_convolution(&big_x);
+                        let (out_2, _) = filter1.fft_conv::<GoldilocksExt2>(&big_x);
+                        let out_1 = filter2.cnn_naive_convolution(&big_x);
                         check_tensor_consistency(out_1, out_2);
                     }
                 }

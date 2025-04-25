@@ -390,49 +390,10 @@ pub fn load_float_model(filepath: &str) -> Result<Model<f32>> {
                     "Bias length doesn't match filter shape"
                 );
 
-                // Pad the tensors to the next power of two.
-                // weights = weights.pad_next_power_of_two();
-                // bias = bias.pad_next_power_of_two();
-
-                // Make sure that input shape is already padded and is well formed
-                // assert!(input_shape_padded.iter().all(|d| d.is_power_of_two()));
-                // assert!(input_shape_padded.len() == 3);
-
-                // Since we are doing an FFT based conv, we need to pad the last two dimensions of the filter to match the input.
-                // let weight_shape = weights.get_shape();
-                // let (filter_height, filter_weight) = (weight_shape[2], weight_shape[3]);
-                // let (input_height, input_weight) = (input_shape_padded[1], input_shape_padded[2]);
-
-                // assert!(
-                //    filter_height <= input_height && filter_weight <= input_weight,
-                //    "Filter dimensions have to be smaller than input dimensions"
-                //);
-
-                // weight = weight.pad_last_two_dimensions(vec![input_height, input_weight]);
-
-                // Filter need to know the shape of the input
-                // weight.update_input_shape(&input_shape_padded);
-
-                // The conversion to fft'd weights is done when the quantization happens, see conv.quantize()
-                // let weight = crate::tensor::Tensor::new_conv(
-                //    weights.get_shape(),
-                //    input_shape_padded.clone(),
-                //    weights.get_data(),
-                //);
-                // let dims = weight.dims(); // save the shape of the filter to compute the output shape
-
                 // this is the non fft'd convolution layer
                 // let layer = Layer::SchoolBookConvolution(Convolution { filter: weights, bias: bias });
                 let layer = Layer::Convolution(Convolution::new(weights, bias));
-                // let layer = Layer::SchoolBookConvolution(Convolution::new(weight, _bias));
-
                 layers.push(layer);
-
-                // let output_shape = conv2d_shape(&input_shape_padded, &dims)?;
-                // input_shape_padded = output_shape
-                //    .iter()
-                //    .map(|i| i.next_power_of_two())
-                //    .collect_vec();
                 debug!("EXTRACTIONG conv2d time: {:?}", now.elapsed());
             }
             op if DOWNSAMPLING.contains(&op) => {

@@ -874,27 +874,17 @@ pub(crate) mod test {
         let n_x = 1 << 5;
         let k_x = 1 << 1;
 
-        let mut in_dimensions: Vec<Vec<usize>> =
+        let in_dimensions: Vec<Vec<usize>> =
             vec![vec![k_x, n_x, n_x], vec![16, 29, 29], vec![4, 26, 26]];
 
-        for i in 0..in_dimensions.len() {
-            for j in 0..in_dimensions[0].len() {
-                in_dimensions[i][j] = (in_dimensions[i][j]).next_power_of_two();
-            }
-        }
-        let w1 = random_vector_quant(k_w * k_x * n_w * n_w);
-        let conv1 = Tensor::new_conv(
-            vec![k_w, k_x, n_w, n_w],
-            in_dimensions[0].clone(),
-            w1.clone(),
-        );
+        let conv1 = Tensor::random(vec![k_w,k_x,n_w,n_w]);
         let mut model = Model::new();
         model.add_layer(Layer::Convolution(Convolution::new(
             conv1.clone(),
-            Tensor::new(vec![conv1.kw()], random_vector_quant(conv1.kw())),
-        )));
+            Tensor::random(vec![conv1.kw()]),
+        ).into_padded_and_ffted(&in_dimensions[0])));
         model.describe();
-        let input = Tensor::new(vec![k_x, n_x, n_x], random_vector_quant(n_x * n_x * k_x));
+        let input = Tensor::random(vec![k_x, n_x, n_x]);
         let trace: crate::model::InferenceTrace<'_, _, GoldilocksExt2> =
             model.run::<F>(input.clone()).unwrap();
         let mut tr: BasicTranscript<GoldilocksExt2> = BasicTranscript::new(b"m2vec");
@@ -926,23 +916,18 @@ pub(crate) mod test {
                         let mut in_dimensions: Vec<Vec<usize>> =
                             vec![vec![k_x, n_x, n_x], vec![16, 29, 29], vec![4, 26, 26]];
 
-                        for i in 0..in_dimensions.len() {
-                            for j in 0..in_dimensions[0].len() {
-                                in_dimensions[i][j] = (in_dimensions[i][j]).next_power_of_two();
-                            }
-                        }
-                        let w1 = random_vector_quant(k_w * k_x * n_w * n_w);
-                        let conv1 = Tensor::new_conv(
-                            vec![k_w, k_x, n_w, n_w],
-                            in_dimensions[0].clone(),
-                            w1.clone(),
-                        );
-
+                        let padded_in_dimensions = in_dimensions.iter().map(|d| d.iter().map(|&x| x.next_power_of_two()).collect::<Vec<usize>>()).collect::<Vec<Vec<usize>>>();
+                        //for i in 0..in_dimensions.len() {
+                        //    for j in 0..in_dimensions[0].len() {
+                        //        in_dimensions[i][j] = (in_dimensions[i][j]).next_power_of_two();
+                        //    }
+                        //}
+                        let conv1 = Tensor::random( vec![k_w, k_x, n_w, n_w]);
                         let mut model = Model::<Element>::new();
                         model.add_layer(Layer::Convolution(Convolution::new(
                             conv1.clone(),
-                            Tensor::new(vec![conv1.kw()], random_vector_quant(conv1.kw())),
-                        )));
+                            Tensor::random(vec![conv1.kw()]),
+                        ).into_padded_and_ffted(&in_dimensions[0])));
                         model.describe();
                         let input =
                             Tensor::new(vec![k_x, n_x, n_x], random_vector_quant(n_x * n_x * k_x));

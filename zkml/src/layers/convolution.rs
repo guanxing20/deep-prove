@@ -119,9 +119,8 @@ impl<T: Number> Convolution<T> {
         match padding_mode {
             /// unpadded shape is the shape found in onxx file for example
             PaddingMode::NoPadding => conv2d_shape(input_shape, &self.unpadded_shape),
-            /// real shape is the shape just before the "new_conv", i.e. just the padded shape before the padding necessary by FFT.
-            /// since the output with fft is just this shape padded to next power of two.
             PaddingMode::Padding => padded_conv2d_shape(input_shape, &self.filter.real_shape()),
+            //_ => panic!("Padding mode not supported"),
         }
     }
 
@@ -176,9 +175,7 @@ impl<T: Number> Convolution<T> {
 }
 
 impl Convolution<f32> {
-    /// Quantizes the filter and the bias. Note the weights are not yet FFT'd, that happens with new_conv at the padding step
-    /// since the FFT is also making the filter shape == input shape.
-    /// TODO: refactor new_conv to be in convolution.rs and more efficient than cloning
+    /// Quantizes the filter and the bias. 
     /// It uses a custom scaling factor `bias_s` for the bias, if provided,
     /// otherwise the same scaling factor of the weights (i.e., `s`) is used
     pub fn quantize(
