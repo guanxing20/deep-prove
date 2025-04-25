@@ -315,7 +315,7 @@ impl Tensor<Element> {
             .collect::<Vec<_>>();
         Tensor::new(self.shape.clone(), data)
     }
-    pub fn into_fft_conv(self, input_shape: Vec<usize>) -> Self {
+    pub fn into_fft_conv(self, input_shape: &[usize]) -> Self {
         let shape = self.shape;
         let data = self.data;
         assert!(
@@ -339,7 +339,7 @@ impl Tensor<Element> {
     // output and properly arrange the weights
     #[deprecated]
     pub fn new_conv(shape: Vec<usize>, input_shape: Vec<usize>, data: Vec<Element>) -> Self {
-        Tensor::new(shape, data).into_fft_conv(input_shape)
+        Tensor::new(shape, data).into_fft_conv(&input_shape)
     }
     /// Recall that weights are not plain text to the "snark". Rather it is FFT(weights).
     /// Aka there is no need to compute the FFT(input) "in-circuit".

@@ -215,6 +215,14 @@ impl Convolution<f32> {
 }
 
 impl Convolution<Element> {
+    /// Pads the filter and bias, and adapt the filter to the convolution fft operation.
+    pub fn into_padded_and_ffted(mut self, unpadded_input_shape: &[usize]) -> Self {
+        self.filter = self.filter.pad_next_power_of_two();
+        self.bias = self.bias.pad_next_power_of_two();
+        let padded_input_shape = unpadded_input_shape.iter().map(|&x| x.next_power_of_two()).collect::<Vec<usize>>();
+        self.filter = self.filter.into_fft_conv(&padded_input_shape);
+        self
+    }
     pub fn op<E: ExtensionField>(
         &self,
         input: &Tensor<Element>,
@@ -1492,14 +1500,7 @@ mod test {
         let output = input.conv2d(&weight, &bias, 1);
         // now try to pad the input and conv and use the fft one
         let padded_input = input.pad_next_power_of_two();
-        let weight_padded = weight.pad_next_power_of_two();
-        let bias_padded = bias.pad_next_power_of_two();
-        let filter_fft = Tensor::new_conv(
-            weight_padded.get_shape(),
-            padded_input.get_shape(),
-            weight_padded.get_data().to_vec(),
-        );
-        let fft_conv = Convolution::new_padded(filter_fft, bias_padded, &weight.get_shape());
+        let fft_conv= Convolution::new(weight.clone(),bias).into_padded_and_ffted(&input_shape);
         let (fft_output, conv_data) = fft_conv.op::<GoldilocksExt2>(&padded_input, &input_shape);
         let (valid, _garbage) = split_garbage(&fft_output, &output.get_shape());
         assert_eq!(
@@ -1516,7 +1517,8 @@ mod test {
         assert_eq!(given_output_shape, exp_output_shape);
 
         // make sure we can reconstruct the fft output purely from conv_data since it's needed for proving
-        let fft_output_shape = conv2d_shape(&padded_input.get_shape(), &weight_padded.get_shape());
+        let weight_padded_shape = weight.get_shape().iter().map(|x| x.next_power_of_two()).collect::<Vec<_>>();
+        let fft_output_shape = conv2d_shape(&padded_input.get_shape(), &weight_padded_shape);
         let fft_output_shape = fft_output_shape
             .into_iter()
             .map(|x| x.next_power_of_two())
@@ -1549,27 +1551,11 @@ mod test {
         let input_shape: Vec<usize> = vec![1, 23, 23];
         let conv_shape_og: Vec<usize> = vec![7, 1, 3, 3];
 
-        let input_shape_padded = input_shape
-            .iter()
-            .map(|x| x.next_power_of_two())
-            .collect::<Vec<usize>>();
-        let conv_shape_pad = conv_shape_og
-            .iter()
-            .map(|x| x.next_power_of_two())
-            .collect::<Vec<usize>>();
-
         // wieght of the filter
         let w1 = Tensor::random(conv_shape_og.clone());
-        // creation of the padded and fft'd convolution
-        let padded_w1 = w1.pad_next_power_of_two();
-        let conv1 = Tensor::new_conv(
-            conv_shape_pad.clone(),
-            input_shape_padded.clone(),
-            padded_w1.get_data().to_vec(),
-        );
         let bias1: Tensor<Element> = Tensor::zeros(vec![conv_shape_og[0]]);
-        let padded_bias1 = bias1.pad_next_power_of_two();
-        let fft_conv = Convolution::new_padded(conv1.clone(), padded_bias1.clone(), &conv_shape_og);
+        // creation of the padded and fft'd convolution
+        let fft_conv= Convolution::new(w1.clone(),bias1.clone()).into_padded_and_ffted(&input_shape);
         let input = Tensor::random(input_shape.clone());
         let padded_input = input.pad_next_power_of_two();
         let (fft_output, _): (Tensor<Element>, ConvData<_>) =

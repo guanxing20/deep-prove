@@ -342,7 +342,7 @@ where
     pub fn output_shape(&self, input_shape: &[usize]) -> Vec<usize> {
         assert_eq!(
             input_shape.iter().product::<usize>(),
-            self.unpadded_matrix_shape,
+            self.unpadded_matrix_shape[0],
             "input_shape {:?} vs matrix {:?}",
             input_shape,
             self.unpadded_matrix_shape

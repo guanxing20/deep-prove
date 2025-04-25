@@ -78,14 +78,14 @@ fn pad_conv(mut c: Convolution<Element>, si: &mut ShapeInfo) -> Result<Convoluti
         weight_shape[0] == c.bias.get_shape()[0],
         "Bias length doesn't match filter shape"
     );
+    // Make sure that input shape is already padded and is well formed
+    assert!(si.input_shape_padded.iter().all(|d| d.is_power_of_two()));
+    assert!(si.input_shape_padded.len() == 3);
+
 
     // Pad the tensors to the next power of two.
     c.filter = c.filter.pad_next_power_of_two();
     c.bias = c.bias.pad_next_power_of_two();
-
-    // Make sure that input shape is already padded and is well formed
-    assert!(si.input_shape_padded.iter().all(|d| d.is_power_of_two()));
-    assert!(si.input_shape_padded.len() == 3);
 
     // Since we are doing an FFT based conv, we need to pad the last two dimensions of the filter to match the input.
     let weight_shape = c.filter.get_shape();

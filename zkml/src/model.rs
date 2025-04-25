@@ -589,25 +589,6 @@ pub(crate) mod test {
         let shape1 = vec![1 << 4, 1 << 0, 1 << 2, 1 << 2]; // [16, 1, 4, 4]
         let shape2 = vec![1 << 2, 1 << 4, 1 << 2, 1 << 2]; // [4, 16, 4, 4]
         let shape3 = vec![1 << 1, 1 << 2, 1 << 2, 1 << 2]; // [2, 4, 4, 4]
-        let conv1 = Tensor::new_conv(
-            shape1.clone(),
-            // [1, 32, 32]
-            in_dimensions[0].clone(),
-            w1.clone(),
-        );
-        let conv2 = Tensor::new_conv(
-            shape2.clone(),
-            // [16, 32, 32]
-            in_dimensions[1].clone(),
-            w2.clone(),
-        );
-        let conv3 = Tensor::new_conv(
-            shape3.clone(),
-            // [4, 32, 32]
-            in_dimensions[2].clone(),
-            w3.clone(),
-        );
-
         let bias1: Tensor<Element> = Tensor::zeros(vec![shape1[0]]);
         let bias2: Tensor<Element> = Tensor::zeros(vec![shape2[0]]);
         let bias3: Tensor<Element> = Tensor::zeros(vec![shape3[0]]);
@@ -615,6 +596,10 @@ pub(crate) mod test {
         let trad_conv1: Tensor<Element> = Tensor::new(shape1.clone(), w1.clone());
         let trad_conv2: Tensor<i128> = Tensor::new(shape2.clone(), w2.clone());
         let trad_conv3: Tensor<i128> = Tensor::new(shape3.clone(), w3.clone());
+        let conv1 = trad_conv1.clone().into_fft_conv(&in_dimensions[0]);
+        let conv2 = trad_conv2.clone().into_fft_conv(&in_dimensions[1]);
+        let conv3 = trad_conv3.clone().into_fft_conv(&in_dimensions[2]);
+
 
         let mut model = Model::new();
         model.add_layer(Layer::Convolution(Convolution::new_padded(
@@ -677,27 +662,24 @@ pub(crate) mod test {
 
     #[test]
     fn test_conv_maxpool() {
-        let input_shape_padded = vec![3usize, 32, 32].next_power_of_two();
-        let shape1 = vec![6, 3, 5, 5].next_power_of_two();
-
-        let filter1 = Tensor::new_conv(
-            shape1.clone(),
-            input_shape_padded.clone(),
-            random_vector_quant(shape1.prod()),
-        );
-
+        let input_shape = vec![3usize, 32, 32];
+        let shape1 = vec![6, 3, 5, 5];
+        let filter = Tensor::random(shape1.clone());
         let bias1 = Tensor::random(vec![shape1[0]]);
 
         let mut model = Model::new();
         model.add_layer(Layer::Convolution(Convolution::new(
-            filter1.clone(),
+            filter.clone(),
             bias1.clone(),
-        )));
+        ).into_padded_and_ffted(&input_shape)));
         model.add_layer(Layer::Pooling(Pooling::Maxpool2D(Maxpool2D::default())));
 
-        let input = Tensor::random(input_shape_padded.clone());
+        // TODO: have a "builder" for the model that automatically tracks the shape after each layer such that 
+        // we can just do model.prepare_input(&input).
+        // Here is not possible since we didnt run through the onnx loader
+        let input_padded = Tensor::random(input_shape).pad_next_power_of_two();
         let _: crate::model::InferenceTrace<'_, _, GoldilocksExt2> =
-            model.run::<F>(input.clone()).unwrap();
+            model.run::<F>(input_padded).unwrap();
     }
 
     #[test]
