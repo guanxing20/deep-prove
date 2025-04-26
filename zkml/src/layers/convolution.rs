@@ -1,4 +1,4 @@
-use crate::{VectorTranscript, onnx_parse::safe_conv2d_shape, padding::PaddingMode};
+use crate::{VectorTranscript, padding::PaddingMode};
 use core::f32;
 
 use crate::{
@@ -1388,6 +1388,13 @@ pub fn index_wf<E: ExtensionField>(
             E::ZERO
         }
     })
+}
+
+pub fn conv2d_shape_mode(input_shape: &[usize], filter_shape: &[usize],padding_mode: PaddingMode) -> Vec<usize> {
+    match padding_mode {
+        PaddingMode::NoPadding => conv2d_shape(input_shape, filter_shape),
+        PaddingMode::Padding => padded_conv2d_shape(input_shape, filter_shape),
+    }
 }
 
 /// Assumes stride=1, padding=0, and dilation=1
