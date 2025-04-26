@@ -1,5 +1,5 @@
 use crate::{
-    VectorTranscript, layers::hadamard, padding::PaddingMode, quantization::TensorFielder,
+    iop::context::ShapeStep, layers::hadamard, padding::PaddingMode, quantization::TensorFielder, VectorTranscript
 };
 use core::f32;
 
@@ -103,6 +103,7 @@ pub struct ConvProof<E: ExtensionField> {
     partial_evals: Vec<E>,
     hadamard_clams: Vec<E>,
     bias_claim: E,
+    clearing_proof: hadamard::HadamardProof<E>,
 }
 
 impl<T: Number> Convolution<T> {
@@ -811,6 +812,7 @@ impl Convolution<Element> {
             hadamard_clams: hadamard_claims,
             bias_claim: bias_eval,
             partial_evals,
+            clearing_proof,
         }));
         let mut input_point = fft_proof.point.clone();
         let mut v = input_point.pop().unwrap();
@@ -927,15 +929,25 @@ where
         verifier: &mut Verifier<E, T>,
         last_claim: Claim<E>,
         proof: &ConvProof<E>,
+        shape_step: &ShapeStep,
     ) -> anyhow::Result<Claim<E>> {
-        /// The first thing to do is to recreate the hadamard clearing tensor
-        /// Since this is only coming from public information, the verifier
-        /// creates the vector and evaluates it.
-        /// NOTE: for succinctness of verification, we could also have
-        /// the prover commits to the tensor product and we could skip this step.
-        /// OR find a closed formula
-        ///
-        /// To recreat it, we need the unpadded output shape and the real output shape.
+        // The first thing to do is to recreate the hadamard clearing tensor
+        // Since this is only coming from public information, the verifier
+        // creates the vector and evaluates it.
+        // NOTE: for succinctness of verification, we could also have
+        // the prover commits to the tensor product and we could skip this step.
+        // OR find a closed formula
+        //
+        // To recreat it, we need the unpadded output shape and the real output shape.
+        let unpadded_output_shape = conv2d_shape(&shape_step.unpadded_input_shape,&self.unpadded_filter_shape);
+        let real_output_shape = padded_conv2d_shape(&shape_step.padded_input_shape,&self.padded_filter_shape);
+        let clearing_tensor = new_clearing_tensor(&unpadded_output_shape,&real_output_shape);
+        // now we need to verify the hadamard proof for the sumcheck part.
+        let hctx = hadamard::HadamardCtx::from_len(real_output_shape.iter().product());
+        let expected_v2_eval = clearing_tensor.to_mle_flat().evaluate(&proof.clearing_proof.random_point());
+        // also set the claim to be the non-cleared output of conv. The rest of the logic is about proving the bias + fft claims.
+        let last_claim = hadamard::verify(&hctx, verifier.transcript, &proof.clearing_proof, &last_claim, expected_v2_eval).context("failure for hadamard proof")?;
+
         let conv_claim = last_claim.eval - proof.bias_claim;
 
         IOPVerifierState::<E>::verify(

@@ -10,6 +10,7 @@ use multilinear_extensions::{
     mle::{IntoMLE, MultilinearExtension},
     virtual_poly::{VPAuxInfo, VirtualPolynomial},
 };
+use serde::{Deserialize, Serialize};
 use sumcheck::structs::{IOPProof, IOPProverState, IOPVerifierState};
 use transcript::Transcript;
 
@@ -25,12 +26,21 @@ impl<F: ExtensionField> HadamardCtx<F> {
         let num_vars = v1.get_data().len().ilog2() as usize;
         Self {
             sumcheck_aux: VPAuxInfo::from_mle_list_dimensions(&vec![vec![
+                // v1, v2, beta
                 num_vars, num_vars, num_vars,
             ]]),
         }
     }
+    pub fn from_len(vector_len: usize) -> Self {
+        let num_vars = vector_len.next_power_of_two().ilog2() as usize;
+        Self {
+            // v1, v2, beta
+            sumcheck_aux: VPAuxInfo::from_mle_list_dimensions(&vec![vec![num_vars, num_vars, num_vars]]),
+        }
+    }
 }
 
+#[derive(Debug,Clone, Deserialize, Serialize,Default)]
 pub struct HadamardProof<F: ExtensionField> {
     sumcheck: IOPProof<F>,
     individual_claim: Vec<F>,
@@ -106,7 +116,7 @@ pub fn verify<F: ExtensionField, T: Transcript<F>>(
     ctx: &HadamardCtx<F>,
     transcript: &mut T,
     proof: &HadamardProof<F>,
-    output_claim: Claim<F>,
+    output_claim: &Claim<F>,
     expected_v2_eval: F,
 ) -> Result<Claim<F>> {
     let _subclaim = IOPVerifierState::<F>::verify(
@@ -166,7 +176,7 @@ mod test {
             &ctx,
             &mut default_transcript(),
             &proof,
-            output_claim,
+            &output_claim,
             v2_eval,
         )
         .unwrap();

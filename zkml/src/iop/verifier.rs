@@ -112,7 +112,7 @@ where
             };
             Some(last_shape.clone())
             // ?? rev() doesn't work with scan
-        }).collect_vec().into_iter().rev().collect_vec();
+        }).collect_vec().into_iter().rev().map(|s| s.unwrap()).collect_vec();
 
         // 4. Verify each proof sequentially, Always make sure the proof corresponds to the expected type of proof in the context.
         // We have two `HashSet`s, one for the type of table used and one for the lookup challenges used
@@ -171,7 +171,7 @@ where
                     )?
                 }
                 (LayerProof::<E>::Convolution(proof), LayerCtx::<E>::Convolution(info)) => {
-                    info.verify_convolution(&mut self, output_claim, &proof)?
+                    info.verify_convolution(&mut self, output_claim, &proof, &shape_step)?
                 }
                 (LayerProof::<E>::Reshape, LayerCtx::Reshape) => {
                     // reshape doesn't change anything apart the shape but we dont "prove" the shape really
