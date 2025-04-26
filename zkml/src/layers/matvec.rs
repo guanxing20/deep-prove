@@ -10,9 +10,8 @@ use sumcheck::structs::{IOPProof, IOPProverState, IOPVerifierState};
 use transcript::Transcript;
 
 use crate::{
-    Claim, Element, Prover, Tensor,
-    iop::{context::ContextAux, verifier::Verifier},
-    quantization::{Fieldizer, TensorFielder},
+    Claim, Element, Tensor,
+    quantization::{TensorFielder},
     tensor::Number,
 };
 
@@ -89,7 +88,6 @@ impl MatVec<Element> {
         assert_eq!(mat_mle.num_vars(), input_mle.num_vars());
         let num_vars = input_mle.num_vars();
         let mut vp = VirtualPolynomial::<E>::new(num_vars);
-        println!("num_vars: {}, vp.aux_info: {:?}", num_vars, vp.aux_info);
         vp.add_mle_list(vec![mat_mle.into(), input_mle.into()], E::ONE);
         // let tmp_transcript = prover.transcript.clone();
         #[allow(deprecated)]
@@ -137,7 +135,6 @@ where
     E::BaseField: Serialize + DeserializeOwned,
     T: Transcript<E>,
 {
-    println!("VERIFY aux_info: {:?}", aux_info);
     let subclaim =
         IOPVerifierState::<E>::verify(last_claim.eval, &proof.sumcheck, aux_info, transcript);
     let matrix_point = subclaim
@@ -156,11 +153,9 @@ where
 
 #[cfg(test)]
 mod test {
-    use ark_std::rand::thread_rng;
     use goldilocks::GoldilocksExt2;
 
     use crate::{default_transcript, testing::random_field_vector};
-    use multilinear_extensions::mle::IntoMLE;
 
     use super::*;
 
@@ -168,7 +163,6 @@ mod test {
     #[test]
     fn test_matvec_prove_verify() {
         let matrix = Tensor::<Element>::random_seed(&vec![2, 3], None).pad_next_power_of_two();
-        println!("matrix shape {:?}", matrix.get_shape());
         let input = Tensor::<Element>::random_seed(&vec![3], None).pad_next_power_of_two();
         let matvec = MatVec::new(matrix);
         let output = matvec.op(&input);

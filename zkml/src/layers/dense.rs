@@ -22,8 +22,6 @@ use transcript::Transcript;
 
 use crate::{Element, tensor::Tensor};
 
-use super::common::Op;
-
 /// Bias to compute the bias ID polynomials. Since originally we take the index of each
 /// layer to be the index of the layer, we need to add a bias to avoid collision with other
 /// layers poly id.

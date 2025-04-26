@@ -317,7 +317,6 @@ pub fn load_float_model(filepath: &str) -> Result<Model<f32>> {
     }
 
     let mut input_shape_og = input_shape.clone();
-    println!("Input shape: {:?}", input_shape);
     let mut initializers: HashMap<String, Tensor> = HashMap::new();
     for item in graph.initializer {
         let dt = tract_onnx::pb::tensor_proto::DataType::from_i32(item.data_type)
@@ -328,21 +327,14 @@ pub fn load_float_model(filepath: &str) -> Result<Model<f32>> {
         let key = item.name.to_string();
         initializers.insert(key, value);
     }
-    println!(
-        "Initializers: TENSOR NAMES: {:?}",
-        initializers.keys().collect_vec()
-    );
     let mut layers: Vec<Layer<f32>> = Vec::with_capacity(graph.node.len());
     // we need to keep track of the last shape because when we pad to next power of two one layer, we need to make sure
     // the next layer's expected input matches.
     info!("load_model:BEFORE loop of graph nodes extraction");
     for (i, node) in graph.node.iter().enumerate() {
-        println!("NODE: {:?}", node.op_type.as_str());
         match node.op_type.as_str() {
             op if LINEAR_ALG.contains(&op) => {
                 let WeightBiasInfo { weights, bias } = fetch_weight_and_bias(node, &initializers)?;
-                // println!("DENSE weights shape: {:?}", weights.get_shape());
-                // println!("DENSE MATRIX: {:?}", weights.get_data());
                 ensure!(bias.get_shape().len() == 1, "bias is not a vector");
                 input_shape_og = vec![weights.get_shape()[0]];
                 let nrows = weights.get_shape()[0];
@@ -370,16 +362,6 @@ pub fn load_float_model(filepath: &str) -> Result<Model<f32>> {
                 let now = Instant::now();
                 let _ = fetch_conv2d_attributes(node)?;
                 let WeightBiasInfo { weights, bias } = fetch_weight_and_bias(node, &initializers)?;
-                // println!(
-                //    "RUN CONV: input shape {:?} - og {:?} ",
-                //    input_shape, input_shape_og
-                //);
-                // println!(
-                //    "RUN CONV: filter shape {:?}, bias shape {:?} -- filter 4d {:?}",
-                //    weights.get_shape(),
-                //    bias.get_shape(),
-                //    weights.get4d()
-                //);
                 input_shape_og = safe_conv2d_shape(&input_shape_og, &weights.get_shape())?;
                 let weight_shape = weights.get_shape();
                 // Perform basic sanity checks on the tensor dimensions
@@ -404,14 +386,11 @@ pub fn load_float_model(filepath: &str) -> Result<Model<f32>> {
                 let _ = fetch_maxpool_attributes(node)?;
                 let layer = Layer::Pooling(Pooling::Maxpool2D(Maxpool2D::default()));
                 layers.push(layer);
-                // input_shape_padded = maxpool2d_shape(&input_shape_padded)?;
             }
             op if RESHAPE.contains(&op) => {
                 // ignore_garbage_pad = Some((input_shape_og.clone(), input_shape_padded.clone()));
                 layers.push(Layer::Reshape(Reshape));
                 input_shape_og = vec![input_shape_og.iter().product()];
-                // assert!(input_shape_padded.iter().all(|d| d.is_power_of_two()));
-                // input_shape_padded = vec![input_shape_padded.iter().product()];
             }
             _ => bail!("Unsupported operation"),
         };

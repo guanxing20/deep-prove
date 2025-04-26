@@ -126,11 +126,10 @@ impl<T: Number> Model<T> {
     }
     /// Prints to stdout
     pub fn describe(&self) {
-        println!("Model description:");
+        info!("Model description:");
         for (idx, layer) in self.layers() {
-            println!("\t- {}: {}", idx, layer.describe());
+            info!("\t- {}: {}", idx, layer.describe());
         }
-        println!("\n");
     }
 
     pub fn layer_count(&self) -> usize {
@@ -156,18 +155,10 @@ impl Model<Element> {
         let mut trace = InferenceTrace::<Element, E>::new(input, unpadded_input_shape.clone());
         let mut unpadded_input_shape = unpadded_input_shape;
         for (id, layer) in self.layers() {
-            println!(
-                "MODEL RUN: at layer {} -> INPUT unpadded shape: {:?}",
-                id, unpadded_input_shape
-            );
             let input = trace.last_input();
             let output = layer.op(input, &unpadded_input_shape)?;
             unpadded_input_shape =
                 layer.output_shape(&unpadded_input_shape, PaddingMode::NoPadding);
-            println!(
-                "MODEL RUN: at layer {} -> OUTPUT unpadded shape: {:?}",
-                id, unpadded_input_shape
-            );
             match output {
                 LayerOutput::NormalOut(output) => {
                     let conv_data = ConvData::default();
@@ -408,13 +399,8 @@ impl Model<f32> {
 pub(crate) mod test {
     use crate::{
         layers::{
-            Layer,
-            activation::{Activation, Relu},
-            convolution::{Convolution, conv2d_shape, padded_conv2d_shape},
-            dense::Dense,
-            pooling::{MAXPOOL2D_KERNEL_SIZE, Maxpool2D, Pooling},
-        },
-        padding::PaddingMode,
+            activation::{Activation, Relu}, convolution::Convolution, dense::Dense, pooling::{Maxpool2D, Pooling, MAXPOOL2D_KERNEL_SIZE}, Layer
+        }, testing::{random_bool_vector, random_vector},
     };
     use ark_std::rand::{Rng, RngCore, thread_rng};
     use ff_ext::ExtensionField;
@@ -430,7 +416,6 @@ pub(crate) mod test {
         Element, default_transcript,
         quantization::TensorFielder,
         tensor::Tensor,
-        testing::{NextPowerOfTwo, random_bool_vector, random_vector},
     };
 
     use super::Model;
@@ -616,7 +601,7 @@ pub(crate) mod test {
                 .into_padded_and_ffted(&in_dimensions[2]),
         ));
 
-        /// END TEST
+        // END TEST
         let trace: crate::model::InferenceTrace<'_, _, GoldilocksExt2> =
             model.run::<F>(input.clone()).unwrap();
 
@@ -777,7 +762,6 @@ pub(crate) mod test {
     fn test_model_sequential() {
         let (model, input) = Model::random(1);
         model.describe();
-        println!("INPUT: {:?}", input);
         let bb = model.clone();
         let trace = bb.run::<F>(input.clone()).unwrap().to_field();
         let dense_layers = model
@@ -792,7 +776,6 @@ pub(crate) mod test {
             .map(|d| d.matrix.to_mle_2d::<F>())
             .collect_vec();
         let point1 = random_bool_vector(dense_layers[0].matrix.nrows_2d().ilog2() as usize);
-        println!("point1: {:?}", point1);
         let computed_eval1 = trace.steps[trace.steps.len() - 1]
             .output
             .get_data()
@@ -914,14 +897,6 @@ pub(crate) mod test {
 
                         let in_dimensions: Vec<Vec<usize>> =
                             vec![vec![k_x, n_x, n_x], vec![16, 29, 29], vec![4, 26, 26]];
-                        let padded_in_dimensions = in_dimensions
-                            .iter()
-                            .map(|d| {
-                                d.iter()
-                                    .map(|&x| x.next_power_of_two())
-                                    .collect::<Vec<usize>>()
-                            })
-                            .collect::<Vec<Vec<usize>>>();
                         let input_shape = vec![k_x, n_x, n_x];
                         let conv1 = Tensor::random(&vec![k_w, k_x, n_w, n_w]);
                         let mut model = Model::<Element>::new(&input_shape);

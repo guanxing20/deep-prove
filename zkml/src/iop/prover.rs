@@ -140,9 +140,7 @@ where
         self.table_witness
             .iter()
             .zip(self.ctx.lookup.iter())
-            .try_for_each(|(table_witness, table_type)| {
-                println!("PROVING table of type: {}", table_type.name());
-
+            .try_for_each(|(table_witness, _table_type)| {
                 // Make the proof for the table
                 let table_proof = logup_batch_prove(&table_witness, self.transcript)?;
 

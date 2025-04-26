@@ -2,8 +2,8 @@ use ff_ext::ExtensionField;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use crate::{
-    Element, ScalingFactor, Tensor, commit::precommit::PolyID, iop::context::ContextAux,
-    layers::LayerCtx, tensor::Number,
+    NextPowerOfTwo,
+    commit::precommit::PolyID, iop::context::ContextAux, layers::LayerCtx, tensor::Number, Element, ScalingFactor, Tensor
 };
 
 use super::{
@@ -42,11 +42,7 @@ impl ProvableOp for Reshape {
         E: ExtensionField + DeserializeOwned,
         E::BaseField: Serialize + DeserializeOwned,
     {
-        aux.last_output_shape = aux
-            .last_output_shape
-            .into_iter()
-            .map(|x| x.next_power_of_two())
-            .collect();
+        aux.last_output_shape = aux.last_output_shape.next_power_of_two();
         (LayerCtx::Reshape, aux)
     }
 }

@@ -11,7 +11,7 @@ use ff::Field;
 use ff_ext::ExtensionField;
 use gkr::util::ceil_log2;
 use itertools::Itertools;
-use multilinear_extensions::mle::{IntoMLE, MultilinearExtension};
+use multilinear_extensions::mle::{IntoMLE};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use statrs::statistics::{Data, Distribution};
 use std::ops::{Add, Mul, Sub};
@@ -406,11 +406,11 @@ impl Requant {
             point: point.clone(),
             eval: first_claim.eval - E::from((*quantization::RANGE / 2) as u64),
         };
-        println!("correct claim eval: {:?}", corrected_claim.eval);
-        println!(
-            "output eval: {:?}",
-            output.to_vec().into_mle().evaluate(&corrected_claim.point)
-        );
+        //println!("correct claim eval: {:?}", corrected_claim.eval);
+        //println!(
+        //    "output eval: {:?}",
+        //    output.to_vec().into_mle().evaluate(&corrected_claim.point)
+        //);
         // Add the claim used in the activation function
         same_poly_prover.add_claim(corrected_claim)?;
         let claim_acc_proof = same_poly_prover.prove(&same_poly_ctx, prover.transcript)?;
@@ -418,7 +418,6 @@ impl Requant {
         prover
             .witness_prover
             .add_claim(requant_info.poly_id, claim_acc_proof.extract_claim())?;
-        println!("REQUANT: WITNESS Poly ID: {}", requant_info.poly_id);
 
         prover.push_proof(LayerProof::Requant(RequantProof {
             io_accumulation: claim_acc_proof,

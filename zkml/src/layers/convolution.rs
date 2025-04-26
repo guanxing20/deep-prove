@@ -1,5 +1,6 @@
 use crate::{
-    iop::context::ShapeStep, layers::hadamard, padding::PaddingMode, quantization::TensorFielder, VectorTranscript
+    VectorTranscript, iop::context::ShapeStep, layers::hadamard, padding::PaddingMode,
+    quantization::TensorFielder,
 };
 use core::f32;
 
@@ -122,10 +123,9 @@ impl<T: Number> Convolution<T> {
     }
     pub fn output_shape(&self, input_shape: &[usize], padding_mode: PaddingMode) -> Vec<usize> {
         match padding_mode {
-            /// unpadded shape is the shape found in onxx file for example
+            // unpadded shape is the shape found in onxx file for example
             PaddingMode::NoPadding => conv2d_shape(input_shape, &self.unpadded_shape),
-            // PaddingMode::Padding => padded_conv2d_shape(input_shape, &self.filter.real_shape()),
-            _ => panic!("Padding mode not supported"),
+            PaddingMode::Padding => padded_conv2d_shape(input_shape, &self.filter.real_shape()),
         }
     }
 
@@ -238,33 +238,19 @@ impl Convolution<Element> {
         // we record here the output _after_ the bias addition. During proving it's necessary since we're proving the clearing garbage
         // and that produces a new claim on this output.
         proving_data.set_output(conv_output.get_data());
-        println!(
-            "INFERENCE: conv_after_bias.shape(): {:?}",
-            conv_output.get_shape()
-        );
-        println!(
-            "INFERENCE: conv_after_bias.data(): {:?}",
-            &conv_output.get_data()[..30]
-        );
-        println!(
-            "INFERENCE: unpadded_input_shape: {:?}",
-            unpadded_input_shape
-        );
-        println!("INFERENCE: output.shape(): {:?}", output.get_shape());
         // At this stage, we're creating a "garbage clearing" tensor that sets all garbage values to 0. This is necessary
         // since the garbage might be of any value and we need to restrict the range of the output due to requantization proving logic.
         // println!("unpadded_input_shape: {:?}", unpadded_input_shape);
         // println!("self.unpadded_shape: {:?}", self.unpadded_shape);
         //(conv_output, proving_data)
         let unpadded_output_shape = conv2d_shape(unpadded_input_shape, &self.unpadded_shape);
-        debug_assert_eq!( {
-            let fft_output_shape = conv2d_shape(&input.get_shape(),&self.filter.real_shape()).into_iter().map(|x| x.next_power_of_two()).collect::<Vec<usize>>();
-            fft_output_shape 
-        },conv_output.get_shape(),"FFT output shape not computable");
-        // let unpadded_output_shape = self.output_shape(unpadded_input_shape, PaddingMode::NoPadding);
-        println!(
-            "INFERENCE: unpadded_output_shape: {:?}",
-            unpadded_output_shape
+        debug_assert_eq!(
+            {
+                let fft_output_shape = padded_conv2d_shape(&input.get_shape(), &self.filter.real_shape());
+                fft_output_shape
+            },
+            conv_output.get_shape(),
+            "FFT output shape not computable"
         );
         let cleared_tensor = clear_garbage(&conv_output, &unpadded_output_shape);
         debug_assert!({
@@ -939,14 +925,27 @@ where
         // OR find a closed formula
         //
         // To recreat it, we need the unpadded output shape and the real output shape.
-        let unpadded_output_shape = conv2d_shape(&shape_step.unpadded_input_shape,&self.unpadded_filter_shape);
-        let real_output_shape = padded_conv2d_shape(&shape_step.padded_input_shape,&self.padded_filter_shape);
-        let clearing_tensor = new_clearing_tensor(&unpadded_output_shape,&real_output_shape);
+        let unpadded_output_shape = conv2d_shape(
+            &shape_step.unpadded_input_shape,
+            &self.unpadded_filter_shape,
+        );
+        let real_output_shape =
+            padded_conv2d_shape(&shape_step.padded_input_shape, &self.padded_filter_shape);
+        let clearing_tensor = new_clearing_tensor(&unpadded_output_shape, &real_output_shape);
         // now we need to verify the hadamard proof for the sumcheck part.
         let hctx = hadamard::HadamardCtx::from_len(real_output_shape.iter().product());
-        let expected_v2_eval = clearing_tensor.to_mle_flat().evaluate(&proof.clearing_proof.random_point());
+        let expected_v2_eval = clearing_tensor
+            .to_mle_flat()
+            .evaluate(&proof.clearing_proof.random_point());
         // also set the claim to be the non-cleared output of conv. The rest of the logic is about proving the bias + fft claims.
-        let last_claim = hadamard::verify(&hctx, verifier.transcript, &proof.clearing_proof, &last_claim, expected_v2_eval).context("failure for hadamard proof")?;
+        let last_claim = hadamard::verify(
+            &hctx,
+            verifier.transcript,
+            &proof.clearing_proof,
+            &last_claim,
+            expected_v2_eval,
+        )
+        .context("failure for hadamard proof")?;
 
         let conv_claim = last_claim.eval - proof.bias_claim;
 
@@ -1292,10 +1291,9 @@ pub fn padded_conv2d_shape(input_shape: &[usize], filter_shape: &[usize]) -> Vec
 mod test {
     use goldilocks::GoldilocksExt2;
 
-    use crate::layers::{
+    use crate::{layers::{
         dense::{self, Dense},
-        matvec::MatVec,
-    };
+    }, NextPowerOfTwo};
 
     use super::*;
 
@@ -1445,7 +1443,7 @@ mod test {
         let (valid, garbage) = split_garbage(&fft_output, &normal_output.get_shape());
         assert!(valid.len() == flat_normal_output.get_data().len());
         assert_eq!(valid, flat_normal_output.get_data().to_vec());
-        assert!(garbage.len() >= 0);
+        assert!(!garbage.is_empty());
         // NOTE: a bit of a hack to recreate but the functione xpects the real conv shape not the flattened one
         let (valid, garbage) = split_garbage(
             &Tensor::new(fft_output.get_shape(), flat_fft_output.get_data().to_vec()),
@@ -1467,10 +1465,7 @@ mod test {
         // create the padded version:
         // take the "conv2d"input shape
         let conv_input_shape = conv2d_shape(&input_shape, &w1.get_shape());
-        let conv_input_shape_padded = conv_input_shape
-            .iter()
-            .map(|x| x.next_power_of_two())
-            .collect::<Vec<usize>>();
+        let conv_input_shape_padded = conv_input_shape.next_power_of_two();
         let dense_shape_padded = vec![
             nrows.next_power_of_two(),
             flat_fft_output.shape[0].next_power_of_two(),

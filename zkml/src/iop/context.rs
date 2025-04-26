@@ -11,7 +11,7 @@ use itertools::Itertools;
 use mpcs::BasefoldCommitment;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::collections::BTreeSet;
-use tracing::{debug, trace};
+use tracing::{debug, info, trace};
 use transcript::Transcript;
 
 /// Info related to the lookup protocol tables.
@@ -53,7 +53,7 @@ where
 
 /// Similar to the InferenceStep but only records the input and output shapes
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub(crate) struct ShapeStep {
+pub struct ShapeStep {
     pub unpadded_input_shape: Vec<usize>,
     pub unpadded_output_shape: Vec<usize>,
     pub padded_input_shape: Vec<usize>,
@@ -129,7 +129,7 @@ where
             step_infos.push(info);
             ctx_aux = new_aux;
         }
-        println!(
+        info!(
             "step_infos: {:?}",
             step_infos.iter().map(|x| x.variant_name()).join(", ")
         );

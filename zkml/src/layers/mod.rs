@@ -146,7 +146,12 @@ where
     pub fn shape_step(&self, unpadded_input: &[usize], padded_input: &[usize]) -> ShapeStep {
         let unpadded_output = self.output_shape(&unpadded_input, PaddingMode::NoPadding);
         let padded_output = self.output_shape(&padded_input, PaddingMode::Padding);
-        ShapeStep::new(unpadded_input.to_vec(), padded_input.to_vec(), unpadded_output, padded_output)
+        ShapeStep::new(
+            unpadded_input.to_vec(),
+            padded_input.to_vec(),
+            unpadded_output,
+            padded_output,
+        )
     }
 }
 
@@ -159,7 +164,7 @@ impl<T: Number> Layer<T> {
                 filter.output_shape(input_shape, padding_mode)
             }
             Layer::Activation(Activation::Relu(_)) => input_shape.to_vec(),
-            Layer::Requant(info) => input_shape.to_vec(),
+            Layer::Requant(_) => input_shape.to_vec(),
             Layer::Pooling(Pooling::Maxpool2D(info)) => info.output_shape(input_shape),
             Layer::Reshape(ref r) => <Reshape as Op<T>>::output_shape(r, input_shape),
         }
@@ -174,7 +179,7 @@ impl<T: Number> Layer<T> {
             Layer::SchoolBookConvolution(ref filter) => Some(filter.get_shape()),
 
             Layer::Activation(Activation::Relu(_)) => None,
-            Layer::Requant(info) => None,
+            Layer::Requant(_) => None,
             Layer::Pooling(Pooling::Maxpool2D(info)) => {
                 Some(vec![info.kernel_size, info.kernel_size])
             }
@@ -283,10 +288,6 @@ impl Layer<Element> {
             Layer::Requant(requant) => requant.step_info(id, aux),
             Layer::Pooling(pooling) => pooling.step_info(id, aux),
             Layer::Reshape(reshape) => reshape.step_info(id, aux),
-            _ => panic!(
-                "Layer::step_info: layer {} can not be proven",
-                self.describe()
-            ),
         }
     }
 

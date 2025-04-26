@@ -4,7 +4,7 @@ use crate::{
     Element,
     layers::{
         Layer,
-        convolution::{Convolution, conv2d_shape},
+        convolution::{Convolution},
         dense::Dense,
         reshape::Reshape,
     },
@@ -100,7 +100,6 @@ fn pad_conv(c: Convolution<Element>, si: &mut ShapeInfo) -> Result<Convolution<E
 }
 
 fn pad_dense(mut d: Dense<Element>, si: &mut ShapeInfo) -> Result<Dense<Element>> {
-    // println!("PAD DENSE: input shape {:?}", si);
     let nrows = d.matrix.get_shape()[0];
     si.input_shape_og = vec![nrows];
     ensure!(

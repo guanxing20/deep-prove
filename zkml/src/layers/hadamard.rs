@@ -35,12 +35,14 @@ impl<F: ExtensionField> HadamardCtx<F> {
         let num_vars = vector_len.next_power_of_two().ilog2() as usize;
         Self {
             // v1, v2, beta
-            sumcheck_aux: VPAuxInfo::from_mle_list_dimensions(&vec![vec![num_vars, num_vars, num_vars]]),
+            sumcheck_aux: VPAuxInfo::from_mle_list_dimensions(&vec![vec![
+                num_vars, num_vars, num_vars,
+            ]]),
         }
     }
 }
 
-#[derive(Debug,Clone, Deserialize, Serialize,Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct HadamardProof<F: ExtensionField> {
     sumcheck: IOPProof<F>,
     individual_claim: Vec<F>,

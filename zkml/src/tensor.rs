@@ -8,7 +8,7 @@ use ff::Field;
 use ff_ext::ExtensionField;
 use goldilocks::GoldilocksExt2;
 use itertools::Itertools;
-use multilinear_extensions::mle::{DenseMultilinearExtension, IntoMLE};
+use multilinear_extensions::mle::{DenseMultilinearExtension};
 use rayon::{
     iter::{
         IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator,
@@ -244,9 +244,7 @@ pub fn fft<E: ExtensionField + Send + Sync>(v: &mut Vec<E>, flag: bool) {
     if flag == true {
         let mut ilen = E::from(n as u64);
         ilen = ilen.invert().unwrap();
-        if ilen * E::from(n as u64) != E::ONE {
-            println!("Error in inv\n");
-        }
+        debug_assert_eq!(ilen * E::from(n as u64),E::ONE, "Error in inv");
         v.par_iter_mut().for_each(|val| {
             *val = *val * ilen;
         });
@@ -1542,8 +1540,6 @@ mod test {
 
     use ark_std::rand::{Rng, thread_rng};
     use goldilocks::GoldilocksExt2;
-
-    use super::super::testing::random_vector;
 
     use super::*;
     use multilinear_extensions::mle::MultilinearExtension;

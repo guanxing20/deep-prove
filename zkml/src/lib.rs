@@ -107,6 +107,7 @@ pub trait VectorTranscript<E: ExtensionField> {
     fn read_challenges(&mut self, n: usize) -> Vec<E>;
 }
 
+
 #[cfg(not(test))]
 impl<T: Transcript<E>, E: ExtensionField> VectorTranscript<E> for T {
     fn read_challenges(&mut self, n: usize) -> Vec<E> {
@@ -138,6 +139,17 @@ pub fn argmax<T: PartialOrd>(v: &[T]) -> Option<usize> {
     }
 
     Some(max_index)
+}
+
+pub trait NextPowerOfTwo {
+    /// Returns a new vector where each element is the next power of two.
+    fn next_power_of_two(&self) -> Self;
+}
+// For unsigned integer vectors
+impl NextPowerOfTwo for Vec<usize> {
+    fn next_power_of_two(&self) -> Self {
+        self.iter().map(|&i| i.next_power_of_two()).collect()
+    }
 }
 
 #[cfg(test)]
