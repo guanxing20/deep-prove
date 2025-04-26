@@ -26,7 +26,7 @@ pub(crate) trait ProvableOp: Op<Element> {
         &self,
         id: PolyID,
         aux: ContextAux,
-    ) -> Option<(LayerCtx<E>, ContextAux)>
+    ) -> (LayerCtx<E>, ContextAux)
     where
         E: ExtensionField + DeserializeOwned,
         E::BaseField: Serialize + DeserializeOwned;

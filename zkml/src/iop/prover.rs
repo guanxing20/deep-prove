@@ -111,6 +111,12 @@ where
             (Layer::Pooling(pooling), LayerCtx::Pooling(info)) => {
                 pooling.prove_pooling(self, last_claim, input, &step.output, info)
             }
+            (Layer::Reshape(_), LayerCtx::Reshape) => {
+                // reshape doesn't change anything apart the shape but we dont "prove" the shape really
+                // we still include a dummy proof tho just for consistency with the context at the verifier side
+                self.push_proof(LayerProof::Reshape);
+                Ok(last_claim)
+            }
             _ => bail!(
                 "inconsistent proof step {} and info step {} from ctx",
                 step.layer.describe(),
@@ -412,9 +418,9 @@ where
 
     pub fn prove<'b>(
         mut self,
-        full_trace: InferenceTrace<'b, Element, E>,
+        trace: InferenceTrace<'b, Element, E>,
     ) -> anyhow::Result<Proof<E>> {
-        let trace = full_trace.provable_steps();
+        //let trace = full_trace.provable_steps();
         // write commitments and polynomials info to transcript
         self.ctx.write_to_transcript(self.transcript)?;
         // then create the context for the witness polys -

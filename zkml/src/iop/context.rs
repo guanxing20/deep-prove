@@ -81,7 +81,7 @@ where
         };
         let mut step_infos = Vec::with_capacity(model.layer_count());
         debug!("Context : layer info generation ...");
-        for (id, layer) in model.provable_layers() {
+        for (id, layer) in model.layers() {
             trace!(
                 "Context : {}-th layer {}info generation ...",
                 id,
@@ -91,6 +91,7 @@ where
             step_infos.push(info);
             ctx_aux = new_aux;
         }
+        println!("step_infos: {:?}", step_infos.iter().map(|x| x.variant_name()).join(", "));
         debug!("Context : commitment generating ...");
         let commit_ctx = precommit::Context::generate_from_model(model)
             .context("can't generate context for commitment part")?;

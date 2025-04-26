@@ -32,7 +32,7 @@ use crate::{
     tensor::{ConvData, Number, Tensor},
 };
 use activation::ActivationCtx;
-use common::{Op, QuantizableOp};
+use common::{Op, ProvableOp, QuantizableOp};
 use convolution::{ConvCtx, ConvProof, SchoolBookConvCtx};
 use dense::{DenseCtx, DenseProof};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -86,6 +86,7 @@ where
     Activation(ActivationProof<E>),
     Requant(RequantProof<E>),
     Pooling(PoolingProof<E>),
+    Reshape,
 }
 #[derive(Clone, Debug)]
 pub enum LayerOutput<F>
@@ -268,6 +269,7 @@ impl Layer<Element> {
             Layer::Activation(activation) => activation.step_info(id, aux),
             Layer::Requant(requant) => requant.step_info(id, aux),
             Layer::Pooling(pooling) => pooling.step_info(id, aux),
+            Layer::Reshape(reshape) => reshape.step_info(id, aux),
             _ => panic!(
                 "Layer::step_info: layer {} can not be proven",
                 self.describe()
@@ -358,6 +360,7 @@ where
             Self::Activation(_) => "Activation".to_string(),
             Self::Requant(_) => "Requant".to_string(),
             Self::Pooling(_) => "Pooling".to_string(),
+            Self::Reshape => "Reshape".to_string(),
         }
     }
 
@@ -365,6 +368,7 @@ where
         match self {
             LayerProof::Dense(..) => None,
             LayerProof::Convolution(..) => None,
+            LayerProof::Reshape => None,
             LayerProof::Activation(ActivationProof { lookup, .. })
             | LayerProof::Requant(RequantProof { lookup, .. })
             | LayerProof::Pooling(PoolingProof { lookup, .. }) => Some(lookup.fractional_outputs()),

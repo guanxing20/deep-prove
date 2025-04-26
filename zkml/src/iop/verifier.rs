@@ -162,6 +162,10 @@ where
                 (LayerProof::<E>::Convolution(proof), LayerCtx::<E>::Convolution(info)) => {
                     info.verify_convolution(&mut self, output_claim, &proof)?
                 }
+                (LayerProof::<E>::Reshape, LayerCtx::Reshape) => {
+                    // reshape doesn't change anything apart the shape but we dont "prove" the shape really
+                    output_claim
+                }
                 _ => bail!(
                     "Step proof: {} and step info: {} did not match",
                     proof_and_step.0.variant_name(),
