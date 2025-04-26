@@ -102,12 +102,12 @@ impl<T: Number> Dense<T> {
     pub fn output_shape(&self, input_shape: &[usize]) -> Vec<usize> {
         assert_eq!(
             input_shape.iter().product::<usize>(),
-            self.matrix.ncols_2d(),
+            self.unpadded_matrix_shape[1],
             "unpadded_matrix_shape must be 2D: input_shape {:?} vs matrix {:?}",
             input_shape,
-            self.matrix.get_shape()
+            self.unpadded_matrix_shape
         );
-        vec![1, self.matrix.nrows_2d()]
+        vec![self.unpadded_matrix_shape[0]]
     }
     pub fn describe(&self) -> String {
         format!(
@@ -347,7 +347,7 @@ where
             input_shape,
             self.unpadded_matrix_shape
         );
-        vec![1, self.unpadded_matrix_shape[0]]
+        vec![self.unpadded_matrix_shape[0]]
     }
     pub(crate) fn verify_dense<T: Transcript<E>>(
         &self,

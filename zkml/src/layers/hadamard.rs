@@ -69,9 +69,9 @@ impl<F: ExtensionField> HadamardProof<F> {
 #[allow(unused)]
 pub fn prove<F: ExtensionField, T: Transcript<F>>(
     transcript: &mut T,
-    output_claim: Claim<F>,
-    v1: Tensor<Element>,
-    v2: Tensor<Element>,
+    output_claim: &Claim<F>,
+    v1: &Tensor<Element>,
+    v2: &Tensor<Element>,
 ) -> HadamardProof<F> {
     assert_eq!(
         output_claim.point.len(),
@@ -150,9 +150,9 @@ mod test {
         let output_claim = Claim::new(r, output_eval);
         let proof = prove(
             &mut transcript,
-            output_claim.clone(),
-            v1.clone(),
-            v2.clone(),
+            &output_claim.clone(),
+            &v1.clone(),
+            &v2.clone(),
         );
 
         let ctx = HadamardCtx::new(&v1, &v2);

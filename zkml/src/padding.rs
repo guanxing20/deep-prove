@@ -69,7 +69,7 @@ fn reshape(si: &mut ShapeInfo) -> Result<Reshape> {
     Ok(Reshape)
 }
 
-fn pad_conv(mut c: Convolution<Element>, si: &mut ShapeInfo) -> Result<Convolution<Element>> {
+fn pad_conv(c: Convolution<Element>, si: &mut ShapeInfo) -> Result<Convolution<Element>> {
     si.input_shape_og = safe_conv2d_shape(&si.input_shape_og, &c.filter.get_shape())?;
     let weight_shape = c.filter.get_shape();
     // Perform basic sanity checks on the tensor dimensions

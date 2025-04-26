@@ -264,6 +264,7 @@ where
     pub input_fft: Vec<Vec<E>>, // FFT(input)
     pub prod: Vec<Vec<E>>,  // FFT(input) * FFT(weights)
     pub output: Vec<Vec<E>>, // iFFT(FFT(input) * FFT(weights)) ==> conv
+    pub output_as_element: Vec<Element>, // output as element
 }
 
 impl<E> ConvData<E>
@@ -276,18 +277,9 @@ where
         input_fft: Vec<Vec<E>>,
         prod: Vec<Vec<E>>,
         output: Vec<Vec<E>>,
+        n_x: usize,
     ) -> Self {
-        Self {
-            real_input,
-            input,
-            input_fft,
-            prod,
-            output,
-        }
-    }
-
-    pub fn output_as_element(&self, n_x: usize) -> Vec<Element> {
-        self.output
+        let output_elems = output
             .iter()
             .map(|e| {
                 index_u(e.as_slice(), n_x)
@@ -295,7 +287,18 @@ where
                     .collect::<Vec<_>>()
             })
             .flatten()
-            .collect::<Vec<_>>()
+            .collect::<Vec<_>>();
+        Self {
+            real_input,
+            input,
+            input_fft,
+            prod,
+            output,
+            output_as_element: output_elems,
+        }
+    }
+    pub fn set_output(&mut self, output: &[Element]) {
+        self.output_as_element = output.to_vec();
     }
 }
 
@@ -444,20 +447,11 @@ impl Tensor<Element> {
         }
 
         // TODO: remove the requirement to keep the output value intact
-        let output = out.clone();
-        let out_element = out
-            .into_par_iter()
-            .map(|e| {
-                index_u(e.as_slice(), n_x)
-                    .map(|e| e.into_element())
-                    .collect::<Vec<_>>()
-            })
-            .flatten()
-            .collect::<Vec<_>>();
-
+        let output = out;
+        let conv_data = ConvData::new(real_input, input, x_vec, prod, output, n_x);
         return (
-            Tensor::new(vec![self.shape[0], n_x, n_x], out_element),
-            ConvData::new(real_input, input, x_vec, prod, output),
+            Tensor::new(vec![self.shape[0], n_x, n_x], conv_data.output_as_element.clone()),
+            conv_data,
         );
     }
 
@@ -514,11 +508,9 @@ impl Tensor<Element> {
             .unzip();
         // TODO: remove the requirement to keep the output value intact
         let output = out.clone();
-        let conv_data = ConvData::new(real_input, input, x_vec, prod, output);
-        println!("INSIDE CONV FFT: x.shape = {:?}", x.shape);
-        let out_element = conv_data.output_as_element(n_x);
+        let conv_data = ConvData::new(real_input, input, x_vec, prod, output,n_x);
         return (
-            Tensor::new(vec![self.shape[0], n_x, n_x], out_element),
+            Tensor::new(vec![self.shape[0], n_x, n_x], conv_data.output_as_element.clone()),
             conv_data,
         );
     }

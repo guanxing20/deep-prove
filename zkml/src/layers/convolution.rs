@@ -1,4 +1,4 @@
-use crate::{VectorTranscript, padding::PaddingMode};
+use crate::{layers::hadamard, padding::PaddingMode, quantization::TensorFielder, VectorTranscript};
 use core::f32;
 
 use crate::{
@@ -60,6 +60,7 @@ pub struct ConvCtx<E> {
     pub real_nw: usize,
     pub nw: usize,
     pub filter_size: usize,
+    pub unpadded_filter_shape: Vec<usize>,
 }
 
 pub fn to_bits<E: ExtensionField>(mut num: usize, bitlen: usize) -> Vec<E> {
@@ -225,14 +226,23 @@ impl Convolution<Element> {
         input: &Tensor<Element>,
         unpadded_input_shape: &[usize],
     ) -> (Tensor<Element>, ConvData<E>) {
-        let (output, proving_data) = self.filter.fft_conv(&input);
+        let (output, mut proving_data) = self.filter.fft_conv(&input);
         let conv_output = self.add_bias(&output);
+        // we record here the output _after_ the bias addition. During proving it's necessary since we're proving the clearing garbage
+        // and that produces a new claim on this output.
+        proving_data.set_output(conv_output.get_data());
+        println!("INFERENCE: conv_after_bias.shape(): {:?}", conv_output.get_shape());
+        println!("INFERENCE: conv_after_bias.data(): {:?}", &conv_output.get_data()[..30]);
+        println!("INFERENCE: unpadded_input_shape: {:?}", unpadded_input_shape);
+        println!("INFERENCE: output.shape(): {:?}", output.get_shape());
         // At this stage, we're creating a "garbage clearing" tensor that sets all garbage values to 0. This is necessary
         // since the garbage might be of any value and we need to restrict the range of the output due to requantization proving logic.
         // println!("unpadded_input_shape: {:?}", unpadded_input_shape);
         // println!("self.unpadded_shape: {:?}", self.unpadded_shape);
         //(conv_output, proving_data)
+        //let unpadded_output_shape = conv2d_shape(unpadded_input_shape, &self.unpadded_shape);
         let unpadded_output_shape = self.output_shape(unpadded_input_shape, PaddingMode::NoPadding);
+        println!("INFERENCE: unpadded_output_shape: {:?}", unpadded_output_shape);
         let cleared_tensor = clear_garbage(&conv_output, &unpadded_output_shape);
         debug_assert!({
             // check that applying the clearing tensor to the conv output gives the same result - as we'd be using the clearing tensor
@@ -453,6 +463,7 @@ impl Convolution<Element> {
             nw: self.filter.nw(),
             real_nw: self.filter.real_nw(),
             filter_size: self.filter_size(),
+            unpadded_filter_shape: self.unpadded_shape.clone(),
         });
         (conv_info, aux)
     }
@@ -470,7 +481,8 @@ impl Convolution<Element> {
         last_claim: Claim<E>,
         // Struct containing all necessary information
         // to generate a convolution proof
-        _output: &Tensor<E>,
+        output: &Tensor<E>,
+        unpadded_output_shape: &[usize],
         proving_data: &ConvData<E>,
         info: &ConvCtx<E>,
     ) -> anyhow::Result<Claim<E>>
@@ -478,6 +490,34 @@ impl Convolution<Element> {
         E::BaseField: Serialize + DeserializeOwned,
         E: Serialize + DeserializeOwned,
     {
+        // First part is proving the clearing of the garbage has been done correctly.
+        // For this, we create the clearing garbage tensor and just prove hadamard with the output.
+        // This results in two claims: one for the non-cleared tensor and one for the clearing tensor (only 1s and 0s)
+        // The non-cleared tensor claim gets passed to the main regular logic of convolution
+        // The clearing tensor one gets stored in the proof and will be checked manually by the verifier (CURRENTLY)
+        let clearing_tensor = new_clearing_tensor(unpadded_output_shape, &output.get_shape());
+        // Take the elements BEFORE bias addition - this is what the rest of the convolution proving step expects.
+        // TODO: could trade off less memory by directly recomputing it from conv data with the input shape as well.
+        let conv_after_bias = Tensor::new(output.get_shape(), proving_data.output_as_element.clone());
+        debug_assert!({
+                println!("PROVE: conv_after_bias.shape(): {:?}", conv_after_bias.get_shape());
+                println!("PROVE: conv_after_bias.data(): {:?}", &conv_after_bias.get_data()[..30]);
+                println!("PROVE: unpadded_output_shape: {:?}", unpadded_output_shape);
+                println!("PROVE: output.shape(): {:?}", output.get_shape());
+                let cleared_out = conv_after_bias.flatten().mul(&clearing_tensor);
+                let fielded: Tensor<E> = cleared_out.to_fields();
+                fielded.get_data().to_vec() == output.get_data()
+        });
+        let clearing_proof = hadamard::prove(
+            prover.transcript,
+            &last_claim,
+            &conv_after_bias,
+            &clearing_tensor,
+        );
+        // since v1 is the non cleared tensor, this is what the rest of the convolution proving expects
+        let last_claim = Claim::new(clearing_proof.random_point(), clearing_proof.v1_eval());
+
+
         let filter = self;
         assert_eq!(
             filter.filter_size() * filter.kw() * 2,
@@ -786,239 +826,6 @@ impl Convolution<Element> {
 
         Ok(final_claim)
     }
-    // pub fn prove_convolution_step<E: ExtensionField, T: Transcript<E>>(
-    // &self,
-    // prover: &mut Prover<E, T>,
-    // last random claim made
-    // last_claim: Claim<E>,
-    // Struct containing all necessary information
-    // to generate a convolution proof
-    // _output: &Tensor<E>,
-    // proving_data: &ConvData<E>,
-    // info: &ConvCtx<E>,
-    // ) -> anyhow::Result<Claim<E>>
-    // where
-    // E::BaseField: Serialize + DeserializeOwned,
-    // E: Serialize + DeserializeOwned,
-    // {
-    // let filter = self;
-    // assert_eq!(
-    // filter.filter_size() * filter.kw() * 2,
-    // proving_data.output.len() * proving_data.output[0].len(),
-    // "Inconsistent output size"
-    // );
-    // assert_eq!(
-    // (filter.filter_size() * filter.kw()).ilog2() as usize,
-    // last_claim.point.len(),
-    // "Inconsistent random point size. Expected : {}, got: {}",
-    // ((filter.filter_size() * filter.kw()).ilog2()),
-    // last_claim.point.len()
-    // );
-    // let mut r = vec![E::ZERO; last_claim.point.len() + 1];
-    // let mut bias_point = vec![E::ZERO; filter.kw().ilog2() as usize];
-    // for i in 0..(filter.filter_size().ilog2() as usize) {
-    // r[i] = E::ONE - last_claim.point[i];
-    // }
-    // for i in 0..(filter.kw().ilog2() as usize) {
-    // r[i + (filter.filter_size().ilog2() as usize) + 1] =
-    // last_claim.point[i + (filter.filter_size().ilog2() as usize)];
-    // bias_point[i] = last_claim.point[i + (filter.filter_size().ilog2() as usize)];
-    // }
-    // let mut bias_eval = E::ZERO;
-    // if bias_point.len() != 0 {
-    // bias_eval = filter
-    // .bias
-    // .evals_flat::<E>()
-    // .into_mle()
-    // .evaluate(&bias_point);
-    // } else if filter.bias.data.len() == 1 {
-    // bias_eval = filter.bias.evals_flat::<E>()[0];
-    // }
-    //
-    // debug_assert!({
-    // let y = proving_data
-    // .output
-    // .clone()
-    // .into_iter()
-    // .flatten()
-    // .collect::<Vec<_>>()
-    // .into_mle()
-    // .evaluate(&r);
-    // debug_assert_eq!(last_claim.eval - bias_eval, y, "Error in Conv 1");
-    // last_claim.eval - bias_eval == y
-    // });
-    //
-    // let mut temp_t = prover.transcript.clone();
-    // let (ifft_proof, ifft_claim, ifft_del_proof) =
-    // prover.prove_batch_ifft(r.clone(), &proving_data.prod);
-    //
-    // assert_eq!(
-    // filter.filter_size().ilog2() as usize + 1,
-    // ifft_proof.point.len(),
-    // "Error in ifft sumceck"
-    // );
-    // debug_assert!({
-    // IOPVerifierState::<E>::verify(
-    // last_claim.eval - bias_eval,
-    // &ifft_proof.clone(),
-    // &info.ifft_aux.clone(),
-    // &mut temp_t,
-    // );
-    // println!("iFFT Sumcheck Correct");
-    // 1 == 1
-    // });
-    //
-    // After this point, the verifier holds an evaluation claim of proving_data.prod at P1.randomness[0][i]
-    // Let r' = P1.randomness[0][i] and y is the evaluation claim of prod = proving_data.prod
-    // What we want to do now is to prove that prod has been correctly computed from X_fft and w (= proving_data.w)
-    // In other words we want to show that prod[i] = sum_{j \in [k_x]} x[j] o w[i][j] for each i in [k_w]
-    // For this let r1 be the last log(k_w) elements of r and r2 the first log(n_x^2) elements
-    // Compute the arrays beta1,beta2 such that beta1[i] = beta(i,r1) and beta2[i] = beta(i,r2)
-    //
-    // let mut r_ifft: Vec<E> = ifft_proof.point.clone();
-    // for i in (proving_data.output[0].len().ilog2() as usize)..r.len() {
-    // r_ifft.push(r[i]);
-    // }
-    //
-    // debug_assert!({
-    // let eval1 = proving_data
-    // .prod
-    // .clone()
-    // .into_iter()
-    // .flatten()
-    // .collect::<Vec<_>>()
-    // .into_mle()
-    // .evaluate(&r_ifft);
-    // let eval2 = ifft_claim[0];
-    // debug_assert_eq!(
-    // proving_data
-    // .prod
-    // .clone()
-    // .into_iter()
-    // .flatten()
-    // .collect::<Vec<_>>()
-    // .into_mle()
-    // .evaluate(&r_ifft),
-    // ifft_claim[0],
-    // "Error in Conv 1"
-    // );
-    // eval1 == eval2
-    // });
-    //
-    // let r1 = &r_ifft[(proving_data.output[0].len().ilog2() as usize)..];
-    // let r2 = &r_ifft[..(proving_data.output[0].len().ilog2() as usize)];
-    //
-    // let beta2 = compute_betas_eval(r2);
-    // Given beta1,beta2 observe that :
-    // \sum_{i \in [k_w]} beta1[i]prod[i] = \sum_{i \in [k_w]}sum_{j \in [k_x]} x[j] o w[i][j] =
-    // = sum_{j \in [k_x]}x[j]o(\sum_{i \in [k_w]}(beta[i]*w[i][j])). We let w_reduced[j] = \sum_{i \in [k_w]}(beta[i]*w[i][j])
-    // We have  \sum_{i \in [k_w]} beta1[i]prod[i] = sum_{j \in [k_x]} x[j]o w_{reduced[j]}.
-    // So here we compute w_reduced
-    //
-    // let beta_acc = vec![beta2.clone(); filter.kx()].concat();
-    //
-    // After computing w_reduced, observe that y = \sum_{k \in [n_x^2]} sum_{j \in [k_x]} beta2[k]*x[j][k]*w_reduced[j][k]
-    // This is a cubic sumcheck where v1 = [x[0][0],...,x[k_x][n_x^2]], v2 = [w_reduced[0][0],...,w_reduced[k_x][n_x^2]]
-    // and v3 = [beta2,..(k_x times)..,beta2]. So, first initialzie v3 and then invoke the cubic sumceck.
-    //
-    // We need to fix the high variables in place for the filter at r1.
-    // let f1 = filter
-    // .filter
-    // .evals_flat::<E>()
-    // .into_mle()
-    // .fix_high_variables(r1);
-    //
-    // let f2 = proving_data
-    // .input_fft
-    // .iter()
-    // .flatten()
-    // .copied()
-    // .collect::<Vec<_>>()
-    // .into_mle();
-    // let f3 = beta_acc.into_mle();
-    //
-    // let mut vp = VirtualPolynomial::<E>::new(f1.num_vars);
-    // vp.add_mle_list(
-    // vec![f1.clone().into(), f2.clone().into(), f3.clone().into()],
-    // E::ONE,
-    // );
-    // #[allow(deprecated)]
-    // let (hadamard_proof, state) = IOPProverState::<E>::prove_parallel(vp, prover.transcript);
-    // let hadamard_claims = state.get_mle_final_evaluations();
-    //
-    // let point = [hadamard_proof.point.as_slice(), r1].concat();
-    // let eval = hadamard_claims[0];
-    // prover
-    // .commit_prover
-    // .add_claim(info.poly_id, Claim::new(point, hadamard_claims[0]))
-    // .context("unable to add convolution claim")?;
-    // prover
-    // .commit_prover
-    // .add_claim(info.bias_poly_id, Claim::new(bias_point, bias_eval))
-    // .context("unable to add bias claim in convolution")?;
-    //
-    // Finally prove the correct computation of the x_fft and get an evaluation claim of the input
-    // let (fft_proof, fft_claim, fft_del_proof) = prover.prove_batch_fft(
-    // hadamard_proof.point.clone(),
-    // &mut proving_data.input.clone(),
-    // );
-    //
-    // prover.push_proof(LayerProof::Convolution(ConvProof {
-    // fft_proof: fft_proof.clone(),
-    // fft_claims: fft_claim.clone(),
-    // ifft_proof,
-    // fft_delegation_proof: fft_del_proof.0,
-    // ifft_delegation_proof: ifft_del_proof.0,
-    // hadamard_proof: hadamard_proof.clone(),
-    // ifft_claims: ifft_claim,
-    // fft_delegation_claims: fft_del_proof.1,
-    // ifft_delegation_claims: ifft_del_proof.1,
-    // hadamard_clams: hadamard_claims,
-    // bias_claim: bias_eval,
-    // }));
-    // let mut input_point = fft_proof.point.clone();
-    // let mut v = input_point.pop().unwrap();
-    // v = (E::ONE - v).invert().unwrap();
-    // debug_assert!({
-    // let mut p = [
-    // input_point.clone(),
-    // hadamard_proof.point[((filter.filter_size() * 2).ilog2() as usize)..].to_vec(),
-    // ]
-    // .concat();
-    // println!("({},{}), {}",proving_data.input.len(),proving_data.input[0].len(),p.len());
-    // let y = proving_data
-    // .input
-    // .clone()
-    // .into_iter()
-    // .flat_map(|v| v.into_iter())
-    // .collect::<Vec<E>>()
-    // .into_mle()
-    // .evaluate(&p);
-    // assert_eq!(y, fft_claim[0] * v, "Error in input eval CONV PROVER");
-    // for i in 0..((filter.filter_size().ilog2()) as usize) {
-    // p[i] = E::ONE - p[i];
-    // }
-    // assert_eq!(
-    // proving_data.real_input.clone().into_mle().evaluate(&p),
-    // fft_claim[0] * v,
-    // "Error in real input eval CONV PROVER"
-    // );
-    // proving_data.real_input.clone().into_mle().evaluate(&p) == fft_claim[0] * v
-    // });
-    // for i in 0..input_point.len() {
-    // input_point[i] = E::ONE - input_point[i];
-    // }
-    // let final_claim = Claim {
-    // point: [
-    // input_point.clone(),
-    // hadamard_proof.point[((filter.filter_size() * 2).ilog2() as usize)..].to_vec(),
-    // ]
-    // .concat(),
-    // eval: fft_claim[0] * v,
-    // };
-    //
-    // Ok(final_claim)
-    // }
 }
 
 impl<E> ConvCtx<E>
@@ -1540,8 +1347,8 @@ mod test {
             padded_input.get_shape()
         );
         assert_eq!(fft_output.get_shape(), fft_output_shape);
-        let fft_output_data =
-            conv_data.output_as_element(padded_input.get_shape()[1].next_power_of_two());
+        //let fft_output_data = conv_data.output_as_element(padded_input.get_shape()[1].next_power_of_two());
+        let fft_output_data = conv_data.output_as_element;
         let reconstructed_fft_tensor = Tensor::new(fft_output_shape.clone(), fft_output_data);
         subtest_clearing_methods(&reconstructed_fft_tensor, &output.get_shape());
         // let cleared_reconstructed_fft_tensor = clear_garbage(&reconstructed_fft_tensor, &output.get_shape());

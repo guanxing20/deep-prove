@@ -166,7 +166,7 @@ impl Model<Element> {
             );
             let input = trace.last_input();
             let output = layer.op(input, &unpadded_input_shape)?;
-            unpadded_input_shape = layer.output_shape(&unpadded_input_shape, self.padding);
+            unpadded_input_shape = layer.output_shape(&unpadded_input_shape, PaddingMode::NoPadding);
             println!(
                 "MODEL RUN: at layer {} -> OUTPUT unpadded shape: {:?}",
                 id, unpadded_input_shape
@@ -460,10 +460,10 @@ pub(crate) mod test {
                 if selector % MOD_SELECTOR == SELECTOR_DENSE {
                     // if true {
                     // last row becomes new column
-                    let (nrows, ncols) = (rng.gen_range(3..15), last_row);
+                    let (nrows, ncols) : (usize, usize) = (rng.gen_range(3..15), last_row);
                     last_row = nrows;
                     model.add_layer(Layer::Dense(
-                        Dense::random(vec![nrows, ncols]).pad_next_power_of_two(),
+                        Dense::random(vec![nrows.next_power_of_two(), ncols.next_power_of_two()]),
                     ));
                 } else if selector % MOD_SELECTOR == SELECTOR_RELU {
                     model.add_layer(Layer::Activation(Activation::Relu(Relu::new())));
@@ -684,8 +684,8 @@ pub(crate) mod test {
 
     #[test]
     fn test_model_manual_run() {
-        let dense1 = Dense::<Element>::random(vec![10, 11]).pad_next_power_of_two();
-        let dense2 = Dense::<Element>::random(vec![7, dense1.ncols()]).pad_next_power_of_two();
+        let dense1 = Dense::<Element>::random(vec![10usize.next_power_of_two(), 11usize.next_power_of_two()]);
+        let dense2 = Dense::<Element>::random(vec![7usize.next_power_of_two(), dense1.ncols().next_power_of_two()]);
         let input = Tensor::<Element>::random(vec![dense1.ncols()]);
         let output1 = dense1.op(&input);
         let final_output = dense2.op(&output1);
@@ -707,9 +707,9 @@ pub(crate) mod test {
 
     #[test]
     fn test_inference_trace_iterator() {
-        let dense1 = Dense::random(vec![10, 11]).pad_next_power_of_two();
+        let dense1 = Dense::random(vec![10usize.next_power_of_two(), 11usize.next_power_of_two()]);
         let relu1 = Activation::Relu(Relu);
-        let dense2 = Dense::random(vec![7, dense1.ncols()]).pad_next_power_of_two();
+        let dense2 = Dense::random(vec![7usize.next_power_of_two(), dense1.ncols().next_power_of_two()]);
         let relu2 = Activation::Relu(Relu);
         let input = Tensor::random(vec![dense1.ncols()]);
 
@@ -750,8 +750,8 @@ pub(crate) mod test {
 
     #[test]
     fn test_inference_trace_reverse_iterator() {
-        let dense1 = Dense::random(vec![10, 11]).pad_next_power_of_two();
-        let dense2 = Dense::random(vec![10, dense1.nrows()]).pad_next_power_of_two();
+        let dense1 = Dense::random(vec![10usize.next_power_of_two(), 11usize.next_power_of_two()]);
+        let dense2 = Dense::random(vec![10usize.next_power_of_two(), dense1.nrows()]);
         let input = Tensor::random(vec![dense1.ncols()]);
 
         let mut model = Model::new();

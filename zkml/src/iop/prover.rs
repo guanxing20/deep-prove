@@ -100,7 +100,7 @@ where
                 dense.prove_step(self, last_claim, input, &step.output, info)
             }
             (Layer::Convolution(filter), LayerCtx::Convolution(info)) => {
-                filter.prove_convolution_step(self, last_claim, &step.output, &step.conv_data, info)
+                filter.prove_convolution_step(self, last_claim, &step.output, &step.unpadded_shape, &step.conv_data, info)
             }
             (Layer::Activation(activation), LayerCtx::Activation(act_ctx)) => {
                 activation.prove_step(self, &last_claim, &step.output.get_data(), act_ctx)
