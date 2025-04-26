@@ -99,6 +99,7 @@ impl<T: Number> Dense<T> {
         }
     }
 
+    
     pub fn output_shape(&self, input_shape: &[usize]) -> Vec<usize> {
         assert_eq!(
             input_shape.iter().product::<usize>(),

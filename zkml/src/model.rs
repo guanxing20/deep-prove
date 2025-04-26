@@ -596,46 +596,24 @@ pub(crate) mod test {
         let trad_conv1: Tensor<Element> = Tensor::new(shape1.clone(), w1.clone());
         let trad_conv2: Tensor<i128> = Tensor::new(shape2.clone(), w2.clone());
         let trad_conv3: Tensor<i128> = Tensor::new(shape3.clone(), w3.clone());
-        let conv1 = trad_conv1.clone().into_fft_conv(&in_dimensions[0]);
         let conv2 = trad_conv2.clone().into_fft_conv(&in_dimensions[1]);
         let conv3 = trad_conv3.clone().into_fft_conv(&in_dimensions[2]);
 
 
         let mut model = Model::new();
-        model.add_layer(Layer::Convolution(Convolution::new_padded(
-            conv1.clone(),
-            bias1.clone(),
-            &shape1,
-        )));
-        model.add_layer(Layer::Convolution(Convolution::new_padded(
-            conv2.clone(),
+        model.add_layer(Layer::Convolution(Convolution::new(
+            trad_conv1.clone(),bias1.clone()).into_padded_and_ffted(&in_dimensions[0])
+        ));
+        model.add_layer(Layer::Convolution(Convolution::new(
+            trad_conv2.clone(),
             bias2.clone(),
-            &shape2,
-        )));
-        model.add_layer(Layer::Convolution(Convolution::new_padded(
-            conv3.clone(),
+        ).into_padded_and_ffted(&in_dimensions[1])));
+        model.add_layer(Layer::Convolution(Convolution::new(
+            trad_conv3.clone(),
             bias3.clone(),
-            &shape3,
-        )));
+        ).into_padded_and_ffted(&in_dimensions[2])));
 
         let input = Tensor::new(vec![1, 32, 32], random_vector_quant(1024));
-        /// TEST
-        let test_conv = Convolution::new(conv1.clone(), bias1.clone());
-        let (o1, _) = test_conv.op::<F>(&input.clone(), &input.get_shape());
-        let regular_filter = Tensor::new(shape1.clone(), w1.clone());
-        let regular_o1 = input.conv2d(&regular_filter, &bias1, 1);
-        let o1bis = padded_conv2d_shape(&input.get_shape(), &shape1);
-        let model_o1 = test_conv.output_shape(&input.get_shape(), model.padding);
-        let expected_o1 = test_conv.output_shape(&input.get_shape(), PaddingMode::Padding);
-        println!(
-            "MODEL: regular_o1: {:?} vs o1: {:?} vs o1bis: {:?} vs model_o1 (padding {:?}) {:?} vs expected_o1 {:?}",
-            regular_o1.get_shape(),
-            o1.get_shape(),
-            o1bis,
-            model.padding,
-            model_o1,
-            expected_o1
-        );
         /// END TEST
         let trace: crate::model::InferenceTrace<'_, _, GoldilocksExt2> =
             model.run::<F>(input.clone()).unwrap();

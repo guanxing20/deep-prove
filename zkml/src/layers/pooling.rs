@@ -282,6 +282,9 @@ impl Pooling {
 }
 
 impl PoolingCtx {
+    pub fn output_shape(&self, input_shape: &[usize]) -> Vec<usize> {
+        maxpool2d_shape(input_shape)
+    }
     pub(crate) fn verify_pooling<E: ExtensionField, T: Transcript<E>>(
         &self,
         verifier: &mut Verifier<E, T>,

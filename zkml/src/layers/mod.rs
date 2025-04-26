@@ -73,6 +73,7 @@ where
     Requant(RequantCtx),
     Pooling(PoolingCtx),
     Table(TableCtx<E>),
+    Reshape,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -109,13 +110,28 @@ where
             Self::Requant(_) => "Requant".to_string(),
             Self::Pooling(_) => "Pooling".to_string(),
             Self::Table(..) => "Table".to_string(),
+            Self::Reshape => "Reshape".to_string(),
         }
     }
 
+    // TODO: is this used and correct ??
     pub fn requires_lookup(&self) -> bool {
         match self {
             Self::Dense(..) => false,
+            Self::Reshape => false,
             _ => true,
+        }
+    }
+    pub fn output_shape(&self, input_shape: &[usize], padding_mode: PaddingMode) -> Vec<usize> {
+        match self {
+            Self::Dense(ref dense) => dense.output_shape(input_shape),
+            Self::Convolution(ref filter) => filter.output_shape(input_shape, padding_mode),
+            Self::SchoolBookConvolution(ref _filter) => panic!("SchoolBookConvolution should NOT be used in proving"),
+            Self::Activation(..) => input_shape.to_vec(),
+            Self::Requant(..) => input_shape.to_vec(),
+            Self::Pooling(ref pooling) => pooling.output_shape(input_shape),
+            Self::Reshape => <Reshape as Op<Element>>::output_shape(&Reshape, input_shape),
+            Self::Table(..) => panic!("Table should NOT be used in proving"),
         }
     }
 }

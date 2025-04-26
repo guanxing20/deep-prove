@@ -28,6 +28,8 @@ where
     pub table_commitment: BasefoldCommitment<E>,
 }
 
+pub const RESHAPE_FS_ID: u64 = 0xdeadbeef;
+
 /// Common information between prover and verifier
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(bound(serialize = "E: Serialize", deserialize = "E: DeserializeOwned"))]
@@ -45,6 +47,7 @@ where
     pub weights: precommit::Context<E>,
     /// Context holding all the different table types we use in lookups
     pub lookup: LookupContext,
+
 }
 
 /// Auxiliary information for the context creation
@@ -139,6 +142,9 @@ where
                     info.hadamard.write_to_transcript(t);
                 }
                 LayerCtx::SchoolBookConvolution(_info) => {}
+                LayerCtx::Reshape => {
+                    t.append_field_element(&E::BaseField::from(RESHAPE_FS_ID as u64));
+                }
             }
         }
         self.weights.write_to_transcript(t)?;

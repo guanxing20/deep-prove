@@ -120,8 +120,8 @@ impl<T: Number> Convolution<T> {
         match padding_mode {
             /// unpadded shape is the shape found in onxx file for example
             PaddingMode::NoPadding => conv2d_shape(input_shape, &self.unpadded_shape),
-            PaddingMode::Padding => padded_conv2d_shape(input_shape, &self.filter.real_shape()),
-            //_ => panic!("Padding mode not supported"),
+            //PaddingMode::Padding => padded_conv2d_shape(input_shape, &self.filter.real_shape()),
+            _ => panic!("Padding mode not supported"),
         }
     }
 
@@ -240,8 +240,8 @@ impl Convolution<Element> {
         // println!("unpadded_input_shape: {:?}", unpadded_input_shape);
         // println!("self.unpadded_shape: {:?}", self.unpadded_shape);
         //(conv_output, proving_data)
-        //let unpadded_output_shape = conv2d_shape(unpadded_input_shape, &self.unpadded_shape);
-        let unpadded_output_shape = self.output_shape(unpadded_input_shape, PaddingMode::NoPadding);
+        let unpadded_output_shape = conv2d_shape(unpadded_input_shape, &self.unpadded_shape);
+        //let unpadded_output_shape = self.output_shape(unpadded_input_shape, PaddingMode::NoPadding);
         println!("INFERENCE: unpadded_output_shape: {:?}", unpadded_output_shape);
         let cleared_tensor = clear_garbage(&conv_output, &unpadded_output_shape);
         debug_assert!({
@@ -833,6 +833,12 @@ where
     E::BaseField: Serialize + DeserializeOwned,
     E: ExtensionField + Serialize + DeserializeOwned,
 {
+    pub fn output_shape(&self, input_shape: &[usize], padding_mode: PaddingMode) -> Vec<usize> {
+        match padding_mode {
+            PaddingMode::NoPadding => conv2d_shape(input_shape, &self.unpadded_filter_shape),
+            PaddingMode::Padding => panic!("Padding mode not supported in ctx"),
+        }
+    }
     pub(crate) fn verify_fft_delegation<T: Transcript<E>>(
         &self,
         verifier: &mut Verifier<E, T>,
@@ -893,6 +899,15 @@ where
         last_claim: Claim<E>,
         proof: &ConvProof<E>,
     ) -> anyhow::Result<Claim<E>> {
+        /// The first thing to do is to recreate the hadamard clearing tensor
+        /// Since this is only coming from public information, the verifier
+        /// creates the vector and evaluates it. 
+        /// NOTE: for succinctness of verification, we could also have
+        /// the prover commits to the tensor product and we could skip this step.
+        /// OR find a closed formula
+        /// 
+        /// To recreat it, we need the unpadded output shape and the real output shape.
+        /// 
         let conv_claim = last_claim.eval - proof.bias_claim;
 
         IOPVerifierState::<E>::verify(
