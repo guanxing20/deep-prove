@@ -9,7 +9,7 @@ members = [
   "transcript",
   "simple-frontend",
   "gkr",
-  "zkml", "sparse_sumcheck",
+  "zkml",
 ]
 resolver = "2"
 
