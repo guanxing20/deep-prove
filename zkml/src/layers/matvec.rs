@@ -9,11 +9,7 @@ use serde::{Serialize, de::DeserializeOwned};
 use sumcheck::structs::{IOPProof, IOPProverState, IOPVerifierState};
 use transcript::Transcript;
 
-use crate::{
-    Claim, Element, Tensor,
-    quantization::{TensorFielder},
-    tensor::Number,
-};
+use crate::{Claim, Element, Tensor, quantization::TensorFielder, tensor::Number};
 
 /// A matrix vector multiplication proving logic where the matrix is NOT committed to, i.e.
 /// the verifier will have to evaluate himself the matrix at a random point.

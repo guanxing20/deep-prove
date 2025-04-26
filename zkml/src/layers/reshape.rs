@@ -2,8 +2,8 @@ use ff_ext::ExtensionField;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use crate::{
-    NextPowerOfTwo,
-    commit::precommit::PolyID, iop::context::ContextAux, layers::LayerCtx, tensor::Number, Element, ScalingFactor, Tensor
+    Element, NextPowerOfTwo, ScalingFactor, Tensor, commit::precommit::PolyID,
+    iop::context::ContextAux, layers::LayerCtx, tensor::Number,
 };
 
 use super::{

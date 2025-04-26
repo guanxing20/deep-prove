@@ -399,8 +399,13 @@ impl Model<f32> {
 pub(crate) mod test {
     use crate::{
         layers::{
-            activation::{Activation, Relu}, convolution::Convolution, dense::Dense, pooling::{Maxpool2D, Pooling, MAXPOOL2D_KERNEL_SIZE}, Layer
-        }, testing::{random_bool_vector, random_vector},
+            Layer,
+            activation::{Activation, Relu},
+            convolution::Convolution,
+            dense::Dense,
+            pooling::{MAXPOOL2D_KERNEL_SIZE, Maxpool2D, Pooling},
+        },
+        testing::{random_bool_vector, random_vector},
     };
     use ark_std::rand::{Rng, RngCore, thread_rng};
     use ff_ext::ExtensionField;
@@ -412,11 +417,7 @@ pub(crate) mod test {
     };
     use sumcheck::structs::{IOPProverState, IOPVerifierState};
 
-    use crate::{
-        Element, default_transcript,
-        quantization::TensorFielder,
-        tensor::Tensor,
-    };
+    use crate::{Element, default_transcript, quantization::TensorFielder, tensor::Tensor};
 
     use super::Model;
 

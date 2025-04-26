@@ -246,7 +246,8 @@ impl Convolution<Element> {
         let unpadded_output_shape = conv2d_shape(unpadded_input_shape, &self.unpadded_shape);
         debug_assert_eq!(
             {
-                let fft_output_shape = padded_conv2d_shape(&input.get_shape(), &self.filter.real_shape());
+                let fft_output_shape =
+                    padded_conv2d_shape(&input.get_shape(), &self.filter.real_shape());
                 fft_output_shape
             },
             conv_output.get_shape(),
@@ -1291,9 +1292,10 @@ pub fn padded_conv2d_shape(input_shape: &[usize], filter_shape: &[usize]) -> Vec
 mod test {
     use goldilocks::GoldilocksExt2;
 
-    use crate::{layers::{
-        dense::{self, Dense},
-    }, NextPowerOfTwo};
+    use crate::{
+        NextPowerOfTwo,
+        layers::dense::{self, Dense},
+    };
 
     use super::*;
 

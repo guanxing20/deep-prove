@@ -2,12 +2,7 @@ use anyhow::{Context, Result, ensure};
 
 use crate::{
     Element,
-    layers::{
-        Layer,
-        convolution::{Convolution},
-        dense::Dense,
-        reshape::Reshape,
-    },
+    layers::{Layer, convolution::Convolution, dense::Dense, reshape::Reshape},
     model::Model,
     onnx_parse::{check_filter, safe_conv2d_shape, safe_maxpool2d_shape},
 };

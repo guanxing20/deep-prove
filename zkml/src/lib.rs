@@ -107,7 +107,6 @@ pub trait VectorTranscript<E: ExtensionField> {
     fn read_challenges(&mut self, n: usize) -> Vec<E>;
 }
 
-
 #[cfg(not(test))]
 impl<T: Transcript<E>, E: ExtensionField> VectorTranscript<E> for T {
     fn read_challenges(&mut self, n: usize) -> Vec<E> {

@@ -11,7 +11,7 @@ use ff::Field;
 use ff_ext::ExtensionField;
 use gkr::util::ceil_log2;
 use itertools::Itertools;
-use multilinear_extensions::mle::{IntoMLE};
+use multilinear_extensions::mle::IntoMLE;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use statrs::statistics::{Data, Distribution};
 use std::ops::{Add, Mul, Sub};
@@ -406,8 +406,8 @@ impl Requant {
             point: point.clone(),
             eval: first_claim.eval - E::from((*quantization::RANGE / 2) as u64),
         };
-        //println!("correct claim eval: {:?}", corrected_claim.eval);
-        //println!(
+        // println!("correct claim eval: {:?}", corrected_claim.eval);
+        // println!(
         //    "output eval: {:?}",
         //    output.to_vec().into_mle().evaluate(&corrected_claim.point)
         //);

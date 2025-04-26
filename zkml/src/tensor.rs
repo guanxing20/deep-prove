@@ -8,7 +8,7 @@ use ff::Field;
 use ff_ext::ExtensionField;
 use goldilocks::GoldilocksExt2;
 use itertools::Itertools;
-use multilinear_extensions::mle::{DenseMultilinearExtension};
+use multilinear_extensions::mle::DenseMultilinearExtension;
 use rayon::{
     iter::{
         IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator,
@@ -244,7 +244,7 @@ pub fn fft<E: ExtensionField + Send + Sync>(v: &mut Vec<E>, flag: bool) {
     if flag == true {
         let mut ilen = E::from(n as u64);
         ilen = ilen.invert().unwrap();
-        debug_assert_eq!(ilen * E::from(n as u64),E::ONE, "Error in inv");
+        debug_assert_eq!(ilen * E::from(n as u64), E::ONE, "Error in inv");
         v.par_iter_mut().for_each(|val| {
             *val = *val * ilen;
         });
