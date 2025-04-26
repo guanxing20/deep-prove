@@ -336,7 +336,6 @@ where
         f_m.fix_high_variables_in_place(&r2);
 
         // Construct the virtual polynomial and run the sumcheck prover
-
         let f_red = w_red.into_mle();
 
         let mut vp = VirtualPolynomial::<E>::new(f_m.num_vars);

@@ -717,7 +717,7 @@ mod tests {
         info!("GENERATING Proof DONE...");
         let mut verifier_transcript: BasicTranscript<GoldilocksExt2> =
             BasicTranscript::new(b"m2vec");
-        let io = IO::new(input.to_fields(), output.to_fields());
+        let io = IO::new(input.to_fields(), output.to_fields(),ctx.unpadded_input_shape.clone());
         verify::<_, _>(ctx, proof, io, &mut verifier_transcript).unwrap();
     }
 
@@ -742,8 +742,8 @@ mod tests {
         assert!(result.is_ok(), "Failed: {:?}", result.unwrap_err());
 
         let (model, md) = result.unwrap();
-        let input = crate::tensor::Tensor::<f32>::random(model.input_shape()).quantize(&md.input);
-        let input = model.prepare_input(input);
+        let native_input = crate::tensor::Tensor::<f32>::random(model.unpadded_input_shape()).quantize(&md.input);
+        let input = model.prepare_input(native_input);
         let trace = model.run::<F>(input.clone()).unwrap();
         println!("Result: {:?}", trace.final_output());
 
@@ -757,7 +757,7 @@ mod tests {
         let proof = prover.prove(trace).expect("unable to generate proof");
         let mut verifier_transcript: BasicTranscript<GoldilocksExt2> =
             BasicTranscript::new(b"m2vec");
-        let io = IO::new(input.to_fields(), output.to_fields());
+        let io = IO::new(input.to_fields(), output.to_fields(),model.unpadded_input_shape());
         verify::<_, _>(ctx, proof, io, &mut verifier_transcript).unwrap();
     }
 }

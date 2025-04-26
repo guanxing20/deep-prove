@@ -201,7 +201,7 @@ mod test {
         let proof = prover.prove(trace).expect("unable to generate proof");
 
         let mut verifier_transcript = default_transcript();
-        let io = IO::new(input.to_fields(), output.to_fields());
+        let io = IO::new(input.to_fields(), output.to_fields(),model.unpadded_input_shape());
         verify::<_, _>(ctx, proof, io, &mut verifier_transcript).expect("invalid proof");
         println!("[+] Verify proof: valid");
         Ok(())

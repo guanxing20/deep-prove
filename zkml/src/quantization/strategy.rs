@@ -54,7 +54,7 @@ impl ScalingStrategy for InferenceObserver {
     fn quantize(&self, model: Model<f32>) -> Result<(Model<Element>, ModelMetadata)> {
         let mut tracker = InferenceTracker::new();
         let input_shape = model.input_shape();
-        let input_not_padded_shape = model.input_not_padded();
+        let input_not_padded_shape = model.unpadded_input_shape();
         let inputs = if self.inputs.is_empty() {
             let size = input_not_padded_shape.iter().product();
             (0..10)
@@ -300,7 +300,7 @@ impl ScalingStrategy for AbsoluteMax {
         let mut md = MetadataBuilder::new();
         md.set_input_scaling(last_input_scaling_factor.clone());
         let input_shape = model.input_shape();
-        let input_not_padded_shape = model.input_not_padded();
+        let input_not_padded_shape = model.unpadded_input_shape();
         let quantized_layers = model
             .layers
             .into_iter()

@@ -47,6 +47,8 @@ where
     pub weights: precommit::Context<E>,
     /// Context holding all the different table types we use in lookups
     pub lookup: LookupContext,
+    /// unpadded shape of the first initial input
+    pub unpadded_input_shape: Vec<usize>,
 
 }
 
@@ -62,6 +64,7 @@ where
     E::BaseField: Serialize + DeserializeOwned,
     E: Serialize + DeserializeOwned,
 {
+
     /// Generates a context to give to the verifier that contains informations about the polynomials
     /// to prove at each step.
     /// INFO: it _assumes_ the model is already well padded to power of twos.
@@ -101,6 +104,7 @@ where
             steps_info: step_infos.into_iter().rev().collect_vec(),
             weights: commit_ctx,
             lookup: lookup_ctx,
+            unpadded_input_shape: model.unpadded_input_shape(),
         })
     }
 

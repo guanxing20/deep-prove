@@ -349,7 +349,7 @@ fn run(args: Args) -> anyhow::Result<()> {
 
         info!("[+] Running verifier");
         let mut verifier_transcript = default_transcript();
-        let io = IO::new(input_tensor.to_fields(), output.to_fields());
+        let io = IO::new(input_tensor.to_fields(), output.to_fields(),ctx.as_ref().unwrap().unpadded_input_shape.clone());
         bencher.r(CSV_VERIFYING, || {
             verify::<_, _>(
                 ctx.as_ref().unwrap().clone(),

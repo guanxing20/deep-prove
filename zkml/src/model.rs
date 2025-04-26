@@ -99,7 +99,7 @@ impl<T: Number> Model<T> {
             .filter(|(_, l)| (*l).is_provable())
     }
 
-    pub fn input_not_padded(&self) -> Vec<usize> {
+    pub fn unpadded_input_shape(&self) -> Vec<usize> {
         self.input_not_padded.clone()
     }
     pub fn input_shape(&self) -> Vec<usize> {
@@ -596,9 +596,6 @@ pub(crate) mod test {
         let trad_conv1: Tensor<Element> = Tensor::new(shape1.clone(), w1.clone());
         let trad_conv2: Tensor<i128> = Tensor::new(shape2.clone(), w2.clone());
         let trad_conv3: Tensor<i128> = Tensor::new(shape3.clone(), w3.clone());
-        let conv2 = trad_conv2.clone().into_fft_conv(&in_dimensions[1]);
-        let conv3 = trad_conv3.clone().into_fft_conv(&in_dimensions[2]);
-
 
         let mut model = Model::new();
         model.add_layer(Layer::Convolution(Convolution::new(
@@ -841,7 +838,7 @@ pub(crate) mod test {
         let proof = prover.prove(trace).expect("unable to generate proof");
         let mut verifier_transcript: BasicTranscript<GoldilocksExt2> =
             BasicTranscript::new(b"m2vec");
-        let io = IO::new(input.to_fields(), output.to_fields());
+        let io = IO::new_padded(input.to_fields(), output.to_fields());
         verify::<_, _>(ctx, proof, io, &mut verifier_transcript).unwrap();
     }
 
@@ -876,7 +873,7 @@ pub(crate) mod test {
 
         let mut verifier_transcript: BasicTranscript<GoldilocksExt2> =
             BasicTranscript::new(b"m2vec");
-        let io = IO::new(input.to_fields(), output.to_fields());
+        let io = IO::new_padded(input.to_fields(), output.to_fields());
         verify::<_, _>(ctx, proof, io, &mut verifier_transcript).unwrap();
     }
 
@@ -922,7 +919,7 @@ pub(crate) mod test {
                         let proof = prover.prove(trace).expect("unable to generate proof");
                         let mut verifier_transcript: BasicTranscript<GoldilocksExt2> =
                             BasicTranscript::new(b"m2vec");
-                        let io = IO::new(input.to_fields(), output.to_fields());
+                        let io = IO::new_padded(input.to_fields(), output.to_fields());
                         verify::<_, _>(ctx, proof, io, &mut verifier_transcript).unwrap();
                     }
                 }

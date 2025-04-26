@@ -23,11 +23,21 @@ pub struct IO<E> {
     input: Tensor<E>,
     /// Output of the inference
     output: Tensor<E>,
+    /// unpadded shape of the input
+    unpadded_input_shape: Vec<usize>,
 }
 
 impl<E> IO<E> {
-    pub fn new(input: Tensor<E>, output: Tensor<E>) -> Self {
-        Self { input, output }
+    pub fn new(input: Tensor<E>, output: Tensor<E>,unpadded_input_shape: Vec<usize>) -> Self {
+        Self { input, output, unpadded_input_shape }
+    }
+
+    /// This should only be used for testing purposes where sometimes we 
+    /// create the model already fully padded and thus padded_input_shape == unpadded_input_shape
+    #[cfg(test)]
+    pub fn new_padded(input: Tensor<E>, output: Tensor<E>) -> Self {
+        let shape = input.get_shape().to_vec();
+        Self::new(input,output,shape)
     }
 }
 
