@@ -23,21 +23,11 @@ pub struct IO<E> {
     input: Tensor<E>,
     /// Output of the inference
     output: Tensor<E>,
-    /// unpadded shape of the input
-    unpadded_input_shape: Vec<usize>,
 }
 
 impl<E> IO<E> {
-    pub fn new(input: Tensor<E>, output: Tensor<E>,unpadded_input_shape: Vec<usize>) -> Self {
-        Self { input, output, unpadded_input_shape }
-    }
-
-    /// This should only be used for testing purposes where sometimes we 
-    /// create the model already fully padded and thus padded_input_shape == unpadded_input_shape
-    #[cfg(test)]
-    pub fn new_padded(input: Tensor<E>, output: Tensor<E>) -> Self {
-        let shape = input.get_shape().to_vec();
-        Self::new(input,output,shape)
+    pub fn new(input: Tensor<E>, output: Tensor<E>) -> Self {
+        Self { input, output }
     }
 }
 
@@ -114,16 +104,27 @@ where
             eval: computed_sum,
         };
 
+        let shape_steps = ctx.steps_info.iter().rev().scan(None, |last_shape,step| {
+            *last_shape = if let Some(shape_step) = last_shape {
+                Some(step.next_shape_step(&shape_step))
+            } else {
+                Some(step.shape_step(&ctx.unpadded_input_shape, &io.input.get_shape()))
+            };
+            Some(last_shape.clone())
+            // ?? rev() doesn't work with scan
+        }).collect_vec().into_iter().rev().collect_vec();
+
         // 4. Verify each proof sequentially, Always make sure the proof corresponds to the expected type of proof in the context.
         // We have two `HashSet`s, one for the type of table used and one for the lookup challenges used
-        for proof_and_step in proof.steps.iter().zip(ctx.steps_info.iter()) {
-            output_claim = match proof_and_step {
+        for ((proof, step),shape_step)in proof.steps.iter().zip(ctx.steps_info.iter()).zip(shape_steps) {
+            println!("VERIFIER: layer {:?} -> output_shape step: {:?}", step.variant_name(), shape_step);
+            output_claim = match (proof, step) {
                 (LayerProof::<E>::Activation(proof), LayerCtx::Activation(info)) => {
                     let (constant_challenge, column_separation_challenge) = challenge_storage
                         .get_challenges_by_name(&TableType::Relu.name())
                         .ok_or(anyhow!(
                             "Couldn't get challenges at Step: {}, LookupType was: {}",
-                            proof_and_step.1.variant_name(),
+                            step.variant_name(),
                             TableType::Relu.name()
                         ))?;
                     info.verify_activation(
@@ -142,7 +143,7 @@ where
                         .get_challenges_by_name(&TableType::Range.name())
                         .ok_or(anyhow!(
                             "Couldn't get challenges at Step: {}, LookupType was: {}",
-                            proof_and_step.1.variant_name(),
+                            step.variant_name(),
                             TableType::Range.name()
                         ))?;
                     info.verify_requant(
@@ -158,7 +159,7 @@ where
                         .get_challenges_by_name(&TableType::Range.name())
                         .ok_or(anyhow!(
                             "Couldn't get challenges at Step: {}, LookupType was: {}",
-                            proof_and_step.1.variant_name(),
+                            step.variant_name(),
                             TableType::Range.name()
                         ))?;
                     info.verify_pooling(
@@ -178,8 +179,8 @@ where
                 }
                 _ => bail!(
                     "Step proof: {} and step info: {} did not match",
-                    proof_and_step.0.variant_name(),
-                    proof_and_step.1.variant_name()
+                    proof.variant_name(),
+                    step.variant_name()
                 ),
             }
         }

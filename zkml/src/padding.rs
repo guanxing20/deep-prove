@@ -30,12 +30,12 @@ struct ShapeInfo {
 pub fn pad_model(mut model: Model<Element>) -> Result<Model<Element>> {
     let mut si = ShapeInfo {
         input_shape_padded: model
-            .input_not_padded
+            .unpadded_input
             .iter()
             .map(|i| i.next_power_of_two())
             .collect::<Vec<_>>(),
         ignore_garbage_pad: None,
-        input_shape_og: model.input_not_padded.clone(),
+        input_shape_og: model.unpadded_input.clone(),
     };
     model.layers = model
         .layers
@@ -57,10 +57,6 @@ pub fn pad_model(mut model: Model<Element>) -> Result<Model<Element>> {
             }
         })
         .collect::<Result<Vec<_>>>()?;
-    model.padding = PaddingMode::Padding;
-    //.into_iter()
-    //.filter(|l| l.is_provable())
-    //.collect::<Vec<_>>();
     Ok(model)
 }
 
@@ -93,7 +89,7 @@ fn pad_conv(c: Convolution<Element>, si: &mut ShapeInfo) -> Result<Convolution<E
         "Filter dimensions have to be smaller than input dimensions"
     );
 
-    let new_conv= new_conv_good.into_padded_and_ffted(&si.input_shape_og);
+    let new_conv = new_conv_good.into_padded_and_ffted(&si.input_shape_og);
 
     let output_shape = safe_conv2d_shape(&si.input_shape_padded, &weight_shape)?;
     si.input_shape_padded = output_shape

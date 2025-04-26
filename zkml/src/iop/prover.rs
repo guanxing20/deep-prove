@@ -99,9 +99,15 @@ where
             (Layer::Dense(dense), LayerCtx::Dense(info)) => {
                 dense.prove_step(self, last_claim, input, &step.output, info)
             }
-            (Layer::Convolution(filter), LayerCtx::Convolution(info)) => {
-                filter.prove_convolution_step(self, last_claim, &step.output, &step.unpadded_shape, &step.conv_data, info)
-            }
+            (Layer::Convolution(filter), LayerCtx::Convolution(info)) => filter
+                .prove_convolution_step(
+                    self,
+                    last_claim,
+                    &step.output,
+                    &step.unpadded_shape,
+                    &step.conv_data,
+                    info,
+                ),
             (Layer::Activation(activation), LayerCtx::Activation(act_ctx)) => {
                 activation.prove_step(self, &last_claim, &step.output.get_data(), act_ctx)
             }
@@ -415,11 +421,8 @@ where
         // return Proof;
     }
 
-    pub fn prove<'b>(
-        mut self,
-        trace: InferenceTrace<'b, Element, E>,
-    ) -> anyhow::Result<Proof<E>> {
-        //let trace = full_trace.provable_steps();
+    pub fn prove<'b>(mut self, trace: InferenceTrace<'b, Element, E>) -> anyhow::Result<Proof<E>> {
+        // let trace = full_trace.provable_steps();
         // write commitments and polynomials info to transcript
         self.ctx.write_to_transcript(self.transcript)?;
         // then create the context for the witness polys -

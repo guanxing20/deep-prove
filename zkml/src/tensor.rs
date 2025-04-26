@@ -450,7 +450,10 @@ impl Tensor<Element> {
         let output = out;
         let conv_data = ConvData::new(real_input, input, x_vec, prod, output, n_x);
         return (
-            Tensor::new(vec![self.shape[0], n_x, n_x], conv_data.output_as_element.clone()),
+            Tensor::new(
+                vec![self.shape[0], n_x, n_x],
+                conv_data.output_as_element.clone(),
+            ),
             conv_data,
         );
     }
@@ -508,9 +511,12 @@ impl Tensor<Element> {
             .unzip();
         // TODO: remove the requirement to keep the output value intact
         let output = out.clone();
-        let conv_data = ConvData::new(real_input, input, x_vec, prod, output,n_x);
+        let conv_data = ConvData::new(real_input, input, x_vec, prod, output, n_x);
         return (
-            Tensor::new(vec![self.shape[0], n_x, n_x], conv_data.output_as_element.clone()),
+            Tensor::new(
+                vec![self.shape[0], n_x, n_x],
+                conv_data.output_as_element.clone(),
+            ),
             conv_data,
         );
     }
@@ -1511,21 +1517,21 @@ impl<T: Number> Tensor<T> {
     pub fn min_value(&self) -> T {
         self.data.iter().fold(T::MAX, |min, x| min.cmp_min(x))
     }
-    pub fn random(shape: Vec<usize>) -> Self {
+    pub fn random(shape: &[usize]) -> Self {
         Self::random_seed(shape, Some(rand::random::<u64>()))
     }
 
     /// Creates a random matrix with a given number of rows and cols.
     /// NOTE: doesn't take a rng as argument because to generate it in parallel it needs be sync +
     /// sync which is not true for basic rng core.
-    pub fn random_seed(shape: Vec<usize>, seed: Option<u64>) -> Self {
+    pub fn random_seed(shape: &[usize], seed: Option<u64>) -> Self {
         let seed = seed.unwrap_or(rand::random::<u64>()); // Use provided seed or default
         let mut rng = StdRng::seed_from_u64(seed);
         let size = shape.iter().product();
         let data = (0..size).map(|_| T::random(&mut rng)).collect();
         Self {
             data,
-            shape,
+            shape: shape.to_vec(),
             og_shape: vec![0],
         }
     }
@@ -1618,7 +1624,7 @@ mod test {
     #[test]
     fn test_tensor_next_pow_of_two() {
         let shape = vec![3usize, 3];
-        let mat = Tensor::<Element>::random_seed(shape.clone(), Some(213));
+        let mat = Tensor::<Element>::random_seed(&shape, Some(213));
         // println!("{}", mat);
         let new_shape = vec![shape[0].next_power_of_two(), shape[1].next_power_of_two()];
         let new_mat = mat.pad_next_power_of_two();
@@ -1645,7 +1651,7 @@ mod test {
 
     #[test]
     fn test_tensor_mle() {
-        let mat = Tensor::random(vec![3, 5]);
+        let mat = Tensor::random(&vec![3, 5]);
         let shape = mat.get_shape();
         let mat = mat.pad_next_power_of_two();
         println!("matrix {}", mat);
@@ -1696,9 +1702,9 @@ mod test {
                         let k_w = 1 << l;
                         let n_x = 1 << j;
                         let k_x = 1 << i;
-                        let filter1 = Tensor::random( vec![k_w, k_x, n_w, n_w]);
+                        let filter1 = Tensor::random(&vec![k_w, k_x, n_w, n_w]);
                         let filter2 = filter1.clone();
-                        let filter1 = filter1.into_fft_conv(& vec![k_x, n_x, n_x]);
+                        let filter1 = filter1.into_fft_conv(&vec![k_x, n_x, n_x]);
                         let big_x = Tensor::new(vec![k_x, n_x, n_x], vec![3; n_x * n_x * k_x]); //random_vector(n_x*n_x*k_x));
                         let (out_2, _) = filter1.fft_conv::<GoldilocksExt2>(&big_x);
                         let out_1 = filter2.cnn_naive_convolution(&big_x);
@@ -1862,12 +1868,12 @@ mod test {
     fn test_tensor_minimal_conv2d() {
         // k_n,k_c,k_h,k_w
         let conv_shape = vec![2, 3, 3, 3];
-        let conv = Tensor::<Element>::random(conv_shape.clone());
+        let conv = Tensor::<Element>::random(&conv_shape);
         // minimal input shape is 1,k_c,k_h,k_w
         let input_shape = vec![1, 3, 3, 3];
-        let input = Tensor::<Element>::random(input_shape.clone());
+        let input = Tensor::<Element>::random(&input_shape);
         // minimal bias shape is k_n
-        let bias = Tensor::<Element>::random(vec![2]);
+        let bias = Tensor::<Element>::random(&vec![2]);
         let output = input.conv2d(&conv, &bias, 1);
         assert_eq!(output.get_shape(), vec![1, 2, 1, 1]);
     }
@@ -1882,14 +1888,14 @@ mod test {
         let nrows = 12usize;
         let ncols = new_shape.iter().product::<usize>();
 
-        let og_t = Tensor::<Element>::random(old_shape.clone());
+        let og_t = Tensor::<Element>::random(&old_shape);
         let og_flat_t = og_t.flatten(); // This is equivalent to conv2d output (flattened)
 
         let mut pad_t = og_t.clone();
         pad_t.pad_to_shape(new_shape.clone());
         let pad_flat_t = pad_t.flatten();
 
-        let og_mat = Tensor::random(vec![orows, ocols]); // This is equivalent to the first dense matrix
+        let og_mat = Tensor::random(&vec![orows, ocols]); // This is equivalent to the first dense matrix
         let og_result = og_mat.matvec(&og_flat_t);
 
         let pad_mat =

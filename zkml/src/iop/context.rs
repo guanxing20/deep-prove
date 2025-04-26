@@ -49,7 +49,43 @@ where
     pub lookup: LookupContext,
     /// unpadded shape of the first initial input
     pub unpadded_input_shape: Vec<usize>,
+}
 
+/// Similar to the InferenceStep but only records the input and output shapes
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct ShapeStep {
+    pub unpadded_input_shape: Vec<usize>,
+    pub unpadded_output_shape: Vec<usize>,
+    pub padded_input_shape: Vec<usize>,
+    pub padded_output_shape: Vec<usize>,
+}
+
+impl ShapeStep {
+    pub fn new(
+        unpadded_input: Vec<usize>,
+        padded_input: Vec<usize>,
+        unpadded_output: Vec<usize>,
+        padded_output: Vec<usize>,
+    ) -> ShapeStep {
+        Self {
+            unpadded_input_shape: unpadded_input,
+            padded_input_shape: padded_input,
+            unpadded_output_shape: unpadded_output,
+            padded_output_shape: padded_output,
+        }
+    }
+    pub fn next_step(
+        last_step: &ShapeStep,
+        unpadded_output: Vec<usize>,
+        padded_output: Vec<usize>,
+    ) -> ShapeStep {
+        ShapeStep {
+            unpadded_input_shape: last_step.unpadded_output_shape.clone(),
+            unpadded_output_shape: unpadded_output,
+            padded_input_shape: last_step.padded_output_shape.clone(),
+            padded_output_shape: padded_output,
+        }
+    }
 }
 
 /// Auxiliary information for the context creation
@@ -64,7 +100,6 @@ where
     E::BaseField: Serialize + DeserializeOwned,
     E: Serialize + DeserializeOwned,
 {
-
     /// Generates a context to give to the verifier that contains informations about the polynomials
     /// to prove at each step.
     /// INFO: it _assumes_ the model is already well padded to power of twos.
@@ -94,7 +129,10 @@ where
             step_infos.push(info);
             ctx_aux = new_aux;
         }
-        println!("step_infos: {:?}", step_infos.iter().map(|x| x.variant_name()).join(", "));
+        println!(
+            "step_infos: {:?}",
+            step_infos.iter().map(|x| x.variant_name()).join(", ")
+        );
         debug!("Context : commitment generating ...");
         let commit_ctx = precommit::Context::generate_from_model(model)
             .context("can't generate context for commitment part")?;

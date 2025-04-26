@@ -19,7 +19,7 @@ use statrs::statistics::{Data, Distribution};
 use crate::{
     Element,
     commit::precommit::PolyID,
-    iop::context::{ContextAux, TableCtx},
+    iop::context::{ContextAux, ShapeStep, TableCtx},
     layers::{
         activation::{Activation, ActivationProof, Relu},
         convolution::Convolution,
@@ -125,15 +125,28 @@ where
     }
     pub fn output_shape(&self, input_shape: &[usize], padding_mode: PaddingMode) -> Vec<usize> {
         match self {
-            Self::Dense(ref dense) => dense.output_shape(input_shape),
+            Self::Dense(ref dense) => dense.output_shape(input_shape, padding_mode),
             Self::Convolution(ref filter) => filter.output_shape(input_shape, padding_mode),
-            Self::SchoolBookConvolution(ref _filter) => panic!("SchoolBookConvolution should NOT be used in proving"),
+            Self::SchoolBookConvolution(ref _filter) => {
+                panic!("SchoolBookConvolution should NOT be used in proving")
+            }
             Self::Activation(..) => input_shape.to_vec(),
             Self::Requant(..) => input_shape.to_vec(),
             Self::Pooling(ref pooling) => pooling.output_shape(input_shape),
             Self::Reshape => <Reshape as Op<Element>>::output_shape(&Reshape, input_shape),
             Self::Table(..) => panic!("Table should NOT be used in proving"),
         }
+    }
+    pub fn next_shape_step(&self, last_step: &ShapeStep) -> ShapeStep {
+        let unpadded_output =
+            self.output_shape(&last_step.unpadded_output_shape, PaddingMode::NoPadding);
+        let padded_output = self.output_shape(&last_step.padded_output_shape, PaddingMode::Padding);
+        ShapeStep::next_step(last_step, unpadded_output, padded_output)
+    }
+    pub fn shape_step(&self, unpadded_input: &[usize], padded_input: &[usize]) -> ShapeStep {
+        let unpadded_output = self.output_shape(&unpadded_input, PaddingMode::NoPadding);
+        let padded_output = self.output_shape(&padded_input, PaddingMode::Padding);
+        ShapeStep::new(unpadded_input.to_vec(), padded_input.to_vec(), unpadded_output, padded_output)
     }
 }
 

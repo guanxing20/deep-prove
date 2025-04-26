@@ -188,7 +188,7 @@ mod test {
 
         let shape = model.input_shape();
         assert_eq!(shape.len(), 1);
-        let input = Tensor::random(vec![shape[0] - 1]);
+        let input = Tensor::random(&vec![shape[0] - 1]);
         let input = model.prepare_input(input);
 
         let trace = model.run(input.clone()).unwrap();
@@ -201,7 +201,7 @@ mod test {
         let proof = prover.prove(trace).expect("unable to generate proof");
 
         let mut verifier_transcript = default_transcript();
-        let io = IO::new(input.to_fields(), output.to_fields(),model.unpadded_input_shape());
+        let io = IO::new(input.to_fields(), output.to_fields());
         verify::<_, _>(ctx, proof, io, &mut verifier_transcript).expect("invalid proof");
         println!("[+] Verify proof: valid");
         Ok(())

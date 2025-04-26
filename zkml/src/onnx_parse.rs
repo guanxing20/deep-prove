@@ -427,9 +427,7 @@ pub fn load_float_model(filepath: &str) -> Result<Model<f32>> {
     info!("load_model:AFTER loop of graph nodes extraction");
 
     // Create and return the model
-    let mut model = Model::new();
-    // TODO: change to og for reading without padding
-    model.set_input_shape(input_shape);
+    let mut model = Model::new(&input_shape);
     for layer in layers {
         debug!("Added the layer: {}", layer.describe());
         model.add_layer(layer);
@@ -661,7 +659,7 @@ mod tests {
             .build()
             .unwrap();
         let input =
-            crate::tensor::Tensor::<f32>::random(vec![model.input_shape()[0]]).quantize(&md.input);
+            crate::tensor::Tensor::<f32>::random(&vec![model.input_shape()[0]]).quantize(&md.input);
         let input = model.prepare_input(input);
         let trace = model.run::<F>(input.clone()).unwrap();
         println!("Result: {:?}", trace.final_output());
@@ -696,7 +694,7 @@ mod tests {
 
         info!("CREAting random tensor input");
         let (model, md) = result.unwrap();
-        let input = crate::tensor::Tensor::<f32>::random(model.input_shape()).quantize(&md.input);
+        let input = crate::tensor::Tensor::<f32>::random(&model.input_shape()).quantize(&md.input);
         info!("random input tensor CREATED : {:?}", input.get_shape());
         let input = model.prepare_input(input);
         info!("RUNNING MODEL...");
@@ -717,7 +715,7 @@ mod tests {
         info!("GENERATING Proof DONE...");
         let mut verifier_transcript: BasicTranscript<GoldilocksExt2> =
             BasicTranscript::new(b"m2vec");
-        let io = IO::new(input.to_fields(), output.to_fields(),ctx.unpadded_input_shape.clone());
+        let io = IO::new(input.to_fields(), output.to_fields());
         verify::<_, _>(ctx, proof, io, &mut verifier_transcript).unwrap();
     }
 
@@ -742,7 +740,8 @@ mod tests {
         assert!(result.is_ok(), "Failed: {:?}", result.unwrap_err());
 
         let (model, md) = result.unwrap();
-        let native_input = crate::tensor::Tensor::<f32>::random(model.unpadded_input_shape()).quantize(&md.input);
+        let native_input =
+            crate::tensor::Tensor::<f32>::random(&model.unpadded_input_shape()).quantize(&md.input);
         let input = model.prepare_input(native_input);
         let trace = model.run::<F>(input.clone()).unwrap();
         println!("Result: {:?}", trace.final_output());
@@ -757,7 +756,7 @@ mod tests {
         let proof = prover.prove(trace).expect("unable to generate proof");
         let mut verifier_transcript: BasicTranscript<GoldilocksExt2> =
             BasicTranscript::new(b"m2vec");
-        let io = IO::new(input.to_fields(), output.to_fields(),model.unpadded_input_shape());
+        let io = IO::new(input.to_fields(), output.to_fields());
         verify::<_, _>(ctx, proof, io, &mut verifier_transcript).unwrap();
     }
 }

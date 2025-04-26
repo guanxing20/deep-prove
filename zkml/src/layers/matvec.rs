@@ -167,9 +167,9 @@ mod test {
     type F = GoldilocksExt2;
     #[test]
     fn test_matvec_prove_verify() {
-        let matrix = Tensor::<Element>::random_seed(vec![2, 3], None).pad_next_power_of_two();
+        let matrix = Tensor::<Element>::random_seed(&vec![2, 3], None).pad_next_power_of_two();
         println!("matrix shape {:?}", matrix.get_shape());
-        let input = Tensor::<Element>::random_seed(vec![3], None).pad_next_power_of_two();
+        let input = Tensor::<Element>::random_seed(&vec![3], None).pad_next_power_of_two();
         let matvec = MatVec::new(matrix);
         let output = matvec.op(&input);
         let mut transcript = default_transcript::<F>();

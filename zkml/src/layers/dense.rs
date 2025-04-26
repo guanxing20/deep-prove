@@ -45,6 +45,7 @@ pub struct DenseCtx<E> {
     pub matrix_poly_aux: VPAuxInfo<E>,
     pub bias_poly_id: PolyID,
     pub unpadded_matrix_shape: Vec<usize>,
+    pub padded_matrix_shape: Vec<usize>,
 }
 
 /// Proof of the layer.
@@ -99,7 +100,6 @@ impl<T: Number> Dense<T> {
         }
     }
 
-    
     pub fn output_shape(&self, input_shape: &[usize]) -> Vec<usize> {
         assert_eq!(
             input_shape.iter().product::<usize>(),
@@ -330,6 +330,7 @@ impl Dense<Element> {
             ]]),
             bias_poly_id: BIAS_POLY_ID + id,
             unpadded_matrix_shape: self.unpadded_matrix_shape.clone(),
+            padded_matrix_shape: self.matrix.get_shape().to_vec(),
         });
         (dense_info, ctx_aux)
     }
@@ -340,15 +341,20 @@ where
     E::BaseField: Serialize + DeserializeOwned,
     E: Serialize + DeserializeOwned,
 {
-    pub fn output_shape(&self, input_shape: &[usize]) -> Vec<usize> {
+    pub fn output_shape(&self, input_shape: &[usize], mode: PaddingMode) -> Vec<usize> {
+        let mat_shape = match mode {
+            PaddingMode::NoPadding => self.unpadded_matrix_shape.clone(),
+            PaddingMode::Padding => self.padded_matrix_shape.clone(),
+        };
         assert_eq!(
             input_shape.iter().product::<usize>(),
-            self.unpadded_matrix_shape[0],
-            "input_shape {:?} vs matrix {:?}",
+            mat_shape[1],
+            "dense output shape (pad = {:?}) -> input_shape {:?} vs matrix {:?}",
+            mode,
             input_shape,
-            self.unpadded_matrix_shape
+            mat_shape
         );
-        vec![self.unpadded_matrix_shape[0]]
+        vec![mat_shape[0]]
     }
     pub(crate) fn verify_dense<T: Transcript<E>>(
         &self,
@@ -432,9 +438,9 @@ mod test {
         pub fn random(shape: Vec<usize>) -> Self {
             assert_eq!(shape.len(), 2);
             let (nrows, ncols) = (shape[0], shape[1]);
-            let matrix = Tensor::<T>::random(vec![nrows, ncols]);
+            let matrix = Tensor::<T>::random(&vec![nrows, ncols]);
             // let bias = Tensor::random(vec![nrows]);
-            let bias = Tensor::<T>::random(vec![nrows]);
+            let bias = Tensor::<T>::random(&vec![nrows]);
             Self::new(matrix, bias)
         }
     }

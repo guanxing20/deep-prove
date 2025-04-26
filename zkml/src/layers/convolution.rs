@@ -1,4 +1,6 @@
-use crate::{layers::hadamard, padding::PaddingMode, quantization::TensorFielder, VectorTranscript};
+use crate::{
+    VectorTranscript, layers::hadamard, padding::PaddingMode, quantization::TensorFielder,
+};
 use core::f32;
 
 use crate::{
@@ -61,6 +63,7 @@ pub struct ConvCtx<E> {
     pub nw: usize,
     pub filter_size: usize,
     pub unpadded_filter_shape: Vec<usize>,
+    pub padded_filter_shape: Vec<usize>,
 }
 
 pub fn to_bits<E: ExtensionField>(mut num: usize, bitlen: usize) -> Vec<E> {
@@ -120,7 +123,7 @@ impl<T: Number> Convolution<T> {
         match padding_mode {
             /// unpadded shape is the shape found in onxx file for example
             PaddingMode::NoPadding => conv2d_shape(input_shape, &self.unpadded_shape),
-            //PaddingMode::Padding => padded_conv2d_shape(input_shape, &self.filter.real_shape()),
+            // PaddingMode::Padding => padded_conv2d_shape(input_shape, &self.filter.real_shape()),
             _ => panic!("Padding mode not supported"),
         }
     }
@@ -176,7 +179,7 @@ impl<T: Number> Convolution<T> {
 }
 
 impl Convolution<f32> {
-    /// Quantizes the filter and the bias. 
+    /// Quantizes the filter and the bias.
     /// It uses a custom scaling factor `bias_s` for the bias, if provided,
     /// otherwise the same scaling factor of the weights (i.e., `s`) is used
     pub fn quantize(
@@ -217,7 +220,10 @@ impl Convolution<Element> {
     pub fn into_padded_and_ffted(mut self, unpadded_input_shape: &[usize]) -> Self {
         self.filter = self.filter.pad_next_power_of_two();
         self.bias = self.bias.pad_next_power_of_two();
-        let padded_input_shape = unpadded_input_shape.iter().map(|&x| x.next_power_of_two()).collect::<Vec<usize>>();
+        let padded_input_shape = unpadded_input_shape
+            .iter()
+            .map(|&x| x.next_power_of_two())
+            .collect::<Vec<usize>>();
         self.filter = self.filter.into_fft_conv(&padded_input_shape);
         self
     }
@@ -231,9 +237,18 @@ impl Convolution<Element> {
         // we record here the output _after_ the bias addition. During proving it's necessary since we're proving the clearing garbage
         // and that produces a new claim on this output.
         proving_data.set_output(conv_output.get_data());
-        println!("INFERENCE: conv_after_bias.shape(): {:?}", conv_output.get_shape());
-        println!("INFERENCE: conv_after_bias.data(): {:?}", &conv_output.get_data()[..30]);
-        println!("INFERENCE: unpadded_input_shape: {:?}", unpadded_input_shape);
+        println!(
+            "INFERENCE: conv_after_bias.shape(): {:?}",
+            conv_output.get_shape()
+        );
+        println!(
+            "INFERENCE: conv_after_bias.data(): {:?}",
+            &conv_output.get_data()[..30]
+        );
+        println!(
+            "INFERENCE: unpadded_input_shape: {:?}",
+            unpadded_input_shape
+        );
         println!("INFERENCE: output.shape(): {:?}", output.get_shape());
         // At this stage, we're creating a "garbage clearing" tensor that sets all garbage values to 0. This is necessary
         // since the garbage might be of any value and we need to restrict the range of the output due to requantization proving logic.
@@ -241,8 +256,15 @@ impl Convolution<Element> {
         // println!("self.unpadded_shape: {:?}", self.unpadded_shape);
         //(conv_output, proving_data)
         let unpadded_output_shape = conv2d_shape(unpadded_input_shape, &self.unpadded_shape);
-        //let unpadded_output_shape = self.output_shape(unpadded_input_shape, PaddingMode::NoPadding);
-        println!("INFERENCE: unpadded_output_shape: {:?}", unpadded_output_shape);
+        debug_assert_eq!( {
+            let fft_output_shape = conv2d_shape(&input.get_shape(),&self.filter.real_shape()).into_iter().map(|x| x.next_power_of_two()).collect::<Vec<usize>>();
+            fft_output_shape 
+        },conv_output.get_shape(),"FFT output shape not computable");
+        // let unpadded_output_shape = self.output_shape(unpadded_input_shape, PaddingMode::NoPadding);
+        println!(
+            "INFERENCE: unpadded_output_shape: {:?}",
+            unpadded_output_shape
+        );
         let cleared_tensor = clear_garbage(&conv_output, &unpadded_output_shape);
         debug_assert!({
             // check that applying the clearing tensor to the conv output gives the same result - as we'd be using the clearing tensor
@@ -464,6 +486,7 @@ impl Convolution<Element> {
             real_nw: self.filter.real_nw(),
             filter_size: self.filter_size(),
             unpadded_filter_shape: self.unpadded_shape.clone(),
+            padded_filter_shape: self.filter.real_shape(),
         });
         (conv_info, aux)
     }
@@ -498,15 +521,22 @@ impl Convolution<Element> {
         let clearing_tensor = new_clearing_tensor(unpadded_output_shape, &output.get_shape());
         // Take the elements BEFORE bias addition - this is what the rest of the convolution proving step expects.
         // TODO: could trade off less memory by directly recomputing it from conv data with the input shape as well.
-        let conv_after_bias = Tensor::new(output.get_shape(), proving_data.output_as_element.clone());
+        let conv_after_bias =
+            Tensor::new(output.get_shape(), proving_data.output_as_element.clone());
         debug_assert!({
-                println!("PROVE: conv_after_bias.shape(): {:?}", conv_after_bias.get_shape());
-                println!("PROVE: conv_after_bias.data(): {:?}", &conv_after_bias.get_data()[..30]);
-                println!("PROVE: unpadded_output_shape: {:?}", unpadded_output_shape);
-                println!("PROVE: output.shape(): {:?}", output.get_shape());
-                let cleared_out = conv_after_bias.flatten().mul(&clearing_tensor);
-                let fielded: Tensor<E> = cleared_out.to_fields();
-                fielded.get_data().to_vec() == output.get_data()
+            println!(
+                "PROVE: conv_after_bias.shape(): {:?}",
+                conv_after_bias.get_shape()
+            );
+            println!(
+                "PROVE: conv_after_bias.data(): {:?}",
+                &conv_after_bias.get_data()[..30]
+            );
+            println!("PROVE: unpadded_output_shape: {:?}", unpadded_output_shape);
+            println!("PROVE: output.shape(): {:?}", output.get_shape());
+            let cleared_out = conv_after_bias.flatten().mul(&clearing_tensor);
+            let fielded: Tensor<E> = cleared_out.to_fields();
+            fielded.get_data().to_vec() == output.get_data()
         });
         let clearing_proof = hadamard::prove(
             prover.transcript,
@@ -516,7 +546,6 @@ impl Convolution<Element> {
         );
         // since v1 is the non cleared tensor, this is what the rest of the convolution proving expects
         let last_claim = Claim::new(clearing_proof.random_point(), clearing_proof.v1_eval());
-
 
         let filter = self;
         assert_eq!(
@@ -836,7 +865,7 @@ where
     pub fn output_shape(&self, input_shape: &[usize], padding_mode: PaddingMode) -> Vec<usize> {
         match padding_mode {
             PaddingMode::NoPadding => conv2d_shape(input_shape, &self.unpadded_filter_shape),
-            PaddingMode::Padding => panic!("Padding mode not supported in ctx"),
+            PaddingMode::Padding => padded_conv2d_shape(input_shape, &self.padded_filter_shape),
         }
     }
     pub(crate) fn verify_fft_delegation<T: Transcript<E>>(
@@ -901,13 +930,12 @@ where
     ) -> anyhow::Result<Claim<E>> {
         /// The first thing to do is to recreate the hadamard clearing tensor
         /// Since this is only coming from public information, the verifier
-        /// creates the vector and evaluates it. 
+        /// creates the vector and evaluates it.
         /// NOTE: for succinctness of verification, we could also have
         /// the prover commits to the tensor product and we could skip this step.
         /// OR find a closed formula
-        /// 
+        ///
         /// To recreat it, we need the unpadded output shape and the real output shape.
-        /// 
         let conv_claim = last_claim.eval - proof.bias_claim;
 
         IOPVerifierState::<E>::verify(
@@ -1212,7 +1240,11 @@ pub fn index_wf<E: ExtensionField>(
     })
 }
 
-pub fn conv2d_shape_mode(input_shape: &[usize], filter_shape: &[usize],padding_mode: PaddingMode) -> Vec<usize> {
+pub fn conv2d_shape_mode(
+    input_shape: &[usize],
+    filter_shape: &[usize],
+    padding_mode: PaddingMode,
+) -> Vec<usize> {
     match padding_mode {
         PaddingMode::NoPadding => conv2d_shape(input_shape, filter_shape),
         PaddingMode::Padding => padded_conv2d_shape(input_shape, filter_shape),
@@ -1296,7 +1328,7 @@ mod test {
             .iter()
             .map(|x| x.next_power_of_two())
             .collect::<Vec<usize>>();
-        let tensor = Tensor::random(padded_shape.clone());
+        let tensor = Tensor::random(&padded_shape);
         subtest_clearing_methods(&tensor, &shape);
         // let clearing_tensor = new_clearing_tensor(&shape, &padded_shape);
         // let cleared_tensor = tensor.flatten().mul(&clearing_tensor);
@@ -1320,13 +1352,13 @@ mod test {
         let conv_shape_og: Vec<usize> = vec![7, 1, 3, 3];
         // let input_shape: Vec<usize> = vec![1, 5, 5];
         // let conv_shape_og: Vec<usize> = vec![1, 1, 2, 2];
-        let weight = Tensor::random(conv_shape_og.clone());
+        let weight = Tensor::random(&conv_shape_og);
         let bias: Tensor<Element> = Tensor::zeros(vec![conv_shape_og[0]]);
-        let input = Tensor::random(input_shape.clone());
+        let input = Tensor::random(&input_shape);
         let output = input.conv2d(&weight, &bias, 1);
         // now try to pad the input and conv and use the fft one
         let padded_input = input.pad_next_power_of_two();
-        let fft_conv= Convolution::new(weight.clone(),bias).into_padded_and_ffted(&input_shape);
+        let fft_conv = Convolution::new(weight.clone(), bias).into_padded_and_ffted(&input_shape);
         let (fft_output, conv_data) = fft_conv.op::<GoldilocksExt2>(&padded_input, &input_shape);
         let (valid, _garbage) = split_garbage(&fft_output, &output.get_shape());
         assert_eq!(
@@ -1343,7 +1375,11 @@ mod test {
         assert_eq!(given_output_shape, exp_output_shape);
 
         // make sure we can reconstruct the fft output purely from conv_data since it's needed for proving
-        let weight_padded_shape = weight.get_shape().iter().map(|x| x.next_power_of_two()).collect::<Vec<_>>();
+        let weight_padded_shape = weight
+            .get_shape()
+            .iter()
+            .map(|x| x.next_power_of_two())
+            .collect::<Vec<_>>();
         let fft_output_shape = conv2d_shape(&padded_input.get_shape(), &weight_padded_shape);
         let fft_output_shape = fft_output_shape
             .into_iter()
@@ -1362,7 +1398,7 @@ mod test {
             padded_input.get_shape()
         );
         assert_eq!(fft_output.get_shape(), fft_output_shape);
-        //let fft_output_data = conv_data.output_as_element(padded_input.get_shape()[1].next_power_of_two());
+        // let fft_output_data = conv_data.output_as_element(padded_input.get_shape()[1].next_power_of_two());
         let fft_output_data = conv_data.output_as_element;
         let reconstructed_fft_tensor = Tensor::new(fft_output_shape.clone(), fft_output_data);
         subtest_clearing_methods(&reconstructed_fft_tensor, &output.get_shape());
@@ -1378,11 +1414,12 @@ mod test {
         let conv_shape_og: Vec<usize> = vec![7, 1, 3, 3];
 
         // wieght of the filter
-        let w1 = Tensor::random(conv_shape_og.clone());
+        let w1 = Tensor::random(&conv_shape_og);
         let bias1: Tensor<Element> = Tensor::zeros(vec![conv_shape_og[0]]);
         // creation of the padded and fft'd convolution
-        let fft_conv= Convolution::new(w1.clone(),bias1.clone()).into_padded_and_ffted(&input_shape);
-        let input = Tensor::random(input_shape.clone());
+        let fft_conv =
+            Convolution::new(w1.clone(), bias1.clone()).into_padded_and_ffted(&input_shape);
+        let input = Tensor::random(&input_shape);
         let padded_input = input.pad_next_power_of_two();
         let (fft_output, _): (Tensor<Element>, ConvData<_>) =
             fft_conv.op::<GoldilocksExt2>(&padded_input, &input_shape);

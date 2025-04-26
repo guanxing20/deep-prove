@@ -17,8 +17,7 @@ impl<N: Number> Op<N> for Reshape {
     fn output_shape(&self, input_shape: &[usize]) -> Vec<usize> {
         vec![input_shape.iter().product::<usize>()]
     }
-    
-    
+
     fn op(&self, input: &Tensor<N>) -> Tensor<N> {
         input.flatten()
     }
@@ -43,7 +42,11 @@ impl ProvableOp for Reshape {
         E: ExtensionField + DeserializeOwned,
         E::BaseField: Serialize + DeserializeOwned,
     {
-        aux.last_output_shape = aux.last_output_shape.into_iter().map(|x| x.next_power_of_two()).collect();
+        aux.last_output_shape = aux
+            .last_output_shape
+            .into_iter()
+            .map(|x| x.next_power_of_two())
+            .collect();
         (LayerCtx::Reshape, aux)
     }
 }

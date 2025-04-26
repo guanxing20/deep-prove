@@ -472,7 +472,7 @@ mod test {
         // let range = thread_rng().gen_range(3..15);
         let matrices = (0..n_poly)
             .map(|_| {
-                Tensor::random(vec![
+                Tensor::random(&vec![
                     rng.gen_range(3..24) as usize,
                     rng.gen_range(3..24) as usize,
                 ])

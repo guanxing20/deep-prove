@@ -98,7 +98,7 @@ mod test {
         let trace = model.run(input.clone()).unwrap();
         let output = trace.final_output();
         let ctx = Context::<F>::generate(&model, None).expect("unable to generate context");
-        let io = IO::new(input.to_fields(), output.clone().to_fields(),model.unpadded_input_shape());
+        let io = IO::new(input.to_fields(), output.clone().to_fields());
         let mut prover_transcript = default_transcript();
         let prover = Prover::<_, _>::new(&ctx, &mut prover_transcript);
         let proof = prover.prove(trace).expect("unable to generate proof");
@@ -115,7 +115,7 @@ mod test {
         let output = trace.final_output();
         let ctx = Context::<F>::generate(&model, Some(input.get_shape()))
             .expect("unable to generate context");
-        let io = IO::new(input.to_fields(), output.clone().to_fields(),model.unpadded_input_shape());
+        let io = IO::new(input.to_fields(), output.clone().to_fields());
         let mut prover_transcript = default_transcript();
         let prover = Prover::<_, _>::new(&ctx, &mut prover_transcript);
         let proof = prover.prove(trace).expect("unable to generate proof");

@@ -18,12 +18,8 @@ pub type StepIdx = usize;
 /// produces each token one by one.
 #[derive(Clone, Debug)]
 pub struct Model<T> {
-    /// Whether the model is already padded or not. Normally, if it's a Model<Element>, it's padded as we only
-    /// support padded inference for the moment.
-    /// TODO: clarify this with f32 models
-    pub padding: PaddingMode,
-    pub input_not_padded: Vec<usize>,
-    pub(crate) padded_in_shape: Vec<usize>,
+    pub unpadded_input: Vec<usize>,
+    pub(crate) padded_input: Vec<usize>,
     pub(crate) layers: Vec<Layer<T>>,
 }
 
@@ -34,23 +30,23 @@ impl<T: Number> Model<T> {
         input_padded_shape: Vec<usize>,
     ) -> Self {
         Self {
-            input_not_padded: input_not_padded_shape,
-            padded_in_shape: input_padded_shape,
+            unpadded_input: input_not_padded_shape,
+            padded_input: input_padded_shape,
             layers,
-            padding: PaddingMode::Padding,
         }
     }
-    pub fn new() -> Self {
+    pub fn new(unpadded_input_shape: &[usize]) -> Self {
         info!(
             "Creating model with {} BIT_LEN quantization",
             *crate::quantization::BIT_LEN
         );
-        Self {
-            input_not_padded: Vec::new(),
-            padded_in_shape: Vec::new(),
+        let mut model = Self {
+            unpadded_input: Vec::new(),
+            padded_input: Vec::new(),
             layers: Default::default(),
-            padding: PaddingMode::Padding,
-        }
+        };
+        model.set_input_shape(unpadded_input_shape.to_vec());
+        model
     }
 
     /// Adds a layer to the model. The model may add additional layers by itself, e.g. requantization
@@ -60,14 +56,14 @@ impl<T: Number> Model<T> {
     }
 
     pub fn set_input_shape(&mut self, not_padded: Vec<usize>) {
-        self.padded_in_shape = not_padded
+        self.padded_input = not_padded
             .iter()
             .map(|dim| dim.next_power_of_two())
             .collect_vec();
-        self.input_not_padded = not_padded;
+        self.unpadded_input = not_padded;
     }
     pub fn load_input_flat(&self, input: Vec<T>) -> Tensor<T> {
-        let input_tensor = Tensor::<T>::new(self.input_not_padded.clone(), input);
+        let input_tensor = Tensor::<T>::new(self.unpadded_input.clone(), input);
         self.prepare_input(input_tensor)
     }
 
@@ -76,11 +72,11 @@ impl<T: Number> Model<T> {
             Layer::Dense(ref dense) => input.pad_1d(dense.ncols()),
             Layer::Convolution(_) | Layer::SchoolBookConvolution(_) => {
                 assert!(
-                    self.padded_in_shape.len() > 0,
+                    self.padded_input.len() > 0,
                     "Set the input shape using `set_input_shape`"
                 );
                 let mut input = input;
-                input.pad_to_shape(self.padded_in_shape.clone());
+                input.pad_to_shape(self.padded_input.clone());
                 input
             }
             _ => {
@@ -100,7 +96,7 @@ impl<T: Number> Model<T> {
     }
 
     pub fn unpadded_input_shape(&self) -> Vec<usize> {
-        self.input_not_padded.clone()
+        self.unpadded_input.clone()
     }
     pub fn input_shape(&self) -> Vec<usize> {
         if let Layer::Dense(mat) = &self.layers[0] {
@@ -110,10 +106,10 @@ impl<T: Number> Model<T> {
             Layer::Convolution(_) | Layer::SchoolBookConvolution(_)
         ) {
             assert!(
-                self.padded_in_shape.len() > 0,
+                self.padded_input.len() > 0,
                 "Set the input shape using `set_input_shape`"
             );
-            self.padded_in_shape.clone()
+            self.padded_input.clone()
         } else {
             panic!("layer is not starting with a dense or conv layer?")
         }
@@ -149,14 +145,14 @@ impl Model<Element> {
     ) -> Result<InferenceTrace<'a, Element, E>> {
         #[cfg(test)]
         let unpadded_input_shape = {
-            if self.input_not_padded.len() == 0 {
+            if self.unpadded_input.len() == 0 {
                 input.get_shape()
             } else {
-                self.input_not_padded.clone()
+                self.unpadded_input.clone()
             }
         };
         #[cfg(not(test))]
-        let unpadded_input_shape = self.input_not_padded.clone();
+        let unpadded_input_shape = self.unpadded_input.clone();
         let mut trace = InferenceTrace::<Element, E>::new(input, unpadded_input_shape.clone());
         let mut unpadded_input_shape = unpadded_input_shape;
         for (id, layer) in self.layers() {
@@ -166,7 +162,8 @@ impl Model<Element> {
             );
             let input = trace.last_input();
             let output = layer.op(input, &unpadded_input_shape)?;
-            unpadded_input_shape = layer.output_shape(&unpadded_input_shape, PaddingMode::NoPadding);
+            unpadded_input_shape =
+                layer.output_shape(&unpadded_input_shape, PaddingMode::NoPadding);
             println!(
                 "MODEL RUN: at layer {} -> OUTPUT unpadded shape: {:?}",
                 id, unpadded_input_shape
@@ -399,7 +396,7 @@ impl<'a, E, F: ExtensionField> InferenceStep<'a, E, F> {
 impl Model<f32> {
     /// Runs the model in float format and returns the output tensor
     pub fn run_float(&self, input: Vec<f32>) -> Tensor<f32> {
-        let mut last_output = Tensor::new(self.input_not_padded.clone(), input);
+        let mut last_output = Tensor::new(self.unpadded_input.clone(), input);
         for layer in self.layers.iter() {
             last_output = layer.run(&last_output);
         }
@@ -450,21 +447,23 @@ pub(crate) mod test {
             Model::random_with_rng(num_dense_layers, &mut rng)
         }
         /// Returns a random model with specified number of dense layers and a matching input.
+        /// Note that currently everything is considered padded, e.g. unpadded_shape = padded_shape
         pub fn random_with_rng<R: RngCore>(
             num_dense_layers: usize,
             rng: &mut R,
         ) -> (Self, Tensor<Element>) {
-            let mut model = Model::new();
-            let mut last_row = rng.gen_range(3..15);
+            let mut last_row: usize = rng.gen_range(3..15);
+            let mut model = Model::new(&vec![last_row.next_power_of_two()]);
             for selector in 0..num_dense_layers {
                 if selector % MOD_SELECTOR == SELECTOR_DENSE {
                     // if true {
                     // last row becomes new column
-                    let (nrows, ncols) : (usize, usize) = (rng.gen_range(3..15), last_row);
+                    let (nrows, ncols): (usize, usize) = (rng.gen_range(3..15), last_row);
                     last_row = nrows;
-                    model.add_layer(Layer::Dense(
-                        Dense::random(vec![nrows.next_power_of_two(), ncols.next_power_of_two()]),
-                    ));
+                    model.add_layer(Layer::Dense(Dense::random(vec![
+                        nrows.next_power_of_two(),
+                        ncols.next_power_of_two(),
+                    ])));
                 } else if selector % MOD_SELECTOR == SELECTOR_RELU {
                     model.add_layer(Layer::Activation(Activation::Relu(Relu::new())));
                     // no need to change the `last_row` since RELU layer keeps the same shape
@@ -482,14 +481,13 @@ pub(crate) mod test {
                 panic!("Model must start with a dense layer");
             };
             // ncols since matrix2vector is summing over the columns
-            let input = Tensor::random(vec![model_shape[1]]);
+            let input = Tensor::random(&vec![model_shape[1]]);
             (model, input)
         }
 
         /// Returns a model that only contains pooling and relu layers.
         /// The output [`Model`] will contain `num_layers` [`Maxpool2D`] layers and a [`Dense`] layer as well.
         pub fn random_pooling(num_layers: usize) -> (Model<Element>, Tensor<Element>) {
-            let mut model = Model::new();
             let mut rng = thread_rng();
             // Since Maxpool reduces the size of the output based on the kernel size and the stride we need to ensure that
             // Our starting input size is large enough for the number of layers.
@@ -513,7 +511,9 @@ pub(crate) mod test {
                 })
                 .collect::<Vec<usize>>();
 
-            let input = Tensor::<Element>::random(input_shape.clone());
+            let mut model = Model::new(&input_shape);
+
+            let input = Tensor::<Element>::random(&input_shape);
 
             let info = Maxpool2D::default();
             for _ in 0..num_layers {
@@ -524,11 +524,13 @@ pub(crate) mod test {
                 model.add_layer(Layer::Pooling(Pooling::Maxpool2D(info)));
             }
 
-            let (nrows, ncols) = (rng.gen_range(3..15), input_shape.iter().product::<usize>());
+            let (nrows, ncols): (usize, usize) =
+                (rng.gen_range(3..15), input_shape.iter().product::<usize>());
 
-            model.add_layer(Layer::Dense(
-                Dense::random(vec![nrows, ncols]).pad_next_power_of_two(),
-            ));
+            model.add_layer(Layer::Dense(Dense::random(vec![
+                nrows.next_power_of_two(),
+                ncols.next_power_of_two(),
+            ])));
 
             (model, input)
         }
@@ -597,25 +599,28 @@ pub(crate) mod test {
         let trad_conv2: Tensor<i128> = Tensor::new(shape2.clone(), w2.clone());
         let trad_conv3: Tensor<i128> = Tensor::new(shape3.clone(), w3.clone());
 
-        let mut model = Model::new();
-        model.add_layer(Layer::Convolution(Convolution::new(
-            trad_conv1.clone(),bias1.clone()).into_padded_and_ffted(&in_dimensions[0])
-        ));
-        model.add_layer(Layer::Convolution(Convolution::new(
-            trad_conv2.clone(),
-            bias2.clone(),
-        ).into_padded_and_ffted(&in_dimensions[1])));
-        model.add_layer(Layer::Convolution(Convolution::new(
-            trad_conv3.clone(),
-            bias3.clone(),
-        ).into_padded_and_ffted(&in_dimensions[2])));
+        let input_shape = vec![1, 32, 32];
+        let input = Tensor::random(&input_shape);
 
-        let input = Tensor::new(vec![1, 32, 32], random_vector_quant(1024));
+        let mut model = Model::new(&input_shape);
+        model.add_layer(Layer::Convolution(
+            Convolution::new(trad_conv1.clone(), bias1.clone())
+                .into_padded_and_ffted(&in_dimensions[0]),
+        ));
+        model.add_layer(Layer::Convolution(
+            Convolution::new(trad_conv2.clone(), bias2.clone())
+                .into_padded_and_ffted(&in_dimensions[1]),
+        ));
+        model.add_layer(Layer::Convolution(
+            Convolution::new(trad_conv3.clone(), bias3.clone())
+                .into_padded_and_ffted(&in_dimensions[2]),
+        ));
+
         /// END TEST
         let trace: crate::model::InferenceTrace<'_, _, GoldilocksExt2> =
             model.run::<F>(input.clone()).unwrap();
 
-        let mut model2 = Model::new();
+        let mut model2 = Model::new(&input_shape);
         model2.add_layer(Layer::SchoolBookConvolution(Convolution::new(
             trad_conv1, bias1,
         )));
@@ -639,33 +644,39 @@ pub(crate) mod test {
     fn test_conv_maxpool() {
         let input_shape = vec![3usize, 32, 32];
         let shape1 = vec![6, 3, 5, 5];
-        let filter = Tensor::random(shape1.clone());
-        let bias1 = Tensor::random(vec![shape1[0]]);
+        let filter = Tensor::random(&shape1);
+        let bias1 = Tensor::random(&vec![shape1[0]]);
 
-        let mut model = Model::new();
-        model.add_layer(Layer::Convolution(Convolution::new(
-            filter.clone(),
-            bias1.clone(),
-        ).into_padded_and_ffted(&input_shape)));
+        let mut model = Model::new(&input_shape);
+        model.add_layer(Layer::Convolution(
+            Convolution::new(filter.clone(), bias1.clone()).into_padded_and_ffted(&input_shape),
+        ));
         model.add_layer(Layer::Pooling(Pooling::Maxpool2D(Maxpool2D::default())));
 
-        // TODO: have a "builder" for the model that automatically tracks the shape after each layer such that 
+        // TODO: have a "builder" for the model that automatically tracks the shape after each layer such that
         // we can just do model.prepare_input(&input).
         // Here is not possible since we didnt run through the onnx loader
-        let input_padded = Tensor::random(input_shape).pad_next_power_of_two();
+        let input_padded = Tensor::random(&input_shape).pad_next_power_of_two();
         let _: crate::model::InferenceTrace<'_, _, GoldilocksExt2> =
             model.run::<F>(input_padded).unwrap();
     }
 
     #[test]
     fn test_model_manual_run() {
-        let dense1 = Dense::<Element>::random(vec![10usize.next_power_of_two(), 11usize.next_power_of_two()]);
-        let dense2 = Dense::<Element>::random(vec![7usize.next_power_of_two(), dense1.ncols().next_power_of_two()]);
-        let input = Tensor::<Element>::random(vec![dense1.ncols()]);
+        let dense1 = Dense::<Element>::random(vec![
+            10usize.next_power_of_two(),
+            11usize.next_power_of_two(),
+        ]);
+        let dense2 = Dense::<Element>::random(vec![
+            7usize.next_power_of_two(),
+            dense1.ncols().next_power_of_two(),
+        ]);
+        let input_shape = vec![dense1.ncols()];
+        let input = Tensor::<Element>::random(&input_shape);
         let output1 = dense1.op(&input);
         let final_output = dense2.op(&output1);
 
-        let mut model = Model::<Element>::new();
+        let mut model = Model::<Element>::new(&input_shape);
         model.add_layer(Layer::Dense(dense1.clone()));
         model.add_layer(Layer::Dense(dense2.clone()));
 
@@ -682,13 +693,19 @@ pub(crate) mod test {
 
     #[test]
     fn test_inference_trace_iterator() {
-        let dense1 = Dense::random(vec![10usize.next_power_of_two(), 11usize.next_power_of_two()]);
+        let dense1 = Dense::random(vec![
+            10usize.next_power_of_two(),
+            11usize.next_power_of_two(),
+        ]);
         let relu1 = Activation::Relu(Relu);
-        let dense2 = Dense::random(vec![7usize.next_power_of_two(), dense1.ncols().next_power_of_two()]);
+        let dense2 = Dense::random(vec![
+            7usize.next_power_of_two(),
+            dense1.ncols().next_power_of_two(),
+        ]);
         let relu2 = Activation::Relu(Relu);
-        let input = Tensor::random(vec![dense1.ncols()]);
-
-        let mut model = Model::new();
+        let input_shape = vec![dense1.ncols()];
+        let mut model = Model::new(&input_shape);
+        let input = Tensor::random(&input_shape);
         model.add_layer(Layer::Dense(dense1));
         model.add_layer(Layer::Activation(relu1));
         model.add_layer(Layer::Dense(dense2));
@@ -725,11 +742,15 @@ pub(crate) mod test {
 
     #[test]
     fn test_inference_trace_reverse_iterator() {
-        let dense1 = Dense::random(vec![10usize.next_power_of_two(), 11usize.next_power_of_two()]);
+        let dense1 = Dense::random(vec![
+            10usize.next_power_of_two(),
+            11usize.next_power_of_two(),
+        ]);
         let dense2 = Dense::random(vec![10usize.next_power_of_two(), dense1.nrows()]);
-        let input = Tensor::random(vec![dense1.ncols()]);
+        let input_shape = vec![dense1.ncols()];
+        let input = Tensor::random(&input_shape);
 
-        let mut model = Model::new();
+        let mut model = Model::new(&input_shape);
         model.add_layer(Layer::Dense(dense1));
         model.add_layer(Layer::Dense(dense2));
         let trace = model.run::<F>(input.clone()).unwrap();
@@ -822,11 +843,12 @@ pub(crate) mod test {
         let conv1 = Tensor::new(vec![1024, 1024], w1.clone());
         let w2 = random_vector_quant(1024);
         let conv2 = Tensor::new(vec![1024], w2.clone());
+        let input_shape = vec![1024];
+        let input = Tensor::random(&input_shape);
 
-        let mut model = Model::new();
+        let mut model = Model::new(&input_shape);
         model.add_layer(Layer::Dense(Dense::new(conv1, conv2)));
         model.describe();
-        let input = Tensor::new(vec![1024], random_vector_quant(1024));
         let trace: crate::model::InferenceTrace<'_, _, GoldilocksExt2> =
             model.run::<F>(input.clone()).unwrap();
         let mut tr: BasicTranscript<GoldilocksExt2> = BasicTranscript::new(b"m2vec");
@@ -838,7 +860,7 @@ pub(crate) mod test {
         let proof = prover.prove(trace).expect("unable to generate proof");
         let mut verifier_transcript: BasicTranscript<GoldilocksExt2> =
             BasicTranscript::new(b"m2vec");
-        let io = IO::new_padded(input.to_fields(), output.to_fields());
+        let io = IO::new(input.to_fields(), output.to_fields());
         verify::<_, _>(ctx, proof, io, &mut verifier_transcript).unwrap();
     }
 
@@ -852,14 +874,16 @@ pub(crate) mod test {
         let in_dimensions: Vec<Vec<usize>> =
             vec![vec![k_x, n_x, n_x], vec![16, 29, 29], vec![4, 26, 26]];
 
-        let conv1 = Tensor::random(vec![k_w,k_x,n_w,n_w]);
-        let mut model = Model::new();
-        model.add_layer(Layer::Convolution(Convolution::new(
-            conv1.clone(),
-            Tensor::random(vec![conv1.kw()]),
-        ).into_padded_and_ffted(&in_dimensions[0])));
+        let conv1 = Tensor::random(&vec![k_w, k_x, n_w, n_w]);
+        let input_shape = vec![k_x, n_x, n_x];
+        let input = Tensor::random(&input_shape);
+
+        let mut model = Model::new(&input_shape);
+        model.add_layer(Layer::Convolution(
+            Convolution::new(conv1.clone(), Tensor::random(&vec![conv1.kw()]))
+                .into_padded_and_ffted(&in_dimensions[0]),
+        ));
         model.describe();
-        let input = Tensor::random(vec![k_x, n_x, n_x]);
         let trace: crate::model::InferenceTrace<'_, _, GoldilocksExt2> =
             model.run::<F>(input.clone()).unwrap();
         let mut tr: BasicTranscript<GoldilocksExt2> = BasicTranscript::new(b"m2vec");
@@ -873,7 +897,7 @@ pub(crate) mod test {
 
         let mut verifier_transcript: BasicTranscript<GoldilocksExt2> =
             BasicTranscript::new(b"m2vec");
-        let io = IO::new_padded(input.to_fields(), output.to_fields());
+        let io = IO::new(input.to_fields(), output.to_fields());
         verify::<_, _>(ctx, proof, io, &mut verifier_transcript).unwrap();
     }
 
@@ -888,24 +912,25 @@ pub(crate) mod test {
                         let n_x = 1 << j;
                         let k_x = 1 << i;
 
-                        let mut in_dimensions: Vec<Vec<usize>> =
+                        let in_dimensions: Vec<Vec<usize>> =
                             vec![vec![k_x, n_x, n_x], vec![16, 29, 29], vec![4, 26, 26]];
-
-                        let padded_in_dimensions = in_dimensions.iter().map(|d| d.iter().map(|&x| x.next_power_of_two()).collect::<Vec<usize>>()).collect::<Vec<Vec<usize>>>();
-                        //for i in 0..in_dimensions.len() {
-                        //    for j in 0..in_dimensions[0].len() {
-                        //        in_dimensions[i][j] = (in_dimensions[i][j]).next_power_of_two();
-                        //    }
-                        //}
-                        let conv1 = Tensor::random( vec![k_w, k_x, n_w, n_w]);
-                        let mut model = Model::<Element>::new();
-                        model.add_layer(Layer::Convolution(Convolution::new(
-                            conv1.clone(),
-                            Tensor::random(vec![conv1.kw()]),
-                        ).into_padded_and_ffted(&in_dimensions[0])));
+                        let padded_in_dimensions = in_dimensions
+                            .iter()
+                            .map(|d| {
+                                d.iter()
+                                    .map(|&x| x.next_power_of_two())
+                                    .collect::<Vec<usize>>()
+                            })
+                            .collect::<Vec<Vec<usize>>>();
+                        let input_shape = vec![k_x, n_x, n_x];
+                        let conv1 = Tensor::random(&vec![k_w, k_x, n_w, n_w]);
+                        let mut model = Model::<Element>::new(&input_shape);
+                        let input = Tensor::random(&input_shape);
+                        model.add_layer(Layer::Convolution(
+                            Convolution::new(conv1.clone(), Tensor::random(&vec![conv1.kw()]))
+                                .into_padded_and_ffted(&in_dimensions[0]),
+                        ));
                         model.describe();
-                        let input =
-                            Tensor::new(vec![k_x, n_x, n_x], random_vector_quant(n_x * n_x * k_x));
                         let trace: crate::model::InferenceTrace<'_, _, GoldilocksExt2> =
                             model.run::<F>(input.clone()).unwrap();
                         let mut tr: BasicTranscript<GoldilocksExt2> =
@@ -919,7 +944,7 @@ pub(crate) mod test {
                         let proof = prover.prove(trace).expect("unable to generate proof");
                         let mut verifier_transcript: BasicTranscript<GoldilocksExt2> =
                             BasicTranscript::new(b"m2vec");
-                        let io = IO::new_padded(input.to_fields(), output.to_fields());
+                        let io = IO::new(input.to_fields(), output.to_fields());
                         verify::<_, _>(ctx, proof, io, &mut verifier_transcript).unwrap();
                     }
                 }

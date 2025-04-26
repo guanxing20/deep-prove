@@ -73,7 +73,7 @@ impl ScalingStrategy for InferenceObserver {
         let mut nsamples = 0;
         for (i, input) in inputs.iter().enumerate() {
             // let input_tensor = model.load_input_flat(input.clone());
-            let input_tensor = Tensor::new(model.input_not_padded.clone(), input.clone());
+            let input_tensor = Tensor::new(model.unpadded_input.clone(), input.clone());
             // ensure!(
             //    model.input_shape() == input_tensor.get_shape(),
             //    "input shape mismatch: expected {:?}, got {:?}",
