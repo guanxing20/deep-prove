@@ -256,21 +256,6 @@ mod test {
     type F = goldilocks::GoldilocksExt2;
 
     #[test]
-    fn test_wrapped_field() {
-        // for case in vec![-12,25,i8::MIN,i8::MAX] {
-        //     let a: i8 = case;
-        //     let af: F= a.to_field();
-        //     let f = af.to_canonical_u64_vec()[0];
-        //     let exp = if a.is_negative() {
-        //         MODULUS - (a as i64).unsigned_abs()
-        //     } else {
-        //         a as u64
-        //     };
-        //     assert_eq!(f,exp);
-        // }
-    }
-
-    #[test]
     fn test_wrapped_arithmetic() {
         #[derive(Clone, Debug)]
         struct TestCase {

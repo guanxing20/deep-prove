@@ -859,15 +859,9 @@ print("model prepared", net)
 # Create a subset of test data with exactly the same samples used in the JSON
 json_sample_dataset = Subset(testset, sample_indices)
 json_sample_loader = torch.utils.data.DataLoader(
-    json_sample_dataset, batch_size=batch_size, shuffle=False)
+json_sample_dataset, batch_size=batch_size, shuffle=False)
 # Calibrate first
 print('Post Training Quantization Prepare: Inserting Observers')
-
-# Calibrate with the training set
-# Create a subset of test data with exactly the same samples used in the JSON
-json_sample_dataset = Subset(testset, sample_indices)
-json_sample_loader = torch.utils.data.DataLoader(
-    json_sample_dataset, batch_size=batch_size, shuffle=False)
 num_calibration_batches = len(json_sample_loader)
 evaluate(net, criterion, json_sample_loader,
          neval_batches=num_calibration_batches)

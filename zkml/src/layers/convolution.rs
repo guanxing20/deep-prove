@@ -98,6 +98,9 @@ impl<T: Number> Convolution<T> {
         let (n_size, c_size, h_size, w_size) = self.filter.get4d();
 
         assert!(n < n_size);
+        assert!(c < c_size);
+        assert!(h < h_size);
+        assert!(w < w_size);
         let flat_index = n * (c_size * h_size * w_size) + c * (h_size * w_size) + h * w_size + w;
         self.filter.get_data()[flat_index]
     }
@@ -170,10 +173,6 @@ impl Convolution<f32> {
             );
         }
         self.filter.max_abs_output().max(self.bias.max_abs_output())
-    }
-
-    pub fn float_op(&self, input: &Tensor<f32>) -> Tensor<f32> {
-        input.conv2d(&self.filter, &self.bias, 1)
     }
 }
 
@@ -814,13 +813,13 @@ mod test {
                     let index =
                         i * fft_output.shape[1] * fft_output.shape[2] + j * fft_output.shape[2] + k;
                     let elem = fft_output.data[index];
-                    if !(i < not_padded_shape[0]
+                    if (i < not_padded_shape[0]
                         && j < not_padded_shape[1]
                         && k < not_padded_shape[2])
                     {
-                        garbage.push(elem);
-                    } else {
                         valid.push(elem);
+                    } else {
+                        garbage.push(elem);
                     }
                 }
             }
