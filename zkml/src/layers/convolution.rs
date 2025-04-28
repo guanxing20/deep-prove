@@ -709,7 +709,15 @@ pub fn phi_eval<E: ExtensionField>(
 
 #[cfg(test)]
 mod test {
-    use crate::{layers::dense, testing::random_vector};
+    use crate::{
+        layers::{
+            activation::{Activation, Relu},
+            dense,
+            pooling::{Maxpool2D, Pooling},
+        },
+        onnx_parse::{conv2d_shape, maxpool2d_shape},
+        testing::{NextPowerOfTwo, random_vector},
+    };
 
     use super::*;
     use goldilocks::GoldilocksExt2;
@@ -725,6 +733,136 @@ mod test {
         // TODO: change that process by a deterministic ID depending on the position and additional info
         // not necessarily seuential
         assert!(BIAS_POLY_ID >= dense::BIAS_POLY_ID + 100_000);
+    }
+
+    use crate::layers::Dense;
+    #[test]
+    pub fn test_conv_fft_vs_naive() {
+        let n_w = 1 << 2;
+        let k_w = 1 << 0;
+        let k_x = 1 << 0;
+
+        let mut input_shape_og = vec![k_x, 256, 256];
+        let mut input_shape_padded = input_shape_og.next_power_of_two();
+        let filter = Tensor::new(
+            vec![k_w, k_x, n_w, n_w],
+            random_vector_quant(k_w * k_x * n_w * n_w),
+        );
+        let bias = Tensor::new(vec![k_w], random_vector_quant(k_w));
+        let input = Tensor::new(
+            input_shape_og.clone(),
+            random_vector_quant(input_shape_og.iter().product()),
+        );
+
+        let output = input.conv2d(&filter, &bias, 1);
+        let dims = filter.get_shape();
+        let fft_conv = Convolution::new(
+            Tensor::new_conv(
+                dims.clone(),
+                input_shape_padded.clone(),
+                filter.get_data().to_vec(),
+            ),
+            bias.clone(),
+        );
+        let mut fft_input = input.clone();
+        fft_input.pad_to_shape(input_shape_padded.clone());
+        let (fft_output, _proving_data) = fft_conv.op::<GoldilocksExt2>(&fft_input);
+
+        input_shape_og = conv2d_shape(&input_shape_og, &filter.get_shape());
+        input_shape_padded = conv2d_shape(&input_shape_padded, &dims).next_power_of_two();
+
+        // add a RELU layer
+        let relu = Activation::Relu(Relu::new());
+        let output = relu.op(&output);
+        let fft_output = relu.op(&fft_output);
+
+        // make a pooled output
+        let pool = Pooling::Maxpool2D(Maxpool2D::default());
+        let output = pool.op(&output);
+        let fft_output = pool.op(&fft_output);
+        input_shape_og = maxpool2d_shape(&input_shape_og);
+        input_shape_padded = maxpool2d_shape(&input_shape_padded);
+
+        // again another conv
+        let filter = Tensor::new(
+            vec![k_w, k_x, n_w, n_w],
+            random_vector_quant(k_w * k_x * n_w * n_w),
+        );
+        let bias = Tensor::new(vec![k_w], random_vector_quant(k_w));
+        println!("2ND CONV: filter.get_shape() : {:?}", filter.get_shape());
+        println!("2ND CONV: bias.get_shape() : {:?}", bias.get_shape());
+        println!("2ND CONV: input.get_shape() : {:?}", output.get_shape());
+        let output = output.conv2d(&filter, &bias, 1);
+        let dims = filter.get_shape();
+        let fft_conv = Convolution::new(
+            Tensor::new_conv(
+                dims.clone(),
+                input_shape_padded.clone(),
+                filter.get_data().to_vec(),
+            ),
+            bias.clone(),
+        );
+        let mut fft_input = fft_output;
+        fft_input.pad_to_shape(input_shape_padded.clone());
+        let (fft_output, _proving_data) = fft_conv.op::<GoldilocksExt2>(&fft_input);
+
+        input_shape_og = conv2d_shape(&input_shape_og, &filter.get_shape());
+        input_shape_padded = conv2d_shape(&input_shape_padded, &dims).next_power_of_two();
+
+        // Add another RELU
+        let relu = Activation::Relu(Relu::new());
+        let output = relu.op(&output);
+        let fft_output = relu.op(&fft_output);
+
+        // make a pooled output
+        let pool = Pooling::Maxpool2D(Maxpool2D::default());
+        let output = pool.op(&output);
+        let fft_output = pool.op(&fft_output);
+        input_shape_og = maxpool2d_shape(&input_shape_og);
+        input_shape_padded = maxpool2d_shape(&input_shape_padded);
+
+        // now dense layer - first there is a "reshape" that flattens the input
+        let ignore_garbage_pad = (input_shape_og.clone(), input_shape_padded.clone());
+        input_shape_og = vec![input_shape_og.iter().product()];
+        input_shape_padded = vec![input_shape_padded.iter().product()];
+
+        let nrows = 10;
+        let ncols = input_shape_og[0];
+        let weight = Tensor::random(vec![nrows, ncols]);
+        let bias = Tensor::random(vec![nrows]);
+        let mut new_cols = ncols.next_power_of_two();
+        let new_rows = nrows.next_power_of_two();
+        if new_cols < input_shape_padded[0] {
+            // must make sure that we can apply the input to this padded dense
+            new_cols = input_shape_padded[0];
+        }
+        let conv_shape_og = ignore_garbage_pad.0.clone();
+        let conv_shape_pad = ignore_garbage_pad.1.clone();
+        let dense = Dense::new(weight.clone(), bias.clone());
+        let dense_output = dense.op(&output);
+
+        let fft_weight =
+            weight.pad_matrix_to_ignore_garbage(&conv_shape_og, &conv_shape_pad, &vec![
+                new_rows, new_cols,
+            ]);
+        let fft_bias = bias.clone().pad_1d(new_rows);
+        let fft_dense = Dense::new(fft_weight.clone(), fft_bias.clone());
+        println!("-- new_rows : {}, new_cols : {}", new_rows, new_cols);
+        println!("weight.get_shape() : {:?}", weight.get_shape());
+        println!("bias.get_shape() : {:?}", bias.get_shape());
+        println!("fft_input.get_shape() : {:?}", fft_output.get_shape());
+        println!("fft_weight.get_shape() : {:?}", fft_weight.get_shape());
+        println!("fft_bias.get_shape() : {:?}", fft_bias.get_shape());
+        println!(
+            "output shape : {:?} - product {}",
+            output.get_shape(),
+            output.get_shape().iter().product::<usize>()
+        );
+        let fft_dense_output = fft_dense.op(&fft_output);
+        assert_eq!(
+            dense_output.get_data()[..weight.nrows_2d()],
+            fft_dense_output.get_data()[..weight.nrows_2d()]
+        );
     }
 
     #[test]

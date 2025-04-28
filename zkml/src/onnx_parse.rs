@@ -197,7 +197,7 @@ fn check_cnn_input(input_shape: &[usize]) -> Result<bool> {
 
 /// Assumes stride=1, padding=0, and dilation=1
 /// https://pytorch.org/docs/stable/generated/torch.nn.Conv2d.html
-fn conv2d_shape(input_shape: &[usize], filter_shape: &[usize]) -> Vec<usize> {
+pub(crate) fn conv2d_shape(input_shape: &[usize], filter_shape: &[usize]) -> Vec<usize> {
     let result = check_filter(filter_shape);
     assert!(result.is_ok(), "conv2d: Failed {:?}", result.unwrap_err());
 
@@ -216,7 +216,7 @@ fn conv2d_shape(input_shape: &[usize], filter_shape: &[usize]) -> Vec<usize> {
 
 /// Assumes kernel=2, stride=2, padding=0, and dilation=1
 /// https://pytorch.org/docs/stable/generated/torch.nn.MaxPool2d.html
-fn maxpool2d_shape(input_shape: &[usize]) -> Vec<usize> {
+pub(crate) fn maxpool2d_shape(input_shape: &[usize]) -> Vec<usize> {
     let result = check_cnn_input(input_shape);
     assert!(
         result.is_ok(),
@@ -447,7 +447,7 @@ pub fn load_model<Q: Quantizer<Element>>(filepath: &str) -> Result<Model> {
 
                 let dims = weight.get_shape();
                 let weight = crate::tensor::Tensor::new_conv(
-                    weight.get_shape(),
+                    dims.clone(),
                     input_shape_padded.clone(),
                     weight.get_data().to_vec(),
                 );
@@ -467,13 +467,13 @@ pub fn load_model<Q: Quantizer<Element>>(filepath: &str) -> Result<Model> {
             }
             op if DOWNSAMPLING.contains(&op) => {
                 input_shape_og = maxpool2d_shape(&input_shape_og);
+                input_shape_padded = maxpool2d_shape(&input_shape_padded);
                 // Make sure that input shape is already padded and is well formed
                 assert!(input_shape_padded.iter().all(|d| d.is_power_of_two()));
 
                 let _ = fetch_maxpool_attributes(node)?;
                 let layer = Layer::Pooling(Pooling::Maxpool2D(Maxpool2D::default()));
                 layers.push(layer);
-                input_shape_padded = maxpool2d_shape(&input_shape_padded);
             }
             op if RESHAPE.contains(&op) => {
                 ignore_garbage_pad = Some((input_shape_og.clone(), input_shape_padded.clone()));
