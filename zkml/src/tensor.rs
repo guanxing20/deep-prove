@@ -1067,13 +1067,12 @@ where
 {
     pub fn get4d(&self) -> (usize, usize, usize, usize) {
         let mut offset = 0;
-        let n_size = if self.shape.len() == 3 { 
+        let n_size = if self.shape.len() == 3 {
             1
-         } else {
+        } else {
             offset = 1;
             self.shape.get(0).cloned().unwrap_or(1)
-         };
-        //let n_size = self.shape.get(0).cloned().unwrap_or(1);
+        };
         let c_size = self.shape.get(0 + offset).cloned().unwrap_or(1);
         let h_size = self.shape.get(1 + offset).cloned().unwrap_or(1);
         let w_size = self.shape.get(2 + offset).cloned().unwrap_or(1);
