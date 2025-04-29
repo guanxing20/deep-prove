@@ -78,9 +78,11 @@ pub struct ConvProof<E: ExtensionField> {
 impl<T: Number> Convolution<T> {
     pub fn new(filter: Tensor<T>, bias: Tensor<T>) -> Self {
         assert_eq!(filter.kw(), bias.get_shape()[0]);
+        assert_eq!(filter.get_shape().len(), 4);
         Self { filter, bias }
     }
-    pub fn add_bias(&self, conv_out: &Tensor<T>) -> Tensor<T> {
+    
+    fn add_bias(&self, conv_out: &Tensor<T>) -> Tensor<T> {
         let mut arr = conv_out.data.clone();
         assert_eq!(conv_out.data.len(), conv_out.kw() * conv_out.filter_size());
         for i in 0..conv_out.kw() {
@@ -136,6 +138,7 @@ impl Convolution<f32> {
     /// used to create a convoluation layer with from the raw float weights and bias.
     /// The wieghts are NOT fft'd as they are when the it is being quantized.
     pub fn new_raw(filter: Tensor<f32>, bias: Tensor<f32>) -> Self {
+        assert_eq!(filter.get_shape().len(), 4);
         Self { filter, bias }
     }
 
@@ -144,13 +147,8 @@ impl Convolution<f32> {
     /// TODO: refactor new_conv to be in convolution.rs and more efficient than cloning
     /// It uses a custom scaling factor `bias_s` for the bias, if provided,
     /// otherwise the same scaling factor of the weights (i.e., `s`) is used
-    pub fn quantize(
-        self,
-        s: &ScalingFactor,
-        bias_s: Option<&ScalingFactor>,
-    ) -> Convolution<Element> {
+    pub fn quantize(self, s: &ScalingFactor, bias_s: &ScalingFactor) -> Convolution<Element> {
         let quantized_filter = self.filter.quantize(s);
-        let bias_s = bias_s.unwrap_or(s);
         let bias = self.bias.quantize(bias_s);
         Convolution::<Element> {
             filter: quantized_filter,
@@ -180,10 +178,6 @@ impl Convolution<Element> {
     pub fn op<E: ExtensionField>(&self, input: &Tensor<Element>) -> (Tensor<Element>, ConvData<E>) {
         let (output, proving_data) = self.filter.fft_conv(input);
         (self.add_bias(&output), proving_data)
-        // create a new tensor that clears out the garbage values in the output, e.g. set all to 0
-        // this is necessary since the garbage might be of any value and we need to restrict the range of the output
-        // create_ignore_garbage(og_shape, padded_shape)
-        //(output, proving_data)
     }
 
     /// Returns the min and max output range of the convolution layer for a given input range.
@@ -194,38 +188,7 @@ impl Convolution<Element> {
         let exp = 2 * *quantization::BIT_LEN + ceil_log2(k_h * k_w * k_c + 1) as usize;
         let min = -(2u64.pow(exp as u32) as Element);
         let max = 2u64.pow(exp as u32) as Element;
-        return (min, max);
-        // let (global_min, global_max) = (Element::MAX, Element::MIN);
-        //// iterate over output channels and take the min/max of all of it
-        // return (0.._k_n)
-        //    .into_iter()
-        //    .map(|output| {
-        //        let (mut filter_min, mut filter_max) = (0, 0);
-        //        // iterate over input channels and sum up
-        //        for input in 0..k_c {
-        //            for h in 0..k_h {
-        //                for w in 0..k_w {
-        //                    let (ind_min, ind_max) = quantization::max_range_from_weight(
-        //                        &self.filter.get(output, input, h, w),
-        //                        &_min_input,
-        //                        &_max_input,
-        //                    );
-        //                    filter_min += ind_min;
-        //                    filter_max += ind_max;
-        //                }
-        //            }
-        //        }
-        //        (filter_min, filter_max)
-        //    })
-        //    .fold(
-        //        (global_min, global_max),
-        //        |(global_min, global_max), (local_min, local_max)| {
-        //            (
-        //                global_min.cmp_min(&local_min),
-        //                global_max.cmp_max(&local_max),
-        //            )
-        //        },
-        //    );
+        (min, max)
     }
 
     pub(crate) fn step_info<E: ExtensionField>(
@@ -237,25 +200,12 @@ impl Convolution<Element> {
         E: ExtensionField + DeserializeOwned,
         E::BaseField: Serialize + DeserializeOwned,
     {
-        // TO SEE
-        // last_output_size = filter.nrows_2d();
-        // let filter_shape = filter.filter.dims();
-        // let total_dims = last_output_shape.len();
-        // last_output_shape = std::iter::once(filter_shape[0])
-        // .chain(
-        // last_output_shape
-        // .iter()
-        // .skip(total_dims - 2)
-        // .map(|&dim| ceil_log2(dim)),
-        // )
-        // .collect::<Vec<usize>>();
         let mut filter_shape = self.filter.get_shape();
         filter_shape.remove(1);
         aux.last_output_shape = filter_shape;
 
         let mut delegation_fft: Vec<VPAuxInfo<E>> = Vec::new();
         let mut delegation_ifft: Vec<VPAuxInfo<E>> = Vec::new();
-        // println!("{},{}",id,filter.filter_size());
         for i in (0..(self.filter_size().ilog2() as usize)).rev() {
             delegation_fft.push(VPAuxInfo::<E>::from_mle_list_dimensions(&vec![vec![
                 i + 1,

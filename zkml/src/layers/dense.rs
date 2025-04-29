@@ -87,9 +87,8 @@ impl<T: Number> Dense<T> {
 impl Dense<f32> {
     /// Quantize the parameters of the dense layer. It uses a custom scaling factor `bias_s` for
     /// the bias, if provided, otherwise the same scaling factor of the weights (i.e., `s`) is used
-    pub fn quantize(self, s: &ScalingFactor, bias_s: Option<&ScalingFactor>) -> Dense<Element> {
+    pub fn quantize(self, s: &ScalingFactor, bias_s: &ScalingFactor) -> Dense<Element> {
         let matrix = self.matrix.quantize(s);
-        let bias_s = bias_s.unwrap_or(s);
         let bias = self.bias.quantize(bias_s);
         Dense::<Element> { matrix, bias }
     }
@@ -121,7 +120,8 @@ impl Dense<Element> {
     pub fn output_range(&self, _min_input: Element, _max_input: Element) -> (Element, Element) {
         // formula is 2^{2 * BIT_LEN + log(c) + 1} where c is the number of columns and +1 because of the bias
         let ncols = self.matrix.ncols_2d() as u32;
-        let power = 2 * (*quantization::BIT_LEN as u32) + ncols.ilog2() + 1;
+        // - 1 because numbers are signed so only half of the range is used when doing multiplication
+        let power = 2 * (*quantization::BIT_LEN as u32 - 1) + ncols.ilog2() + 1;
         let min = -(2u64.pow(power as u32) as Element);
         let max = 2u64.pow(power as u32) as Element;
         return (min, max);

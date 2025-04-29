@@ -3119,7 +3119,6 @@ dependencies = [
  "ff_ext",
  "gkr",
  "goldilocks",
- "hex",
  "itertools 0.13.0",
  "mpcs",
  "multilinear_extensions",

@@ -438,10 +438,10 @@ impl Tensor<Element> {
         let conv_data = ConvData::new(real_input, input, x_vec, prod, output);
         println!("INSIDE CONV FFT: x.shape = {:?}", x.shape);
         let out_element = conv_data.output_as_element(n_x);
-        return (
+        (
             Tensor::new(vec![self.shape[0], n_x, n_x], out_element),
             conv_data,
-        );
+        )
     }
 
     /// Returns the evaluation point, in order for (row,col) addressing
@@ -651,13 +651,8 @@ impl<T> Tensor<T>
 where
     T: Number,
 {
-    pub fn min(&self) -> T {
-        self.data.iter().fold(T::MAX, |min, x| min.cmp_min(x))
-    }
-    pub fn max(&self) -> T {
-        self.data.iter().fold(T::MIN, |max, x| max.cmp_max(x))
-    }
     pub fn reshape(mut self, new_shape: Vec<usize>) -> Tensor<T> {
+        assert!(self.shape.iter().product::<usize>() == new_shape.iter().product::<usize>(), "Shape mismatch for reshape");
         self.shape = new_shape;
         self
     }

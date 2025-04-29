@@ -184,10 +184,8 @@ impl Requant {
         let res = tmp - (max_bit >> self.right_shift);
         if !(res >= *quantization::MIN && res <= *quantization::MAX) {
             warn!("{} is NOT quantized correctly: res {}", e, res);
-            // RequantResult::OutOfRange(res.clamp(*quantization::MIN, *quantization::MAX))
             RequantResult::OutOfRange(res)
         } else {
-            // warn!("{} is OK quantized correctl: res {}", e, res);
             RequantResult::Ok(res)
         }
     }
