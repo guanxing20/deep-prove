@@ -35,7 +35,6 @@ use common::Op;
 use convolution::{ConvCtx, ConvProof, SchoolBookConvCtx};
 use dense::{DenseCtx, DenseProof};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use sha2::Sha256;
 
 #[derive(Clone, Debug)]
 pub enum Layer<T> {
@@ -270,13 +269,9 @@ impl Layer<Element> {
             Layer::Convolution(ref filter) => Ok(LayerOutput::ConvOut(filter.op(input))),
             // Traditional convolution is used for debug purposes. That is because the actual convolution
             // we use relies on the FFT algorithm. This convolution does not have a snark implementation.
-            Layer::SchoolBookConvolution(ref conv_pair) => {
-                Ok(LayerOutput::NormalOut(input.conv2d(
-                    &conv_pair.filter,
-                    &conv_pair.bias,
-                    1,
-                )))
-            }
+            Layer::SchoolBookConvolution(ref conv_pair) => Ok(LayerOutput::NormalOut(
+                input.conv2d(&conv_pair.filter, &conv_pair.bias, 1),
+            )),
 
             Layer::Requant(info) => info.op(input).map(|r| LayerOutput::NormalOut(r)),
             Layer::Pooling(info) => Ok(LayerOutput::NormalOut(info.op(input))),

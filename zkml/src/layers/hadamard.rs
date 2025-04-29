@@ -23,7 +23,7 @@ impl<F: ExtensionField> HadamardCtx<F> {
     pub fn new(v1: &Tensor<Element>, v2: &Tensor<Element>) -> Self {
         assert_eq!(v1.get_shape(), v2.get_shape());
         let num_vars = if v1.get_data().len().is_power_of_two() {
-            v1.get_data().len().ilog2() as usize    
+            v1.get_data().len().ilog2() as usize
         } else {
             v1.get_data().len().next_power_of_two().ilog2() as usize
         };
@@ -126,7 +126,10 @@ pub fn verify<F: ExtensionField, T: Transcript<F>>(
     /// Given the evaluations are given outside of the sumcheck proof, by the prover,
     /// we need to verify that they match what the sumcheck have been computed.
     let product = beta_eval * proof.v1_eval() * proof.v2_eval();
-    ensure!(product == subclaim.expected_evaluation, "Hadamard verification failed for product eval");
+    ensure!(
+        product == subclaim.expected_evaluation,
+        "Hadamard verification failed for product eval"
+    );
     Ok(Claim::new(proof.sumcheck.point.clone(), proof.v1_eval()))
 }
 

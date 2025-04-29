@@ -1,15 +1,8 @@
-use ff_ext::ExtensionField;
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde::{Deserialize, Serialize};
 
-use crate::{
-    Element, ScalingFactor, Tensor, commit::precommit::PolyID, iop::context::ContextAux,
-    layers::LayerCtx, tensor::Number,
-};
+use crate::{Tensor, tensor::Number};
 
-use super::{
-    Layer,
-    common::{Op, ProvableOp},
-};
+use super::common::Op;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Reshape;
 

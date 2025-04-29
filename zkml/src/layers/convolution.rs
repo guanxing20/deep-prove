@@ -81,7 +81,7 @@ impl<T: Number> Convolution<T> {
         assert_eq!(filter.get_shape().len(), 4);
         Self { filter, bias }
     }
-    
+
     fn add_bias(&self, conv_out: &Tensor<T>) -> Tensor<T> {
         let mut arr = conv_out.data.clone();
         assert_eq!(conv_out.data.len(), conv_out.kw() * conv_out.filter_size());
@@ -747,17 +747,13 @@ mod test {
             pooling::{Maxpool2D, Pooling},
         },
         onnx_parse::{conv2d_shape, maxpool2d_shape},
-        testing::{NextPowerOfTwo, random_vector},
+        testing::NextPowerOfTwo,
     };
 
     use super::*;
     use goldilocks::GoldilocksExt2;
 
-    use crate::{
-        layers::dense::{Dense},
-    };
-
-    use super::*;
+    use crate::layers::dense::Dense;
 
     fn split_garbage(
         fft_output: &Tensor<Element>,
@@ -773,9 +769,7 @@ mod test {
                     let index =
                         i * fft_output.shape[1] * fft_output.shape[2] + j * fft_output.shape[2] + k;
                     let elem = fft_output.data[index];
-                    if (i < not_padded_shape[0]
-                        && j < not_padded_shape[1]
-                        && k < not_padded_shape[2])
+                    if i < not_padded_shape[0] && j < not_padded_shape[1] && k < not_padded_shape[2]
                     {
                         valid.push(elem);
                     } else {
@@ -966,9 +960,9 @@ mod test {
 
         let mut input_shape_og = vec![k_x, 256, 256];
         let mut input_shape_padded = input_shape_og.next_power_of_two();
-        let filter = Tensor::random( vec![k_w, k_x, n_w, n_w]);
+        let filter = Tensor::random(vec![k_w, k_x, n_w, n_w]);
         let bias = Tensor::random(vec![k_w]);
-        let input = Tensor::random( input_shape_og.clone());
+        let input = Tensor::random(input_shape_og.clone());
 
         let output = input.conv2d(&filter, &bias, 1);
         let dims = filter.get_shape();
@@ -1000,7 +994,7 @@ mod test {
         input_shape_padded = maxpool2d_shape(&input_shape_padded).unwrap();
 
         // again another conv
-        let filter = Tensor::random( vec![k_w, k_x, n_w, n_w]);
+        let filter = Tensor::random(vec![k_w, k_x, n_w, n_w]);
         let bias = Tensor::random(vec![k_w]);
         println!("2ND CONV: filter.get_shape() : {:?}", filter.get_shape());
         println!("2ND CONV: bias.get_shape() : {:?}", bias.get_shape());

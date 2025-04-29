@@ -100,7 +100,7 @@ impl ScalingStrategy for InferenceObserver {
             .layers
             .into_iter()
             .enumerate()
-            .map(|(id,layer)| {
+            .map(|(id, layer)| {
                 match layer {
                     Layer::Dense(dense) => {
                         let model_scaling =
@@ -158,7 +158,7 @@ impl ScalingStrategy for InferenceObserver {
                         vec![Layer::Convolution(quantized_conv), Layer::Requant(requant)]
                     }
                     a => {
-                        println!("InferenceObserver: ANY {} layer {}",step_idx,a.describe());
+                        println!("InferenceObserver: ANY {} layer {}", step_idx, a.describe());
                         step_idx += 1;
                         return vec![a.quantize(
                             &last_input_scaling,
@@ -192,15 +192,6 @@ impl InferenceTracker {
             .entry(layer_index)
             .or_insert(Vec::new())
             .extend(output.get_data().iter().map(|x| *x as f64));
-    }
-
-    fn data_for(&self, layer_index: usize) -> Vec<f32> {
-        self.data
-            .get(&layer_index)
-            .expect(&format!("No data for layer {:?}", layer_index))
-            .iter()
-            .map(|x| *x as f32)
-            .collect_vec()
     }
 
     /// Returns the 0.05 and 0.95 quantiles of the distribution of the output values of the layer.
@@ -259,7 +250,7 @@ impl ScalingStrategy for AbsoluteMax {
             .layers
             .into_iter()
             .enumerate()
-            .flat_map(|(id,l)| {
+            .flat_map(|(id, l)| {
                 // If a layer requires a requantization step the current layer, this method returns the
                 // next layer, e.g. requantization layer, as well as the scaling factor of the output. This is
                 // given to the next layer as input scaling factor.
@@ -269,50 +260,55 @@ impl ScalingStrategy for AbsoluteMax {
                         let model_scaling = ScalingFactor::from_absolute_max(max_weight, None);
                         let bias_scaling = {
                             // bias has to be quantized over integers with double bit length
-                            let min_quantized = -(1 << (2*(*BIT_LEN) - 1)) + 1;
-                            let max_quantized = (1 << (2*(*BIT_LEN) - 1)) - 1;
+                            let min_quantized = -(1 << (2 * (*BIT_LEN) - 1)) + 1;
+                            let max_quantized = (1 << (2 * (*BIT_LEN) - 1)) - 1;
                             ScalingFactor::from_scale(
                                 last_input_scaling_factor.scale() * model_scaling.scale(),
-                                Some((min_quantized, max_quantized))
+                                Some((min_quantized, max_quantized)),
                             )
                         };
-                        let quantized_dense= d.quantize(&model_scaling, &bias_scaling);
-                        let (quant_min_output,_quant_max_output) = quantized_dense.output_range(*quantization::MIN,*quantization::MAX);
+                        let quantized_dense = d.quantize(&model_scaling, &bias_scaling);
+                        let (quant_min_output, _quant_max_output) =
+                            quantized_dense.output_range(*quantization::MIN, *quantization::MAX);
                         // TODO: remove this is broken
                         let output_scaling = ScalingFactor::default();
                         last_input_scaling_factor = output_scaling;
                         md.set_layers_scaling(id, output_scaling);
-                        let shift = last_input_scaling_factor.shift(&model_scaling, &output_scaling);
-                        let requant = Requant::new( quant_min_output.abs() as usize, shift);
+                        let shift =
+                            last_input_scaling_factor.shift(&model_scaling, &output_scaling);
+                        let requant = Requant::new(quant_min_output.abs() as usize, shift);
                         vec![Layer::Dense(quantized_dense), Layer::Requant(requant)]
-
                     }
                     Layer::Convolution(d) => {
                         let max_weight = d.max_abs_weight();
                         let model_scaling = ScalingFactor::from_absolute_max(max_weight, None);
                         let bias_scaling = {
                             // bias has to be quantized over integers with double bit length
-                            let min_quantized = -(1 << (2*(*BIT_LEN) - 1)) + 1;
-                            let max_quantized = (1 << (2*(*BIT_LEN) - 1)) - 1;
+                            let min_quantized = -(1 << (2 * (*BIT_LEN) - 1)) + 1;
+                            let max_quantized = (1 << (2 * (*BIT_LEN) - 1)) - 1;
                             ScalingFactor::from_scale(
                                 last_input_scaling_factor.scale() * model_scaling.scale(),
-                                Some((min_quantized, max_quantized))
+                                Some((min_quantized, max_quantized)),
                             )
                         };
-                        let quantized_conv= d.quantize(&model_scaling, &bias_scaling);
-                        let (quant_min_output,_quant_max_output) = quantized_conv.output_range(*quantization::MIN,*quantization::MAX);
+                        let quantized_conv = d.quantize(&model_scaling, &bias_scaling);
+                        let (quant_min_output, _quant_max_output) =
+                            quantized_conv.output_range(*quantization::MIN, *quantization::MAX);
                         // TODO: remove this is broken
                         let output_scaling = ScalingFactor::default();
                         md.set_layers_scaling(id, output_scaling);
-                        let shift = last_input_scaling_factor.shift(&model_scaling, &output_scaling);
+                        let shift =
+                            last_input_scaling_factor.shift(&model_scaling, &output_scaling);
                         last_input_scaling_factor = output_scaling;
                         let requant = Requant::new(quant_min_output.abs() as usize, shift);
                         vec![Layer::Convolution(quantized_conv), Layer::Requant(requant)]
                     }
-                    a => return vec![a.quantize(
-                        &last_input_scaling_factor,
-                        None // no scaling factor for bias needed for this layer
-                    )],
+                    a => {
+                        return vec![a.quantize(
+                            &last_input_scaling_factor,
+                            None, // no scaling factor for bias needed for this layer
+                        )];
+                    }
                 }
             })
             .collect::<Vec<Layer<Element>>>();

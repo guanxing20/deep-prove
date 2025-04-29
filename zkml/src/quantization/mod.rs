@@ -99,7 +99,7 @@ impl ScalingFactor {
     /// Take a floating point number and quantize it to an BIT_LEN-bit integer
     /// S = (a - (-a)) / (2^{BIT_LEN-1}- (-2^{BIT_LEN-1})) = 2a / 2^BIT_LEN
     pub fn quantize(&self, value: &f32) -> Element {
-        const ZERO_POINT : Element = 0;
+        const ZERO_POINT: Element = 0;
 
         // formula is q = round(r/S) + z
         // let scaled =((value.clamp(self.min,self.max) - self.min) / self.scale()).round() * self.scale() + self.min;

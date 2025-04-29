@@ -652,7 +652,10 @@ where
     T: Number,
 {
     pub fn reshape(mut self, new_shape: Vec<usize>) -> Tensor<T> {
-        assert!(self.shape.iter().product::<usize>() == new_shape.iter().product::<usize>(), "Shape mismatch for reshape");
+        assert!(
+            self.shape.iter().product::<usize>() == new_shape.iter().product::<usize>(),
+            "Shape mismatch for reshape"
+        );
         self.shape = new_shape;
         self
     }
