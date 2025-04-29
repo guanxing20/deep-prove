@@ -6,14 +6,16 @@ use crate::{
     lookup::logup_gkr::{prover::batch_prove as logup_batch_prove, verifier::verify_logup_proof},
     quantization,
 };
-use anyhow::anyhow;
+use anyhow::{Result, anyhow};
 use ff::Field;
 use ff_ext::ExtensionField;
 use gkr::util::ceil_log2;
 use itertools::Itertools;
-use multilinear_extensions::mle::IntoMLE;
+use multilinear_extensions::mle::{IntoMLE, MultilinearExtension};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use statrs::statistics::{Data, Distribution};
 use std::ops::{Add, Mul, Sub};
+use tracing::{debug, warn};
 use transcript::Transcript;
 
 use crate::{
@@ -26,17 +28,29 @@ use crate::{
 
 use super::LayerCtx;
 
+enum RequantResult {
+    Ok(Element),
+    OutOfRange(Element),
+}
+
 /// Information about a requantization step:
 /// * what is the range of the input data
 /// * what should be the shift to get back data in range within QuantInteger range
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Copy, PartialOrd, Ord, Hash)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Copy, PartialOrd)]
 pub struct Requant {
     // what is the shift that needs to be applied to requantize input number to the correct range of QuantInteger.
     pub right_shift: usize,
     // this is the range we expect the values to be in pre shift
+    // This is a magnitude: e.g. [-4;8] gives range = 12.
+    // This is to make sure to offset the values to be positive integers before doing the shift
+    // That info is used to construct a lookup table for the requantization so the size of the lookup table
+    // is directly correlated to the range of the input data.
     pub range: usize,
     /// The range we want the values to be in post requantizing
     pub after_range: usize,
+    /// TEST ONLY: this can be given to simulate a perfect requantization during inference. Note that it CAN NOT
+    /// be proven currently.
+    pub multiplier: Option<f32>,
 }
 
 /// Info related to the lookup protocol necessary to requantize
@@ -59,11 +73,56 @@ where
     pub(crate) lookup: LogUpProof<E>,
 }
 impl Requant {
-    pub fn op(&self, input: &crate::tensor::Tensor<Element>) -> crate::tensor::Tensor<Element> {
-        crate::tensor::Tensor::<Element>::new(
+    pub fn new(min_value: usize, right_shift: usize) -> Self {
+        Self {
+            right_shift,
+            range: min_value,
+            after_range: *quantization::RANGE as usize,
+            multiplier: None,
+        }
+    }
+    pub fn set_test_multiplier(&mut self, multiplier: f32) {
+        self.multiplier = Some(multiplier);
+    }
+    pub fn op(
+        &self,
+        input: &crate::tensor::Tensor<Element>,
+    ) -> Result<crate::tensor::Tensor<Element>> {
+        let mut not_ok_count = 0;
+        let res = input
+            .get_data()
+            .iter()
+            .map(|e| match self.apply(e) {
+                RequantResult::Ok(res) => res,
+                RequantResult::OutOfRange(res) => {
+                    not_ok_count += 1;
+                    res
+                }
+            })
+            .collect_vec();
+        let d = Data::new(res.iter().map(|e| *e as f64).collect_vec());
+        // Debug information to uncomment when debugging scaling factor. Sometimes the right shift is too high
+        // and we can observe values being null'd, e.g. set to 0 very quickly. Which messes up the distribution and
+        // thus the inference.
+        let stats = (d.mean().unwrap(), d.variance().unwrap());
+        debug!(
+            "AFTER REQUANT: shift {} : {:.2} % OUT OF RANGE (over total {})-> stats mean {:?} var {:?} \n\t->{:?}\n\t->{:?}",
+            self.right_shift,
+            not_ok_count as f32 / res.len() as f32 * 100.0,
+            res.len(),
+            stats.0,
+            stats.1,
+            &input.get_data()[..10.min(input.get_data().len())],
+            &res[..10.min(res.len())],
+        );
+        // ensure!(
+        //    not_ok_count == 0,
+        //    "Requantization led to out of range values"
+        //);
+        Ok(crate::tensor::Tensor::<Element>::new(
             input.get_shape(),
-            input.get_data().iter().map(|e| self.apply(e)).collect_vec(),
-        )
+            res,
+        ))
     }
 
     pub(crate) fn step_info<E: ExtensionField>(
@@ -99,11 +158,36 @@ impl Requant {
     /// The result is a value that has been scaled down to fit within the
     /// target bit width while preserving the relative magnitudes.
     #[inline(always)]
-    pub fn apply(&self, e: &Element) -> Element {
-        let max_bit = (self.range << 1) as i128;
+    fn apply(&self, e: &Element) -> RequantResult {
+        if let Some(_multiplier) = self.multiplier {
+            panic!("this is only for test - disable manually");
+            #[allow(unreachable_code)]
+            let _res = (*e as f64 * _multiplier as f64).round() as Element;
+            if !(_res >= *quantization::MIN && _res <= *quantization::MAX) {
+                return RequantResult::OutOfRange(
+                    _res.clamp(*quantization::MIN, *quantization::MAX),
+                );
+            } else {
+                return RequantResult::Ok(_res);
+            }
+        }
+        let max_bit = (self.range << 1) as Element;
         let tmp = e + max_bit;
+        assert!(
+            tmp >= 0,
+            "offset is too small: element {} + {} (self.range << 1) = {}",
+            e,
+            self.range << 1,
+            tmp
+        );
         let tmp = tmp >> self.right_shift;
-        tmp - (max_bit >> self.right_shift)
+        let res = tmp - (max_bit >> self.right_shift);
+        if !(res >= *quantization::MIN && res <= *quantization::MAX) {
+            warn!("{} is NOT quantized correctly: res {}", e, res);
+            RequantResult::OutOfRange(res)
+        } else {
+            RequantResult::Ok(res)
+        }
     }
 
     pub fn shape(&self) -> Vec<usize> {
@@ -209,7 +293,7 @@ impl Requant {
         let mut lookups = vec![vec![0i128; 1 << num_vars]; num_columns];
         let mut lookups_field = vec![vec![E::BaseField::ZERO; 1 << num_vars]; num_columns];
         // Bit mask for the bytes
-        let bit_mask = self.after_range as i128 - 1;
+        let bit_mask = self.after_range.next_power_of_two() as i128 - 1;
 
         let max_bit = self.range << 1;
         let subtract = max_bit >> self.right_shift;
@@ -237,7 +321,7 @@ impl Requant {
                     let val_field: E = value.to_field();
                     discarded_lookup_chunk[index] = value;
                     discarded_field_chunk[index] = val_field.as_bases()[0];
-                    remainder_vals >>= self.after_range.ilog2();
+                    remainder_vals >>= ceil_log2(self.after_range);
                 });
             debug_assert_eq!(remainder_vals, 0);
         });
@@ -271,14 +355,13 @@ impl Requant {
 
         let tmp_eval = E::from(1 << self.right_shift as u64)
             * (eval_claims[0] + E::from(subtract as u64) - E::from(self.after_range as u64 >> 1))
-            + eval_claims
-                .iter()
-                .skip(1)
-                .rev()
-                .enumerate()
-                .fold(E::default(), |acc, (i, &claim)| {
-                    acc + E::from((self.after_range.pow(i as u32)) as u64) * (claim)
-                });
+            + eval_claims.iter().skip(1).rev().enumerate().fold(
+                E::default(),
+                |acc, (i, &claim)| {
+                    acc + E::from((self.after_range.next_power_of_two().pow(i as u32)) as u64)
+                        * (claim)
+                },
+            );
         tmp_eval - E::from(max_bit as u64)
     }
     pub(crate) fn prove_step<E: ExtensionField, T: Transcript<E>>(
@@ -317,13 +400,23 @@ impl Requant {
             .ok_or(anyhow!("No claims found"))?;
         let point = first_claim.point.clone();
 
+        let corrected_claim = Claim::<E> {
+            point: point.clone(),
+            eval: first_claim.eval - E::from((*quantization::RANGE / 2) as u64),
+        };
+        println!("correct claim eval: {:?}", corrected_claim.eval);
+        println!(
+            "output eval: {:?}",
+            output.to_vec().into_mle().evaluate(&corrected_claim.point)
+        );
         // Add the claim used in the activation function
-        same_poly_prover.add_claim(first_claim.clone())?;
+        same_poly_prover.add_claim(corrected_claim)?;
         let claim_acc_proof = same_poly_prover.prove(&same_poly_ctx, prover.transcript)?;
 
         prover
             .witness_prover
             .add_claim(requant_info.poly_id, claim_acc_proof.extract_claim())?;
+        println!("REQUANT: WITNESS Poly ID: {}", requant_info.poly_id);
 
         prover.push_proof(LayerProof::Requant(RequantProof {
             io_accumulation: claim_acc_proof,
@@ -374,7 +467,7 @@ impl RequantCtx {
         // The first claim needs to be shifted down as we add a value to make sure that all its evals are in the range 0..1 << BIT_LEn
         let corrected_claim = Claim::<E>::new(
             point.clone(),
-            first_claim.eval - E::from(1 << (*quantization::BIT_LEN - 1)),
+            first_claim.eval - E::from((*quantization::RANGE / 2) as u64),
         );
         sp_verifier.add_claim(corrected_claim)?;
 

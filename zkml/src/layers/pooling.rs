@@ -11,7 +11,7 @@ use crate::{
         },
     },
     quantization::{Fieldizer, IntoElement},
-    tensor::Tensor,
+    tensor::{Number, Tensor},
 };
 use anyhow::{Context, ensure};
 use ff_ext::ExtensionField;
@@ -66,7 +66,7 @@ where
 }
 
 impl Pooling {
-    pub fn op(&self, input: &Tensor<Element>) -> Tensor<Element> {
+    pub fn op<T: Number>(&self, input: &Tensor<T>) -> Tensor<T> {
         match self {
             Pooling::Maxpool2D(maxpool2d) => maxpool2d.op(input),
         }
@@ -422,7 +422,7 @@ impl Default for Maxpool2D {
 }
 
 impl Maxpool2D {
-    pub fn op(&self, input: &Tensor<Element>) -> Tensor<Element> {
+    pub fn op<T: Number>(&self, input: &Tensor<T>) -> Tensor<T> {
         assert!(
             self.kernel_size == MAXPOOL2D_KERNEL_SIZE,
             "Maxpool2D works only for kernel size {}",
@@ -709,7 +709,7 @@ mod tests {
             vp.add_mle_list(diff_mles, F::ONE);
 
             let random_point = (0..output_num_vars)
-                .map(|_| F::random(&mut rng))
+                .map(|_| <F as Field>::random(&mut rng))
                 .collect::<Vec<F>>();
 
             let beta_evals = compute_betas_eval(&random_point);
@@ -773,7 +773,8 @@ mod tests {
             // in order output - 00, output - 10, output - 01, output - 11, eq I believe
             let final_mle_evals = state.get_mle_final_evaluations();
 
-            let [r1, r2] = [F::random(&mut rng); 2];
+            // let (r1, r2) = (<F as Field>::random(&mut rng), <F as Field>::random(&mut rng));
+            let [r1, r2] = [<F as Field>::random(&mut rng); 2];
             let one_minus_r1 = F::ONE - r1;
             let one_minus_r2 = F::ONE - r2;
 

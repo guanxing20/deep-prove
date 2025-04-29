@@ -1,4 +1,5 @@
 use crate::{
+    Element,
     iop::precommit::{self, PolyID},
     layers::LayerCtx,
     lookup::context::{LookupContext, TableType},
@@ -61,7 +62,10 @@ where
     /// Generates a context to give to the verifier that contains informations about the polynomials
     /// to prove at each step.
     /// INFO: it _assumes_ the model is already well padded to power of twos.
-    pub fn generate(model: &Model, input_shape: Option<Vec<usize>>) -> anyhow::Result<Self> {
+    pub fn generate(
+        model: &Model<Element>,
+        input_shape: Option<Vec<usize>>,
+    ) -> anyhow::Result<Self> {
         let tables = BTreeSet::new();
         let last_output_shape = if let Some(shape) = input_shape {
             shape
@@ -74,7 +78,7 @@ where
         };
         let mut step_infos = Vec::with_capacity(model.layer_count());
         debug!("Context : layer info generation ...");
-        for (id, layer) in model.layers() {
+        for (id, layer) in model.provable_layers() {
             trace!(
                 "Context : {}-th layer {}info generation ...",
                 id,

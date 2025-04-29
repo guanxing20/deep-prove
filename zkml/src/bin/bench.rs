@@ -5,14 +5,18 @@ use std::{
     path::Path,
     time,
 };
+use zkml::{
+    model::Model,
+    quantization::{AbsoluteMax, InferenceObserver, ModelMetadata, ScalingStrategy},
+};
 
 use anyhow::{Context as CC, ensure};
 use clap::Parser;
 use csv::WriterBuilder;
 use goldilocks::GoldilocksExt2;
-use tracing::info;
+use tracing::{debug, info};
 use tracing_subscriber::{EnvFilter, fmt};
-use zkml::{load_model, quantization::Quantizer};
+use zkml::FloatOnnxLoader;
 
 use serde::{Deserialize, Serialize};
 use zkml::{
@@ -37,10 +41,31 @@ struct Args {
     /// Number of samples to process
     #[arg(short, long, default_value_t = 30)]
     num_samples: usize,
+    /// Skip proving and verifying, only run inference and check accuracy
+    #[arg(short, long, default_value_t = false)]
+    skip_proving: bool,
+
+    /// Quantization strategy to use
+    #[arg(short, long, default_value_t = {"inference".to_string()})]
+    quantization: String,
+
+    /// Specific input indices to run inference on (comma-separated list)
+    #[arg(long, value_delimiter = ',', value_parser = parse_usize)]
+    run_indices: Option<Vec<usize>>,
+
+    /// Specific indices to use for calibration
+    #[arg(long, value_delimiter = ',', value_parser = parse_usize)]
+    calibration_indices: Option<Vec<usize>>,
+}
+
+// Helper function to parse a single usize
+fn parse_usize(s: &str) -> Result<usize, String> {
+    s.trim()
+        .parse()
+        .map_err(|e| format!("Invalid index: {}", e))
 }
 
 pub fn main() -> anyhow::Result<()> {
-    // tracing_subscriber::fmt::init();
     let subscriber = fmt::Subscriber::builder()
         .with_env_filter(EnvFilter::from_default_env())
         .finish();
@@ -48,65 +73,118 @@ pub fn main() -> anyhow::Result<()> {
     tracing::subscriber::set_global_default(subscriber).expect("Failed to set global subscriber");
     let args = Args::parse();
     run(args).context("error running bench:")?;
+
     Ok(())
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct InputJSON {
-    input_data: Vec<Vec<f64>>,
-    output_data: Vec<Vec<f64>>,
+    input_data: Vec<Vec<f32>>,
+    output_data: Vec<Vec<f32>>,
+    pytorch_output: Vec<Vec<f32>>,
 }
 
 impl InputJSON {
     /// Returns (input,output) from the path
-    pub fn from(
-        path: &str,
-        num_samples: usize,
-    ) -> anyhow::Result<(Vec<Vec<Element>>, Vec<Vec<Element>>)> {
+    pub fn from(path: &str, num_samples: usize) -> anyhow::Result<Self> {
         let file = File::open(path)?;
         let reader = BufReader::new(file);
-        let u: Self = serde_json::from_reader(reader)?;
+        let mut u: Self = serde_json::from_reader(reader)?;
+        u.truncate(num_samples);
         u.validate()?;
-        Ok(u.to_elements(num_samples))
+        Ok(u)
+    }
+
+    fn filter(&self, indices: Option<&Vec<usize>>) -> Self {
+        if let Some(indices) = indices {
+            assert!(
+                indices.iter().all(|i| *i < self.input_data.len()),
+                "Index {} is out of range (max: {})",
+                indices.iter().max().unwrap(),
+                self.input_data.len() - 1
+            );
+            let input_data = indices
+                .iter()
+                .map(|i| self.input_data[*i].clone())
+                .collect();
+            let output_data = indices
+                .iter()
+                .map(|i| self.output_data[*i].clone())
+                .collect();
+            let pytorch_output = indices
+                .iter()
+                .map(|i| self.pytorch_output[*i].clone())
+                .collect();
+            Self {
+                input_data,
+                output_data,
+                pytorch_output,
+            }
+        } else {
+            self.clone()
+        }
+    }
+
+    fn truncate(&mut self, num_samples: usize) {
+        self.input_data.truncate(num_samples);
+        self.output_data.truncate(num_samples);
+        self.pytorch_output.truncate(num_samples);
     }
     // poor's man validation
     fn validate(&self) -> anyhow::Result<()> {
-        let rrange = -1.0..=1.0;
+        let rrange = zkml::quantization::MIN_FLOAT..=zkml::quantization::MAX_FLOAT;
         ensure!(self.input_data.len() > 0);
         let input_isreal = self
             .input_data
             .iter()
             .all(|v| v.iter().all(|&x| rrange.contains(&x)));
         assert_eq!(self.input_data.len(), self.output_data.len());
+        assert_eq!(self.input_data.len(), self.pytorch_output.len());
         ensure!(
             input_isreal,
             "can only support real model so far (input at least)"
         );
         Ok(())
     }
-    fn to_elements(mut self, num_samples: usize) -> (Vec<Vec<Element>>, Vec<Vec<Element>>) {
-        let len = std::cmp::min(self.input_data.len(), num_samples);
+    fn to_elements(self, md: &ModelMetadata) -> (Vec<Vec<Element>>, Vec<Vec<Element>>) {
         let inputs = self
             .input_data
-            .drain(..len)
-            .map(|input| {
-                input
-                    .into_iter()
-                    .map(|e| Element::from_f32_unsafe(&(e as f32)))
-                    .collect()
-            })
+            .into_iter()
+            .map(|input| input.into_iter().map(|e| md.input.quantize(&e)).collect())
             .collect();
+        let output_sf = md.output_scaling_factor();
         let outputs = self
             .output_data
-            .drain(..len)
-            .map(|output| {
-                output
-                    .into_iter()
-                    .map(|e| Element::from_f32_unsafe(&(e as f32)))
-                    .collect()
-            })
+            .into_iter()
+            .map(|output| output.into_iter().map(|e| output_sf.quantize(&e)).collect())
             .collect();
         (inputs, outputs)
+    }
+
+    /// Computes the accuracy of pytorch outputs against the expected outputs
+    pub fn compute_pytorch_accuracy(&self) -> f32 {
+        let mut accuracies = Vec::new();
+
+        for (i, (expected, pytorch_out)) in self
+            .output_data
+            .iter()
+            .zip(self.pytorch_output.iter())
+            .enumerate()
+        {
+            let accuracy = argmax_compare(expected, pytorch_out);
+            accuracies.push(accuracy);
+            debug!(
+                "PyTorch Run {}/{}: \n\t truth {:?} \n\t pytorch {:?}\n\t-> Accuracy: {}",
+                i + 1,
+                self.output_data.len(),
+                expected,
+                pytorch_out,
+                if accuracy > 0 { "correct" } else { "incorrect" }
+            );
+        }
+
+        let avg_accuracy = calculate_average_accuracy(&accuracies);
+        avg_accuracy
     }
 }
 
@@ -117,23 +195,84 @@ const CSV_VERIFYING: &str = "verifying (ms)";
 const CSV_ACCURACY: &str = "accuracy (bool)";
 const CSV_PROOF_SIZE: &str = "proof size (KB)";
 
+/// Runs the model in float format and returns the average accuracy
+fn run_float_model(raw_inputs: &InputJSON, model: &Model<f32>) -> f32 {
+    let mut accuracies = Vec::new();
+    info!("[+] Running model in float format");
+
+    for (i, (input, expected)) in raw_inputs
+        .input_data
+        .iter()
+        .zip(raw_inputs.output_data.iter())
+        .enumerate()
+    {
+        // Run the model in float mode
+        let output = model.run_float(input.clone());
+        let accuracy = argmax_compare(expected, &output.get_data());
+        accuracies.push(accuracy);
+        debug!(
+            "Float Run {}/{}: Accuracy: {}",
+            i + 1,
+            raw_inputs.input_data.len(),
+            if accuracy > 0 { "correct" } else { "incorrect" }
+        );
+    }
+
+    calculate_average_accuracy(&accuracies)
+}
+
 fn run(args: Args) -> anyhow::Result<()> {
+    info!("[+] Reading raw input/output from {}", args.io);
+    let run_inputs = InputJSON::from(&args.io, args.num_samples).context("loading input:")?;
+    let calibration_inputs = run_inputs.filter(args.calibration_indices.as_ref());
+    let run_inputs = run_inputs.filter(args.run_indices.as_ref());
+    let strategy = quantization_strategy_from(&args, &calibration_inputs);
+    let strat_name = strategy.name().to_string();
     info!("[+] Reading onnx model");
-    let model = load_model::<Element>(&args.onnx)?;
+    let (model, md) = FloatOnnxLoader::new(&args.onnx)
+        .with_scaling_strategy(strategy)
+        .with_keep_float(true)
+        .build()?;
     info!("[+] Model loaded");
     model.describe();
-    info!("[+] Reading input/output from pytorch");
-    let (inputs, given_outputs) =
-        InputJSON::from(&args.io, args.num_samples).context("loading input:")?;
+
+    // Get float accuracy if float model is available
+    let float_accuracy = if let Some(ref float_model) = md.float_model {
+        info!("[+] Running float model");
+        run_float_model(&run_inputs, float_model)
+    } else {
+        info!("[!] No float model available");
+        0.0
+    };
+
+    info!("[+] Computing PyTorch accuracy");
+    let num_samples = run_inputs.output_data.len();
+    let pytorch_accuracy = run_inputs.compute_pytorch_accuracy();
+    info!("[+] Quantizing inputs with strategy: {}", strat_name);
+    let (inputs, given_outputs) = run_inputs.to_elements(&md);
 
     // Generate context once and measure the time
-    info!("[+] Generating context for proving");
     let now = time::Instant::now();
-    let ctx = Context::<F>::generate(&model, None).expect("unable to generate context");
+    let ctx = if !args.skip_proving {
+        info!("[+] Generating context for proving");
+        Some(Context::<F>::generate(&model, None).expect("unable to generate context"))
+    } else {
+        None
+    };
     let setup_time = now.elapsed().as_millis();
     info!("STEP: {} took {}ms", CSV_SETUP, setup_time);
 
-    for (input, given_output) in inputs.into_iter().zip(given_outputs.into_iter()) {
+    // Collect accuracies for final average
+    let mut accuracies = Vec::new();
+    // Track failed inputs
+    let mut failed_inputs = Vec::new();
+
+    let input_iter = inputs
+        .into_iter()
+        .zip(given_outputs.into_iter())
+        .enumerate();
+
+    for (i, (input, given_output)) in input_iter {
         let mut bencher = CSVBencher::from_headers(vec![
             CSV_SETUP,
             CSV_INFERENCE,
@@ -147,18 +286,58 @@ fn run(args: Args) -> anyhow::Result<()> {
         bencher.set(CSV_SETUP, setup_time);
 
         let input_tensor = model.load_input_flat(input);
+        // let input_tensor : Tensor<Element> = Tensor::new(model.input_not_padded.clone(), input);
 
         info!("[+] Running inference");
-        let trace = bencher.r(CSV_INFERENCE, || model.run(input_tensor.clone()));
-        let output = trace.final_output().clone();
-        bencher.set(
-            CSV_ACCURACY,
-            compare(&given_output, &output.get_data().to_vec()),
-        );
+        // Handle model.run failures gracefully
+        let trace_result = bencher.r(CSV_INFERENCE, || model.run(input_tensor.clone()));
 
+        // If model.run fails, print the error and continue to the next input
+        let trace = match trace_result {
+            Ok(trace) => trace,
+            Err(e) => {
+                info!(
+                    "[!] Error running inference for input {}/{}: {}",
+                    i + 1,
+                    args.num_samples,
+                    e
+                );
+                failed_inputs.push(i);
+                continue; // Skip to the next input without writing to CSV
+            }
+        };
+        // TEST
+        {
+            // This prints the min/max in f32 of the output of each layer for this run
+            let dequantized_trace = trace.dequantized(&md);
+            for step in dequantized_trace.steps.iter() {
+                println!(
+                    "DEQUANTIZED STEP {}: output min/max: {}/{}",
+                    step.id,
+                    step.output.min_value(),
+                    step.output.max_value()
+                );
+            }
+        }
+
+        let output = trace.final_output().clone();
+        let accuracy = argmax_compare(&given_output, &output.get_data().to_vec());
+        accuracies.push(accuracy);
+        bencher.set(CSV_ACCURACY, accuracy);
+        // Log per-run accuracy
+        info!(
+            "Run {}/{}: Accuracy: {}",
+            i + 1,
+            args.num_samples,
+            if accuracy > 0 { "correct" } else { "incorrect" }
+        );
+        if args.skip_proving {
+            info!("[+] Skipping proving");
+            continue;
+        }
         info!("[+] Running prover");
         let mut prover_transcript = default_transcript();
-        let prover = Prover::<_, _>::new(&ctx, &mut prover_transcript);
+        let prover = Prover::<_, _>::new(ctx.as_ref().unwrap(), &mut prover_transcript);
         let proof = bencher.r(CSV_PROVING, move || {
             prover.prove(trace).expect("unable to generate proof")
         });
@@ -172,7 +351,13 @@ fn run(args: Args) -> anyhow::Result<()> {
         let mut verifier_transcript = default_transcript();
         let io = IO::new(input_tensor.to_fields(), output.to_fields());
         bencher.r(CSV_VERIFYING, || {
-            verify::<_, _>(ctx.clone(), proof, io, &mut verifier_transcript).expect("invalid proof")
+            verify::<_, _>(
+                ctx.as_ref().unwrap().clone(),
+                proof,
+                io,
+                &mut verifier_transcript,
+            )
+            .expect("invalid proof")
         });
         info!("[+] Verify proof: valid");
 
@@ -180,14 +365,36 @@ fn run(args: Args) -> anyhow::Result<()> {
         info!("[+] Benchmark results appended to {}", args.bench);
     }
 
+    // Calculate and display average accuracy
+    let avg_accuracy = calculate_average_accuracy(&accuracies);
+
+    // Single final accuracy comparison
+    info!("Final accuracy comparison across {} runs:", num_samples);
+    info!("ZKML float model accuracy: {:.2}%", float_accuracy * 100.0);
+    info!(
+        "ZKML quantized model accuracy: {:.2}%",
+        avg_accuracy * 100.0
+    );
+    info!("PyTorch accuracy: {:.2}%", pytorch_accuracy * 100.0);
+
+    // Report failure statistics
+    info!(
+        "[!] Failed inputs: {}/{} = {:.2}% (indices: {:?})",
+        failed_inputs.len(),
+        num_samples,
+        (failed_inputs.len() as f32 / num_samples as f32) * 100.0,
+        failed_inputs
+    );
     Ok(())
 }
 
-fn compare<A: PartialOrd, B: PartialOrd>(given_output: &[A], computed_output: &[B]) -> usize {
+fn argmax_compare<A: PartialOrd, B: PartialOrd>(
+    given_output: &[A],
+    computed_output: &[B],
+) -> usize {
     let compare_size = std::cmp::min(given_output.len(), computed_output.len());
     let a_max = argmax(&given_output[..compare_size]);
     let b_max = argmax(&computed_output[..compare_size]);
-    info!("Accuracy: {}", if a_max == b_max { 1 } else { 0 });
     if a_max == b_max { 1 } else { 0 }
 }
 
@@ -217,7 +424,10 @@ impl CSVBencher {
 
     fn check(&self, column: &str) {
         if self.data.contains_key(column) {
-            panic!("CSVBencher only handles one row for now");
+            panic!(
+                "CSVBencher only flushes one row at a time for now (key already registered: {})",
+                column
+            );
         }
         if !self.headers.contains(&column.to_string()) {
             panic!("column {} non existing", column);
@@ -253,5 +463,23 @@ impl CSVBencher {
         writer.write_record(&values)?;
         writer.flush()?;
         Ok(())
+    }
+}
+
+fn calculate_average_accuracy(accuracies: &[usize]) -> f32 {
+    if accuracies.is_empty() {
+        return 0.0;
+    }
+    let sum: usize = accuracies.iter().sum();
+    sum as f32 / accuracies.len() as f32
+}
+
+fn quantization_strategy_from(args: &Args, inputs: &InputJSON) -> Box<dyn ScalingStrategy> {
+    match args.quantization.as_ref() {
+        "inference" => Box::new(InferenceObserver::new_with_representative_input(
+            inputs.input_data.clone(),
+        )),
+        "maxabs" => Box::new(AbsoluteMax::new()),
+        _ => panic!("Unsupported quantization strategy: {}", args.quantization),
     }
 }

@@ -4,7 +4,7 @@ use crate::{
     commit::{compute_betas_eval, precommit},
     layers::{Layer, LayerCtx, LayerProof},
     lookup::{
-        context::generate_lookup_witnesses,
+        context::{TABLE_POLY_ID_OFFSET, generate_lookup_witnesses},
         logup_gkr::{prover::batch_prove as logup_batch_prove, structs::LogUpInput},
     },
     model::{InferenceStep, InferenceTrace},
@@ -90,7 +90,11 @@ where
         step: &InferenceStep<'b, E, E>,
         info: &LayerCtx<E>,
     ) -> anyhow::Result<Claim<E>> {
-        debug!("PROVER: proving layer {}", step.layer.to_string());
+        debug!(
+            "PROVER: proving layer {} vs ctx {}",
+            step.layer.to_string(),
+            info.variant_name()
+        );
         let claim = match (step.layer, info) {
             (Layer::Dense(dense), LayerCtx::Dense(info)) => {
                 dense.prove_step(self, last_claim, input, &step.output, info)
@@ -119,7 +123,7 @@ where
 
     #[timed::timed_instrument(level = "debug")]
     fn prove_tables(&mut self) -> anyhow::Result<()> {
-        let mut poly_id = self.ctx.steps_info.len();
+        let mut poly_id = TABLE_POLY_ID_OFFSET;
 
         self.table_witness
             .iter()
@@ -406,7 +410,11 @@ where
         // return Proof;
     }
 
-    pub fn prove<'b>(mut self, trace: InferenceTrace<'b, Element, E>) -> anyhow::Result<Proof<E>> {
+    pub fn prove<'b>(
+        mut self,
+        full_trace: InferenceTrace<'b, Element, E>,
+    ) -> anyhow::Result<Proof<E>> {
+        let trace = full_trace.provable_steps();
         // write commitments and polynomials info to transcript
         self.ctx.write_to_transcript(self.transcript)?;
         // then create the context for the witness polys -
@@ -437,7 +445,6 @@ where
         };
 
         // let trace_size = trace.last_step().id;
-
         // we start by the output to prove up to the input, GKR style
         for ((input, step), info) in trace.iter().rev().zip(self.ctx.steps_info.iter()) {
             last_claim = self.prove_step(last_claim, input, step, &info)?;
@@ -474,7 +481,7 @@ where
         // let (lookup_witness, polys) =
         //     lookup::WitnessContext::<E>::initialise_witness_ctx(&self.ctx.lookup, trace)?;
 
-        self.witness_ctx = Some(witness_ctx);
+        self.witness_ctx = witness_ctx;
         self.challenge_storage = challenge_storage;
         self.lookup_witness = lookup_witnesses;
         self.table_witness = table_witnesses;

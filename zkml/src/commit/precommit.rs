@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 
 use crate::{
-    Claim, VectorTranscript,
+    Claim, Element, VectorTranscript,
     commit::{aggregated_rlc, compute_beta_eval_poly, compute_betas_eval},
     layers::{Layer, convolution, dense},
     model::Model,
@@ -82,9 +82,9 @@ where
     E: Serialize + DeserializeOwned,
 {
     /// NOTE: it assumes the model's layers are already padded to power of two
-    pub fn generate_from_model(m: &Model) -> anyhow::Result<Self> {
+    pub fn generate_from_model(m: &Model<Element>) -> anyhow::Result<Self> {
         Self::generate(
-            m.layers()
+            m.provable_layers()
                 .flat_map(|(id, l)| match l {
                     Layer::Dense(dense) => {
                         let evals = dense.matrix.evals_2d();
@@ -196,12 +196,13 @@ where
         &self,
         claims: Vec<IndividualClaim<E>>,
     ) -> anyhow::Result<Vec<IndividualClaim<E>>> {
-        assert_eq!(
+        ensure!(
+            claims.len() == self.poly_info.len(),
+            "claims.len() = {} vs poly.len() = {} -- {:?} vs polys {:?}",
             claims.len(),
             self.poly_info.len(),
-            "claims.len() = {} vs poly.len() = {}",
-            claims.len(),
-            self.poly_info.len()
+            claims.iter().map(|c| c.poly_id).collect_vec(),
+            self.poly_info.keys().collect_vec()
         );
         let mut sorted_claims = claims.clone();
         for (idx, claim) in claims.into_iter().enumerate() {

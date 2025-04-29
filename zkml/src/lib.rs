@@ -13,13 +13,15 @@ pub use iop::{
     prover::Prover,
     verifier::{IO, verify},
 };
+pub use quantization::{ScalingFactor, ScalingStrategy};
 pub mod layers;
 pub mod lookup;
 pub mod model;
 mod onnx_parse;
-pub use onnx_parse::{ModelType, load_model};
-
+pub mod padding;
+pub use onnx_parse::{FloatOnnxLoader, ModelType};
 pub mod tensor;
+pub use tensor::Tensor;
 #[cfg(test)]
 mod testing;
 
@@ -120,10 +122,22 @@ impl<T: Transcript<E>, E: ExtensionField> VectorTranscript<E> for T {
 }
 
 pub fn argmax<T: PartialOrd>(v: &[T]) -> Option<usize> {
-    v.iter()
-        .enumerate()
-        .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap()) // Unwrap is safe if T implements PartialOrd properly
-        .map(|(idx, _)| idx)
+    if v.is_empty() {
+        return None;
+    }
+
+    let mut max_index = 0;
+    let mut max_value = &v[0];
+
+    for (i, value) in v.iter().enumerate().skip(1) {
+        // Only update if strictly greater, ensuring we take the first maximum in ties
+        if value > max_value {
+            max_index = i;
+            max_value = value;
+        }
+    }
+
+    Some(max_index)
 }
 
 #[cfg(test)]
@@ -134,13 +148,12 @@ mod test {
     use multilinear_extensions::mle::{IntoMLE, MultilinearExtension};
 
     use crate::{
-        Element, default_transcript,
+        FloatOnnxLoader, default_transcript,
         iop::{
             Context,
             prover::Prover,
             verifier::{IO, verify},
         },
-        load_model,
         onnx_parse::ModelType,
         quantization::TensorFielder,
         tensor::Tensor,
@@ -165,10 +178,10 @@ mod test {
 
     fn test_model_run_helper() -> anyhow::Result<()> {
         let filepath = workspace_root().join("zkml/assets/model.onnx");
-        ModelType::MLP
-            .validate(&filepath.to_string_lossy())
-            .unwrap();
-        let model = load_model::<Element>(&filepath.to_string_lossy()).unwrap();
+        let (model, _md) = FloatOnnxLoader::new(&filepath.to_string_lossy())
+            .with_model_type(ModelType::MLP)
+            .build()?;
+
         println!("[+] Loaded onnx file");
         let ctx = Context::<E>::generate(&model, None).expect("unable to generate context");
         println!("[+] Setup parameters");
@@ -178,7 +191,7 @@ mod test {
         let input = Tensor::random(vec![shape[0] - 1]);
         let input = model.prepare_input(input);
 
-        let trace = model.run(input.clone());
+        let trace = model.run(input.clone()).unwrap();
         let output = trace.final_output().clone();
         println!("[+] Run inference. Result: {:?}", output);
 
@@ -218,8 +231,10 @@ static INIT: Once = Once::new();
 
 #[cfg(test)]
 pub fn init_test_logging() {
+    use tracing_subscriber::EnvFilter;
+
     INIT.call_once(|| {
-        // Initialize your logger only once
-        env_logger::try_init().ok(); // The .ok() ignores if it's already been initialized
+        let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+        tracing_subscriber::fmt().with_env_filter(filter).init();
     });
 }
