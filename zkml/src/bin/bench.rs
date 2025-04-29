@@ -314,8 +314,8 @@ fn run(args: Args) -> anyhow::Result<()> {
                 println!(
                     "DEQUANTIZED STEP {}: output min/max: {}/{}",
                     step.id,
-                    step.output.min(),
-                    step.output.max()
+                    step.output.min_value(),
+                    step.output.max_value()
                 );
             }
         }

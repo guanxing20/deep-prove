@@ -499,7 +499,7 @@ fn extract_tensor_f32_data(
     // Get the tensor data
     let tensor_t = &tensor_vec[0];
     let mut tensor_shape = tensor_t.shape().to_vec();
-    let mut tensor_data = tensor_t.as_slice::<f32>()?.to_vec();
+    let tensor_data = tensor_t.as_slice::<f32>()?.to_vec();
 
     let tensor_t_f32 = if node.op_type == "MatMul" && weight_or_bias == "weight" {
         tensor_shape.reverse();
