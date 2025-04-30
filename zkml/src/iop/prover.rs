@@ -99,9 +99,15 @@ where
             (Layer::Dense(dense), LayerCtx::Dense(info)) => {
                 dense.prove_step(self, last_claim, input, &step.output, info)
             }
-            (Layer::Convolution(filter), LayerCtx::Convolution(info)) => {
-                filter.prove_convolution_step(self, last_claim, &step.output, &step.conv_data, info)
-            }
+            (Layer::Convolution(filter), LayerCtx::Convolution(info)) => filter
+                .prove_convolution_step(
+                    self,
+                    last_claim,
+                    &step.output,
+                    &step.unpadded_shape,
+                    &step.conv_data,
+                    info,
+                ),
             (Layer::Activation(activation), LayerCtx::Activation(act_ctx)) => {
                 activation.prove_step(self, &last_claim, &step.output.get_data(), act_ctx)
             }
@@ -110,6 +116,12 @@ where
             }
             (Layer::Pooling(pooling), LayerCtx::Pooling(info)) => {
                 pooling.prove_pooling(self, last_claim, input, &step.output, info)
+            }
+            (Layer::Reshape(_), LayerCtx::Reshape) => {
+                // reshape doesn't change anything apart the shape but we dont "prove" the shape really
+                // we still include a dummy proof tho just for consistency with the context at the verifier side
+                self.push_proof(LayerProof::Reshape);
+                Ok(last_claim)
             }
             _ => bail!(
                 "inconsistent proof step {} and info step {} from ctx",
@@ -128,9 +140,7 @@ where
         self.table_witness
             .iter()
             .zip(self.ctx.lookup.iter())
-            .try_for_each(|(table_witness, table_type)| {
-                println!("PROVING table of type: {}", table_type.name());
-
+            .try_for_each(|(table_witness, _table_type)| {
                 // Make the proof for the table
                 let table_proof = logup_batch_prove(&table_witness, self.transcript)?;
 
@@ -330,7 +340,6 @@ where
         f_m.fix_high_variables_in_place(&r2);
 
         // Construct the virtual polynomial and run the sumcheck prover
-
         let f_red = w_red.into_mle();
 
         let mut vp = VirtualPolynomial::<E>::new(f_m.num_vars);
@@ -410,11 +419,8 @@ where
         // return Proof;
     }
 
-    pub fn prove<'b>(
-        mut self,
-        full_trace: InferenceTrace<'b, Element, E>,
-    ) -> anyhow::Result<Proof<E>> {
-        let trace = full_trace.provable_steps();
+    pub fn prove<'b>(mut self, trace: InferenceTrace<'b, Element, E>) -> anyhow::Result<Proof<E>> {
+        // let trace = full_trace.provable_steps();
         // write commitments and polynomials info to transcript
         self.ctx.write_to_transcript(self.transcript)?;
         // then create the context for the witness polys -

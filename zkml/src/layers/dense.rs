@@ -1,9 +1,11 @@
+use std::cmp::Ordering;
+
 use crate::{
     Claim, Prover,
     iop::{context::ContextAux, verifier::Verifier},
     layers::{LayerCtx, LayerProof, PolyID},
-    quantization,
-    quantization::ScalingFactor,
+    padding::PaddingMode,
+    quantization::{self, ScalingFactor},
     tensor::Number,
 };
 use anyhow::{Context, ensure};
@@ -26,10 +28,12 @@ use crate::{Element, tensor::Tensor};
 pub(crate) const BIAS_POLY_ID: PolyID = 100_000;
 
 /// Description of the layer
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Dense<T> {
     pub matrix: Tensor<T>,
     pub bias: Tensor<T>,
+    // set to matrix shape if the matrix is not padded
+    pub unpadded_matrix_shape: Vec<usize>,
 }
 
 /// Information stored in the context (setup phase) for this layer.
@@ -38,6 +42,8 @@ pub struct DenseCtx<E> {
     pub matrix_poly_id: PolyID,
     pub matrix_poly_aux: VPAuxInfo<E>,
     pub bias_poly_id: PolyID,
+    pub unpadded_matrix_shape: Vec<usize>,
+    pub padded_matrix_shape: Vec<usize>,
 }
 
 /// Proof of the layer.
@@ -58,7 +64,12 @@ pub struct DenseProof<E: ExtensionField> {
 impl<T: Number> Dense<T> {
     pub fn new(matrix: Tensor<T>, bias: Tensor<T>) -> Self {
         assert_eq!(matrix.nrows_2d(), bias.get_shape()[0]);
-        Self { matrix, bias }
+        let unpadded_matrix_shape = matrix.get_shape().to_vec();
+        Self {
+            matrix,
+            bias,
+            unpadded_matrix_shape,
+        }
     }
     pub fn ncols(&self) -> usize {
         self.matrix.ncols_2d()
@@ -80,7 +91,34 @@ impl<T: Number> Dense<T> {
     pub fn pad_next_power_of_two(self) -> Self {
         let matrix = self.matrix.pad_next_power_of_two();
         let bias = self.bias.pad_1d(matrix.nrows_2d());
-        Self { matrix, bias }
+        Self {
+            matrix,
+            bias,
+            unpadded_matrix_shape: self.unpadded_matrix_shape.to_vec(),
+        }
+    }
+
+    pub fn output_shape(&self, input_shape: &[usize]) -> Vec<usize> {
+        assert_eq!(
+            input_shape.iter().product::<usize>(),
+            self.unpadded_matrix_shape[1],
+            "unpadded_matrix_shape must be 2D: input_shape {:?} vs matrix {:?}",
+            input_shape,
+            self.unpadded_matrix_shape
+        );
+        vec![self.unpadded_matrix_shape[0]]
+    }
+    pub fn describe(&self) -> String {
+        format!(
+            "Dense: ({}x{}) + bias ({})",
+            self.matrix.nrows_2d(),
+            self.matrix.ncols_2d(),
+            !self
+                .bias
+                .get_data()
+                .iter()
+                .all(|x| x.compare(&T::default()) == Ordering::Equal)
+        )
     }
 }
 
@@ -90,13 +128,19 @@ impl Dense<f32> {
     pub fn quantize(self, s: &ScalingFactor, bias_s: &ScalingFactor) -> Dense<Element> {
         let matrix = self.matrix.quantize(s);
         let bias = self.bias.quantize(bias_s);
-        Dense::<Element> { matrix, bias }
+        Dense::<Element> {
+            matrix,
+            bias,
+            unpadded_matrix_shape: self.unpadded_matrix_shape.to_vec(),
+        }
     }
 
     pub fn new_from_weights(weights: Tensor<f32>, bias: Tensor<f32>) -> Self {
+        let unpadded_matrix_shape = weights.get_shape().to_vec();
         Self {
             matrix: weights,
             bias,
+            unpadded_matrix_shape,
         }
     }
 
@@ -283,6 +327,8 @@ impl Dense<Element> {
                 vector_num_vars,
             ]]),
             bias_poly_id: BIAS_POLY_ID + id,
+            unpadded_matrix_shape: self.unpadded_matrix_shape.clone(),
+            padded_matrix_shape: self.matrix.get_shape().to_vec(),
         });
         (dense_info, ctx_aux)
     }
@@ -293,6 +339,21 @@ where
     E::BaseField: Serialize + DeserializeOwned,
     E: Serialize + DeserializeOwned,
 {
+    pub fn output_shape(&self, input_shape: &[usize], mode: PaddingMode) -> Vec<usize> {
+        let mat_shape = match mode {
+            PaddingMode::NoPadding => self.unpadded_matrix_shape.clone(),
+            PaddingMode::Padding => self.padded_matrix_shape.clone(),
+        };
+        assert_eq!(
+            input_shape.iter().product::<usize>(),
+            mat_shape[1],
+            "dense output shape (pad = {:?}) -> input_shape {:?} vs matrix {:?}",
+            mode,
+            input_shape,
+            mat_shape
+        );
+        vec![mat_shape[0]]
+    }
     pub(crate) fn verify_dense<T: Transcript<E>>(
         &self,
         verifier: &mut Verifier<E, T>,
@@ -375,9 +436,9 @@ mod test {
         pub fn random(shape: Vec<usize>) -> Self {
             assert_eq!(shape.len(), 2);
             let (nrows, ncols) = (shape[0], shape[1]);
-            let matrix = Tensor::<T>::random(vec![nrows, ncols]);
+            let matrix = Tensor::<T>::random(&vec![nrows, ncols]);
             // let bias = Tensor::random(vec![nrows]);
-            let bias = Tensor::<T>::random(vec![nrows]);
+            let bias = Tensor::<T>::random(&vec![nrows]);
             Self::new(matrix, bias)
         }
     }

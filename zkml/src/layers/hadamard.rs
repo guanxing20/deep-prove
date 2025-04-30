@@ -10,6 +10,7 @@ use multilinear_extensions::{
     mle::{IntoMLE, MultilinearExtension},
     virtual_poly::{VPAuxInfo, VirtualPolynomial},
 };
+use serde::{Deserialize, Serialize};
 use sumcheck::structs::{IOPProof, IOPProverState, IOPVerifierState};
 use transcript::Transcript;
 
@@ -29,12 +30,23 @@ impl<F: ExtensionField> HadamardCtx<F> {
         };
         Self {
             sumcheck_aux: VPAuxInfo::from_mle_list_dimensions(&vec![vec![
+                // v1, v2, beta
+                num_vars, num_vars, num_vars,
+            ]]),
+        }
+    }
+    pub fn from_len(vector_len: usize) -> Self {
+        let num_vars = vector_len.next_power_of_two().ilog2() as usize;
+        Self {
+            // v1, v2, beta
+            sumcheck_aux: VPAuxInfo::from_mle_list_dimensions(&vec![vec![
                 num_vars, num_vars, num_vars,
             ]]),
         }
     }
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct HadamardProof<F: ExtensionField> {
     sumcheck: IOPProof<F>,
     individual_claim: Vec<F>,
@@ -69,9 +81,9 @@ impl<F: ExtensionField> HadamardProof<F> {
 #[allow(unused)]
 pub fn prove<F: ExtensionField, T: Transcript<F>>(
     transcript: &mut T,
-    output_claim: Claim<F>,
-    v1: Tensor<Element>,
-    v2: Tensor<Element>,
+    output_claim: &Claim<F>,
+    v1: &Tensor<Element>,
+    v2: &Tensor<Element>,
 ) -> HadamardProof<F> {
     assert_eq!(
         output_claim.point.len(),
@@ -106,7 +118,7 @@ pub fn verify<F: ExtensionField, T: Transcript<F>>(
     ctx: &HadamardCtx<F>,
     transcript: &mut T,
     proof: &HadamardProof<F>,
-    output_claim: Claim<F>,
+    output_claim: &Claim<F>,
     expected_v2_eval: F,
 ) -> Result<Claim<F>> {
     let subclaim = IOPVerifierState::<F>::verify(
@@ -144,8 +156,8 @@ mod test {
     fn test_hadamard_proving() {
         let mut transcript = default_transcript();
         let n: usize = 10;
-        let v1 = Tensor::random(vec![n]).pad_next_power_of_two();
-        let v2 = Tensor::random(vec![n]).pad_next_power_of_two();
+        let v1 = Tensor::random(&vec![n]).pad_next_power_of_two();
+        let v2 = Tensor::random(&vec![n]).pad_next_power_of_two();
         let r = random_field_vector(n.next_power_of_two().ilog2() as usize);
         let expected_output = v1.mul(&v2);
         let output_mle = expected_output.to_mle_flat::<GoldilocksExt2>();
@@ -153,9 +165,9 @@ mod test {
         let output_claim = Claim::new(r, output_eval);
         let proof = prove(
             &mut transcript,
-            output_claim.clone(),
-            v1.clone(),
-            v2.clone(),
+            &output_claim.clone(),
+            &v1.clone(),
+            &v2.clone(),
         );
 
         let ctx = HadamardCtx::new(&v1, &v2);
@@ -169,7 +181,7 @@ mod test {
             &ctx,
             &mut default_transcript(),
             &proof,
-            output_claim,
+            &output_claim,
             v2_eval,
         )
         .unwrap();

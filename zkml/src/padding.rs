@@ -4,10 +4,16 @@ use crate::{
     Element,
     layers::{Layer, convolution::Convolution, dense::Dense, reshape::Reshape},
     model::Model,
-    onnx_parse::{check_filter, conv2d_shape, maxpool2d_shape},
+    onnx_parse::{check_filter, safe_conv2d_shape, safe_maxpool2d_shape},
 };
 type GarbagePad = Option<(Vec<usize>, Vec<usize>)>;
 type Shape = Vec<usize>;
+
+#[derive(Clone, Debug, Copy)]
+pub enum PaddingMode {
+    NoPadding,
+    Padding,
+}
 
 #[derive(Clone, Debug)]
 struct ShapeInfo {
@@ -19,12 +25,12 @@ struct ShapeInfo {
 pub fn pad_model(mut model: Model<Element>) -> Result<Model<Element>> {
     let mut si = ShapeInfo {
         input_shape_padded: model
-            .input_not_padded
+            .unpadded_input
             .iter()
             .map(|i| i.next_power_of_two())
             .collect::<Vec<_>>(),
         ignore_garbage_pad: None,
-        input_shape_og: model.input_not_padded.clone(),
+        input_shape_og: model.unpadded_input.clone(),
     };
     model.layers = model
         .layers
@@ -37,8 +43,8 @@ pub fn pad_model(mut model: Model<Element>) -> Result<Model<Element>> {
                 Layer::Pooling(m) => {
                     // Make sure that input shape is already padded and is well formed
                     assert!(si.input_shape_padded.iter().all(|d| d.is_power_of_two()));
-                    si.input_shape_og = maxpool2d_shape(&si.input_shape_og)?;
-                    si.input_shape_padded = maxpool2d_shape(&si.input_shape_padded)?;
+                    si.input_shape_og = safe_maxpool2d_shape(&si.input_shape_og)?;
+                    si.input_shape_padded = safe_maxpool2d_shape(&si.input_shape_padded)?;
                     Ok(Layer::Pooling(m))
                 }
                 Layer::Reshape(_) => Ok(Layer::<Element>::Reshape(reshape(&mut si)?)),
@@ -54,8 +60,8 @@ fn reshape(si: &mut ShapeInfo) -> Result<Reshape> {
     Ok(Reshape)
 }
 
-fn pad_conv(mut c: Convolution<Element>, si: &mut ShapeInfo) -> Result<Convolution<Element>> {
-    si.input_shape_og = conv2d_shape(&si.input_shape_og, &c.filter.get_shape())?;
+fn pad_conv(c: Convolution<Element>, si: &mut ShapeInfo) -> Result<Convolution<Element>> {
+    si.input_shape_og = safe_conv2d_shape(&si.input_shape_og, &c.filter.get_shape())?;
     let weight_shape = c.filter.get_shape();
     // Perform basic sanity checks on the tensor dimensions
     check_filter(&weight_shape).context("filter shape test failed:")?;
@@ -63,17 +69,13 @@ fn pad_conv(mut c: Convolution<Element>, si: &mut ShapeInfo) -> Result<Convoluti
         weight_shape[0] == c.bias.get_shape()[0],
         "Bias length doesn't match filter shape"
     );
-
-    // Pad the tensors to the next power of two.
-    c.filter = c.filter.pad_next_power_of_two();
-    c.bias = c.bias.pad_next_power_of_two();
-
     // Make sure that input shape is already padded and is well formed
     ensure!(si.input_shape_padded.iter().all(|d| d.is_power_of_two()));
     ensure!(si.input_shape_padded.len() == 3);
 
+    let new_conv_good = c.clone();
     // Since we are doing an FFT based conv, we need to pad the last two dimensions of the filter to match the input.
-    let weight_shape = c.filter.get_shape();
+    let weight_shape = c.filter.pad_next_power_of_two().get_shape();
     let (filter_height, filter_width) = (weight_shape[2], weight_shape[3]);
     let (input_height, input_width) = (si.input_shape_padded[1], si.input_shape_padded[2]);
 
@@ -82,21 +84,13 @@ fn pad_conv(mut c: Convolution<Element>, si: &mut ShapeInfo) -> Result<Convoluti
         "Filter dimensions have to be smaller than input dimensions"
     );
 
-    let dims = c.filter.get_shape();
-    // NOTE: This is a bit of a hack but given we compute the new padded filter shape at the same time we do the fft
-    // we just do both here.
-    c.filter = crate::tensor::Tensor::new_conv(
-        c.filter.get_shape(),
-        si.input_shape_padded.clone(),
-        c.filter.get_data().to_vec(),
-    );
-
-    let output_shape = conv2d_shape(&si.input_shape_padded, &dims)?;
+    let new_conv = new_conv_good.into_padded_and_ffted(&si.input_shape_og);
+    let output_shape = safe_conv2d_shape(&si.input_shape_padded, &weight_shape)?;
     si.input_shape_padded = output_shape
         .iter()
         .map(|i| i.next_power_of_two())
         .collect::<Vec<_>>();
-    Ok(c)
+    Ok(new_conv)
 }
 
 fn pad_dense(mut d: Dense<Element>, si: &mut ShapeInfo) -> Result<Dense<Element>> {

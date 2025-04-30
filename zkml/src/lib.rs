@@ -32,7 +32,7 @@ pub type Element = i128;
 
 /// Claim type to accumulate in this protocol, for a certain polynomial, known in the context.
 /// f(point) = eval
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Claim<E> {
     point: Vec<E>,
     eval: E,
@@ -140,6 +140,17 @@ pub fn argmax<T: PartialOrd>(v: &[T]) -> Option<usize> {
     Some(max_index)
 }
 
+pub trait NextPowerOfTwo {
+    /// Returns a new vector where each element is the next power of two.
+    fn next_power_of_two(&self) -> Self;
+}
+// For unsigned integer vectors
+impl NextPowerOfTwo for Vec<usize> {
+    fn next_power_of_two(&self) -> Self {
+        self.iter().map(|&i| i.next_power_of_two()).collect()
+    }
+}
+
 #[cfg(test)]
 mod test {
     use ark_std::rand::{Rng, thread_rng};
@@ -188,7 +199,7 @@ mod test {
 
         let shape = model.input_shape();
         assert_eq!(shape.len(), 1);
-        let input = Tensor::random(vec![shape[0] - 1]);
+        let input = Tensor::random(&vec![shape[0] - 1]);
         let input = model.prepare_input(input);
 
         let trace = model.run(input.clone()).unwrap();

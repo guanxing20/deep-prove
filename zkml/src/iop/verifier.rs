@@ -13,6 +13,7 @@ use itertools::Itertools;
 use multilinear_extensions::mle::{IntoMLE, MultilinearExtension};
 
 use serde::{Serialize, de::DeserializeOwned};
+use tracing::info;
 use transcript::Transcript;
 
 use super::{Context, Proof, TableProof};
@@ -57,7 +58,7 @@ where
         io: IO<E>,
     ) -> anyhow::Result<()> {
         // Ordering of proofs.
-        println!(
+        info!(
             "VERIFIER: Proof Order: {:?}",
             proof.steps.iter().map(|p| p.variant_name()).collect_vec()
         );
@@ -104,16 +105,41 @@ where
             eval: computed_sum,
         };
 
+        let shape_steps = ctx
+            .steps_info
+            .iter()
+            .rev()
+            .scan(None, |last_shape, step| {
+                *last_shape = if let Some(shape_step) = last_shape {
+                    Some(step.next_shape_step(&shape_step))
+                } else {
+                    Some(step.shape_step(&ctx.unpadded_input_shape, &io.input.get_shape()))
+                };
+                Some(last_shape.clone())
+                // ?? rev() doesn't work with scan
+            })
+            .collect_vec()
+            .into_iter()
+            .rev()
+            .map(|s| s.unwrap())
+            .collect_vec();
+
         // 4. Verify each proof sequentially, Always make sure the proof corresponds to the expected type of proof in the context.
         // We have two `HashSet`s, one for the type of table used and one for the lookup challenges used
-        for proof_and_step in proof.steps.iter().zip(ctx.steps_info.iter()) {
-            output_claim = match proof_and_step {
+        for ((proof, step), shape_step) in proof
+            .steps
+            .iter()
+            .zip(ctx.steps_info.iter())
+            .zip(shape_steps)
+        {
+            // println!("VERIFIER: layer {:?} -> output_shape step: {:?}", step.variant_name(), shape_step);
+            output_claim = match (proof, step) {
                 (LayerProof::<E>::Activation(proof), LayerCtx::Activation(info)) => {
                     let (constant_challenge, column_separation_challenge) = challenge_storage
                         .get_challenges_by_name(&TableType::Relu.name())
                         .ok_or(anyhow!(
                             "Couldn't get challenges at Step: {}, LookupType was: {}",
-                            proof_and_step.1.variant_name(),
+                            step.variant_name(),
                             TableType::Relu.name()
                         ))?;
                     info.verify_activation(
@@ -132,7 +158,7 @@ where
                         .get_challenges_by_name(&TableType::Range.name())
                         .ok_or(anyhow!(
                             "Couldn't get challenges at Step: {}, LookupType was: {}",
-                            proof_and_step.1.variant_name(),
+                            step.variant_name(),
                             TableType::Range.name()
                         ))?;
                     info.verify_requant(
@@ -148,7 +174,7 @@ where
                         .get_challenges_by_name(&TableType::Range.name())
                         .ok_or(anyhow!(
                             "Couldn't get challenges at Step: {}, LookupType was: {}",
-                            proof_and_step.1.variant_name(),
+                            step.variant_name(),
                             TableType::Range.name()
                         ))?;
                     info.verify_pooling(
@@ -160,12 +186,16 @@ where
                     )?
                 }
                 (LayerProof::<E>::Convolution(proof), LayerCtx::<E>::Convolution(info)) => {
-                    info.verify_convolution(&mut self, output_claim, &proof)?
+                    info.verify_convolution(&mut self, output_claim, &proof, &shape_step)?
+                }
+                (LayerProof::<E>::Reshape, LayerCtx::Reshape) => {
+                    // reshape doesn't change anything apart the shape but we dont "prove" the shape really
+                    output_claim
                 }
                 _ => bail!(
                     "Step proof: {} and step info: {} did not match",
-                    proof_and_step.0.variant_name(),
-                    proof_and_step.1.variant_name()
+                    proof.variant_name(),
+                    step.variant_name()
                 ),
             }
         }
