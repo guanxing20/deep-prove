@@ -196,9 +196,8 @@ where
         &self,
         claims: Vec<IndividualClaim<E>>,
     ) -> anyhow::Result<Vec<IndividualClaim<E>>> {
-        assert_eq!(
-            claims.len(),
-            self.poly_info.len(),
+        ensure!(
+            claims.len() == self.poly_info.len(),
             "claims.len() = {} vs poly.len() = {} -- {:?} vs polys {:?}",
             claims.len(),
             self.poly_info.len(),

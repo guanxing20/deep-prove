@@ -15,6 +15,7 @@ use pooling::{PoolingCtx, PoolingProof};
 use requant::RequantCtx;
 use reshape::Reshape;
 use statrs::statistics::{Data, Distribution};
+use tracing::debug;
 
 use crate::{
     Element,
@@ -32,11 +33,10 @@ use crate::{
     tensor::{ConvData, Number, Tensor},
 };
 use activation::ActivationCtx;
-use common::{Op, ProvableOp, QuantizableOp};
+use common::{Op, ProvableOp};
 use convolution::{ConvCtx, ConvProof, SchoolBookConvCtx};
 use dense::{DenseCtx, DenseProof};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use sha2::Sha256;
 
 #[derive(Clone, Debug)]
 pub enum Layer<T> {
@@ -239,15 +239,21 @@ impl<T: Number> Layer<T> {
 impl Layer<f32> {
     pub fn quantize(self, s: &ScalingFactor, bias_s: Option<&ScalingFactor>) -> Layer<Element> {
         match self {
-            Layer::Dense(dense) => Layer::Dense(dense.quantize(s, bias_s)),
-            Layer::Convolution(conv) => Layer::Convolution(conv.quantize(&s, bias_s)),
-            Layer::SchoolBookConvolution(conv) => {
-                Layer::SchoolBookConvolution(conv.quantize(&s, bias_s))
+            Layer::Dense(dense) => {
+                Layer::Dense(dense.quantize(s, bias_s.expect("bias_s is required for dense layer")))
             }
+            Layer::Convolution(conv) => Layer::Convolution(conv.quantize(
+                &s,
+                bias_s.expect("bias_s is required for convolution layer"),
+            )),
+            Layer::SchoolBookConvolution(conv) => Layer::SchoolBookConvolution(conv.quantize(
+                &s,
+                bias_s.expect("bias_s is required for schoolbook convolution layer"),
+            )),
             Layer::Activation(activation) => Layer::Activation(activation),
             Layer::Requant(requant) => Layer::Requant(requant),
             Layer::Pooling(pooling) => Layer::Pooling(pooling),
-            Layer::Reshape(reshape) => reshape.quantize(s, bias_s),
+            Layer::Reshape(_reshape) => Layer::Reshape(Reshape),
         }
     }
     /// TODO: limitation of enum is we can't have same names as in Element run
@@ -305,17 +311,11 @@ impl Layer<Element> {
             Layer::Convolution(ref filter) => {
                 Ok(LayerOutput::ConvOut(filter.op(input, unpadded_shape)))
             }
-            // Layer::Convolution(ref filter) => LayerOutput::NormalOut(input.conv2d(&filter.filter,&filter.bias,1)),
             // Traditional convolution is used for debug purposes. That is because the actual convolution
             // we use relies on the FFT algorithm. This convolution does not have a snark implementation.
-            Layer::SchoolBookConvolution(ref conv_pair) => {
-                // LayerOutput::NormalOut(filter.cnn_naive_convolution(input))
-                Ok(LayerOutput::NormalOut(input.conv2d(
-                    &conv_pair.filter,
-                    &conv_pair.bias,
-                    1,
-                )))
-            }
+            Layer::SchoolBookConvolution(ref conv_pair) => Ok(LayerOutput::NormalOut(
+                input.conv2d(&conv_pair.filter, &conv_pair.bias, 1),
+            )),
 
             Layer::Requant(info) => info.op(input).map(|r| LayerOutput::NormalOut(r)),
             Layer::Pooling(info) => Ok(LayerOutput::NormalOut(info.op(input))),
@@ -323,7 +323,7 @@ impl Layer<Element> {
         }?;
         match output {
             LayerOutput::NormalOut(ref output) => {
-                println!(
+                debug!(
                     "Layer::{:?}: shape {:?} op: {:?} - min {:?}, max {:?}",
                     self.describe(),
                     output.get_shape(),
@@ -334,7 +334,7 @@ impl Layer<Element> {
             }
             LayerOutput::ConvOut((ref output, _)) => {
                 let d = Data::new(output.get_data().iter().map(|e| *e as f64).collect_vec());
-                println!(
+                debug!(
                     "Layer::{:?}: shape {:?} op: {:?} - min {:?}, max {:?}, mean {:?}, std {:?}",
                     self.describe(),
                     output.get_shape(),
@@ -348,19 +348,6 @@ impl Layer<Element> {
         }
         Ok(output)
     }
-}
-
-use hex;
-use sha2::Digest;
-pub fn hashit(data: &[Element]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(
-        data.iter()
-            .map(|e| e.to_be_bytes())
-            .flatten()
-            .collect::<Vec<_>>(),
-    );
-    hex::encode(hasher.finalize().to_vec())
 }
 
 impl<E: ExtensionField> LayerProof<E>

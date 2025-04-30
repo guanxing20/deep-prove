@@ -320,7 +320,6 @@ fn run(args: Args) -> anyhow::Result<()> {
         //        );
         //    }
         //}
-
         let output = trace.final_output().clone();
         let accuracy = argmax_compare(&given_output, &output.get_data().to_vec());
         accuracies.push(accuracy);

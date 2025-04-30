@@ -23,7 +23,11 @@ pub struct HadamardCtx<F: ExtensionField> {
 impl<F: ExtensionField> HadamardCtx<F> {
     pub fn new(v1: &Tensor<Element>, v2: &Tensor<Element>) -> Self {
         assert_eq!(v1.get_shape(), v2.get_shape());
-        let num_vars = v1.get_data().len().ilog2() as usize;
+        let num_vars = if v1.get_data().len().is_power_of_two() {
+            v1.get_data().len().ilog2() as usize
+        } else {
+            v1.get_data().len().next_power_of_two().ilog2() as usize
+        };
         Self {
             sumcheck_aux: VPAuxInfo::from_mle_list_dimensions(&vec![vec![
                 // v1, v2, beta
@@ -50,8 +54,8 @@ pub struct HadamardProof<F: ExtensionField> {
 
 impl<F: ExtensionField> HadamardProof<F> {
     #[allow(unused)]
-    pub fn random_point(&self) -> Vec<F> {
-        self.sumcheck.point.clone()
+    pub fn random_point(&self) -> &[F] {
+        &self.sumcheck.point
     }
     #[allow(unused)]
     pub fn v1_eval(&self) -> F {
@@ -60,10 +64,6 @@ impl<F: ExtensionField> HadamardProof<F> {
     #[allow(unused)]
     pub fn v2_eval(&self) -> F {
         self.individual_claim[1]
-    }
-    #[allow(unused)]
-    pub fn beta_eval(&self) -> F {
-        self.individual_claim[2]
     }
 }
 
@@ -109,7 +109,7 @@ pub fn prove<F: ExtensionField, T: Transcript<F>>(
     });
     HadamardProof {
         sumcheck: proof,
-        individual_claim: state.get_mle_final_evaluations(),
+        individual_claim: state.get_mle_final_evaluations()[..2].to_vec(),
     }
 }
 
@@ -121,7 +121,7 @@ pub fn verify<F: ExtensionField, T: Transcript<F>>(
     output_claim: &Claim<F>,
     expected_v2_eval: F,
 ) -> Result<Claim<F>> {
-    let _subclaim = IOPVerifierState::<F>::verify(
+    let subclaim = IOPVerifierState::<F>::verify(
         output_claim.eval,
         &proof.sumcheck,
         &ctx.sumcheck_aux,
@@ -132,12 +132,15 @@ pub fn verify<F: ExtensionField, T: Transcript<F>>(
     let beta_eval = beta.evaluate(&proof.sumcheck.point);
     // [v1,v2,beta]
     ensure!(
-        beta_eval == proof.beta_eval(),
-        "Hadamard verification failed for beta eval"
-    );
-    ensure!(
         expected_v2_eval == proof.v2_eval(),
         "Hadamard verification failed for v2 eval"
+    );
+    /// Given the evaluations are given outside of the sumcheck proof, by the prover,
+    /// we need to verify that they match what the sumcheck have been computed.
+    let product = beta_eval * proof.v1_eval() * proof.v2_eval();
+    ensure!(
+        product == subclaim.expected_evaluation,
+        "Hadamard verification failed for product eval"
     );
     Ok(Claim::new(proof.sumcheck.point.clone(), proof.v1_eval()))
 }

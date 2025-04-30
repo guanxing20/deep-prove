@@ -14,7 +14,7 @@ use crate::{
 use anyhow::{Context, Error, Result, bail, ensure};
 use itertools::Itertools;
 use std::{collections::HashMap, i8, time::Instant};
-use tracing::{debug, info, warn};
+use tracing::{debug, info, trace, warn};
 use tract_onnx::{
     pb::{GraphProto, NodeProto},
     prelude::*,
@@ -327,6 +327,10 @@ pub fn load_float_model(filepath: &str) -> Result<Model<f32>> {
         let key = item.name.to_string();
         initializers.insert(key, value);
     }
+    debug!(
+        "Initializers: TENSOR NAMES: {:?}",
+        initializers.keys().collect_vec()
+    );
     let mut layers: Vec<Layer<f32>> = Vec::with_capacity(graph.node.len());
     // we need to keep track of the last shape because when we pad to next power of two one layer, we need to make sure
     // the next layer's expected input matches.
@@ -354,7 +358,6 @@ pub fn load_float_model(filepath: &str) -> Result<Model<f32>> {
                 layers.push(Layer::Dense(Dense::new_from_weights(weights, bias)));
             }
             op if ACTIVATION.contains(&op) => {
-                // assert!(input_shape_padded.iter().all(|d| d.is_power_of_two()));
                 let layer = Layer::Activation(Activation::Relu(Relu::new()));
                 layers.push(layer);
             }
@@ -372,23 +375,17 @@ pub fn load_float_model(filepath: &str) -> Result<Model<f32>> {
                     "Bias length doesn't match filter shape"
                 );
 
-                // this is the non fft'd convolution layer
-                // let layer = Layer::SchoolBookConvolution(Convolution { filter: weights, bias: bias });
                 let layer = Layer::Convolution(Convolution::new(weights, bias));
                 layers.push(layer);
                 debug!("EXTRACTIONG conv2d time: {:?}", now.elapsed());
             }
             op if DOWNSAMPLING.contains(&op) => {
                 input_shape_og = safe_maxpool2d_shape(&input_shape_og)?;
-                // Make sure that input shape is already padded and is well formed
-                // assert!(input_shape_padded.iter().all(|d| d.is_power_of_two()));
-
                 let _ = fetch_maxpool_attributes(node)?;
                 let layer = Layer::Pooling(Pooling::Maxpool2D(Maxpool2D::default()));
                 layers.push(layer);
             }
             op if RESHAPE.contains(&op) => {
-                // ignore_garbage_pad = Some((input_shape_og.clone(), input_shape_padded.clone()));
                 layers.push(Layer::Reshape(Reshape));
                 input_shape_og = vec![input_shape_og.iter().product()];
             }
@@ -460,7 +457,7 @@ fn extract_tensor_f32_data(
         .filter_map(|key| initializers.get(key).cloned())
         .collect_vec();
 
-    println!(
+    trace!(
         "node input: {:?} - match {:?}-> tensor_vec len() {:?}",
         node.input,
         node.input
@@ -478,9 +475,9 @@ fn extract_tensor_f32_data(
     // Get the tensor data
     let tensor_t = &tensor_vec[0];
     let mut tensor_shape = tensor_t.shape().to_vec();
-    let mut tensor_data = tensor_t.as_slice::<f32>().unwrap().to_vec();
+    let tensor_data = tensor_t.as_slice::<f32>()?.to_vec();
 
-    if node.op_type == "MatMul" && weight_or_bias == "weight" {
+    let tensor_t_f32 = if node.op_type == "MatMul" && weight_or_bias == "weight" {
         tensor_shape.reverse();
         let (m, n) = (tensor_shape[0], tensor_shape[1]);
         let mut transposed_data = vec![0.0; tensor_data.len()];
@@ -488,20 +485,13 @@ fn extract_tensor_f32_data(
         // Transpose the data matrix
         for i in 0..m {
             for j in 0..n {
-                transposed_data[i * n + j] = tensor_data[j * m + i];
+                transposed_data[i * n + j] = tensor_data[j * m + i] * alpha_or_beta;
             }
         }
-        tensor_data = transposed_data;
-    }
-    // Apply alpha/beta multiplier
-    // let tensor_t_f32 = tensor_t
-    //     .as_slice::<f32>()
-    //     .unwrap()
-    //     .into_iter()
-    //     .map(|x| x * alpha_or_beta)
-    //     .collect_vec();
-    // Apply alpha/beta multiplier
-    let tensor_t_f32 = tensor_data.into_iter().map(|x| x * alpha_or_beta).collect();
+        transposed_data
+    } else {
+        tensor_data.into_iter().map(|x| x * alpha_or_beta).collect()
+    };
 
     Ok(Some((tensor_t_f32, tensor_shape)))
 }

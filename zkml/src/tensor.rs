@@ -708,13 +708,11 @@ impl<T> Tensor<T>
 where
     T: Number,
 {
-    pub fn min(&self) -> T {
-        self.data.iter().fold(T::MAX, |min, x| min.cmp_min(x))
-    }
-    pub fn max(&self) -> T {
-        self.data.iter().fold(T::MIN, |max, x| max.cmp_max(x))
-    }
     pub fn reshape(mut self, new_shape: Vec<usize>) -> Tensor<T> {
+        assert!(
+            self.shape.iter().product::<usize>() == new_shape.iter().product::<usize>(),
+            "Shape mismatch for reshape"
+        );
         self.shape = new_shape;
         self
     }

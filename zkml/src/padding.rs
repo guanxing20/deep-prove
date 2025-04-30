@@ -65,27 +65,26 @@ fn pad_conv(c: Convolution<Element>, si: &mut ShapeInfo) -> Result<Convolution<E
     let weight_shape = c.filter.get_shape();
     // Perform basic sanity checks on the tensor dimensions
     check_filter(&weight_shape).context("filter shape test failed:")?;
-    assert!(
+    ensure!(
         weight_shape[0] == c.bias.get_shape()[0],
         "Bias length doesn't match filter shape"
     );
     // Make sure that input shape is already padded and is well formed
-    assert!(si.input_shape_padded.iter().all(|d| d.is_power_of_two()));
-    assert!(si.input_shape_padded.len() == 3);
+    ensure!(si.input_shape_padded.iter().all(|d| d.is_power_of_two()));
+    ensure!(si.input_shape_padded.len() == 3);
 
     let new_conv_good = c.clone();
     // Since we are doing an FFT based conv, we need to pad the last two dimensions of the filter to match the input.
     let weight_shape = c.filter.pad_next_power_of_two().get_shape();
-    let (filter_height, filter_weight) = (weight_shape[2], weight_shape[3]);
-    let (input_height, input_weight) = (si.input_shape_padded[1], si.input_shape_padded[2]);
+    let (filter_height, filter_width) = (weight_shape[2], weight_shape[3]);
+    let (input_height, input_width) = (si.input_shape_padded[1], si.input_shape_padded[2]);
 
-    assert!(
-        filter_height <= input_height && filter_weight <= input_weight,
+    ensure!(
+        filter_height <= input_height && filter_width <= input_width,
         "Filter dimensions have to be smaller than input dimensions"
     );
 
     let new_conv = new_conv_good.into_padded_and_ffted(&si.input_shape_og);
-
     let output_shape = safe_conv2d_shape(&si.input_shape_padded, &weight_shape)?;
     si.input_shape_padded = output_shape
         .iter()
@@ -103,7 +102,7 @@ fn pad_dense(mut d: Dense<Element>, si: &mut ShapeInfo) -> Result<Dense<Element>
         d.bias.get_data().len(),
         nrows
     );
-    assert!(si.input_shape_padded.iter().all(|d| d.is_power_of_two()));
+    ensure!(si.input_shape_padded.iter().all(|d| d.is_power_of_two()));
     if si.input_shape_padded.len() != 1 {
         si.input_shape_padded = vec![si.input_shape_padded.iter().product()];
         si.input_shape_og = vec![si.input_shape_og.iter().product()];
@@ -114,7 +113,7 @@ fn pad_dense(mut d: Dense<Element>, si: &mut ShapeInfo) -> Result<Dense<Element>
             new_cols = si.input_shape_padded[0];
         } else {
             // If we have too many columns, we can't shrink without losing information
-            panic!(
+            anyhow::bail!(
                 "Matrix has more columns ({}) than previous layer output size ({}).
                             Cannot shrink without losing information.",
                 d.matrix.ncols_2d(),

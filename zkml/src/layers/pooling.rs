@@ -793,6 +793,7 @@ mod tests {
             // in order output - 00, output - 10, output - 01, output - 11, eq I believe
             let final_mle_evals = state.get_mle_final_evaluations();
 
+            // let (r1, r2) = (<F as Field>::random(&mut rng), <F as Field>::random(&mut rng));
             let [r1, r2] = [<F as Field>::random(&mut rng); 2];
             let one_minus_r1 = F::ONE - r1;
             let one_minus_r2 = F::ONE - r2;

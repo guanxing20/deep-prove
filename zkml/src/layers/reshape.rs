@@ -2,14 +2,11 @@ use ff_ext::ExtensionField;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use crate::{
-    Element, NextPowerOfTwo, ScalingFactor, Tensor, commit::precommit::PolyID,
-    iop::context::ContextAux, layers::LayerCtx, tensor::Number,
+    NextPowerOfTwo, Tensor, commit::precommit::PolyID, iop::context::ContextAux, layers::LayerCtx,
+    tensor::Number,
 };
 
-use super::{
-    Layer,
-    common::{Op, ProvableOp, QuantizableOp},
-};
+use super::common::{Op, ProvableOp};
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Reshape;
 
@@ -23,12 +20,6 @@ impl<N: Number> Op<N> for Reshape {
     }
     fn describe(&self) -> String {
         "Reshape".to_string()
-    }
-}
-
-impl QuantizableOp for Reshape {
-    fn quantize(&self, _s: &ScalingFactor, _bias_s: Option<&ScalingFactor>) -> Layer<Element> {
-        Layer::Reshape(Reshape)
     }
 }
 

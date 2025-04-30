@@ -65,10 +65,10 @@ impl ScalingFactor {
             quantized_domain: quantized_domain.unwrap_or((*MIN, *MAX)),
         }
     }
-    // Initialize a scaling factor in such a way that `self.scale()` is equal to the `scale` value
-    // provided as input.
+    /// Initialize a scaling factor in such a way that `self.scale()` is equal to the `scale` value
+    /// provided as input.
     pub(crate) fn from_scale(scale: f32, quantized_domain: Option<(Element, Element)>) -> Self {
-        let (min_quantized, max_quantized) = quantized_domain.clone().unwrap_or((*MIN, *MAX));
+        let (min_quantized, max_quantized) = quantized_domain.unwrap_or((*MIN, *MAX));
         let max = scale / 2.0 * (max_quantized - min_quantized) as f32;
         Self::from_absolute_max(max, quantized_domain)
     }
@@ -99,15 +99,11 @@ impl ScalingFactor {
     /// Take a floating point number and quantize it to an BIT_LEN-bit integer
     /// S = (a - (-a)) / (2^{BIT_LEN-1}- (-2^{BIT_LEN-1})) = 2a / 2^BIT_LEN
     pub fn quantize(&self, value: &f32) -> Element {
-        // assert!(
-        //    *value >= -1.0 && *value <= 1.0,
-        //    "Input value must be between -1.0 and 1.0"
-        //);
-        let zero_point = 0;
+        const ZERO_POINT: Element = 0;
 
         // formula is q = round(r/S) + z
         // let scaled =((value.clamp(self.min,self.max) - self.min) / self.scale()).round() * self.scale() + self.min;
-        let scaled = (*value / self.scale()).round() as Element + zero_point;
+        let scaled = (*value / self.scale()).round() as Element + ZERO_POINT;
         if scaled < self.quantized_domain.0 || scaled > self.quantized_domain.1 {
             warn!(
                 "Quantized value {} from {} is out of range [{}, {}]",
@@ -167,12 +163,6 @@ impl<F: ExtensionField> IntoElement for F {
             let diff = <F::BaseField as SmallField>::MODULUS_U64 - e as u64;
             -(diff as Element)
         }
-    }
-}
-
-impl<F: ExtensionField> Fieldizer<F> for u8 {
-    fn to_field(&self) -> F {
-        F::from(*self as u64)
     }
 }
 
@@ -254,21 +244,6 @@ mod test {
 
     use super::{MAX, MIN};
     type F = goldilocks::GoldilocksExt2;
-
-    #[test]
-    fn test_wrapped_field() {
-        // for case in vec![-12,25,i8::MIN,i8::MAX] {
-        //     let a: i8 = case;
-        //     let af: F= a.to_field();
-        //     let f = af.to_canonical_u64_vec()[0];
-        //     let exp = if a.is_negative() {
-        //         MODULUS - (a as i64).unsigned_abs()
-        //     } else {
-        //         a as u64
-        //     };
-        //     assert_eq!(f,exp);
-        // }
-    }
 
     #[test]
     fn test_wrapped_arithmetic() {
