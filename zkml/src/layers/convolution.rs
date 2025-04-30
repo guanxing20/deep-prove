@@ -17,12 +17,12 @@ use multilinear_extensions::{
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sumcheck::structs::{IOPProof, IOPProverState, IOPVerifierState};
-use tracing::{instrument, warn};
+use tracing::{debug, instrument, warn};
 use transcript::Transcript;
 
 use crate::{Element, tensor::Tensor};
 
-use super::LayerCtx;
+use super::{provable::{LayerOut, NodeId, Op, OpInfo, ProvableOp, ProvableOpError, ProveInfo}, LayerCtx};
 
 pub(crate) const BIAS_POLY_ID: PolyID = 200_000;
 /// Convolution layer description (weights)
@@ -129,6 +129,43 @@ impl<T: Number> Convolution<T> {
         self.filter.filter_size()
     }
 }
+
+impl<T: Number> OpInfo for Convolution<T> {
+    fn input_shapes(&self) -> Vec<Vec<usize>> {
+        vec![] //ToDo
+    }
+
+    fn output_shapes(&self) -> Vec<Vec<usize>> {
+        vec![] //ToDo
+    }
+
+    fn num_outputs(&self, num_inputs: usize) -> usize {
+        num_inputs
+    }
+
+    fn describe(&self) -> String {
+        format!(
+            "Conv: ({},{},{},{})",
+            self.filter.kw(),
+            self.filter.kx(),
+            self.filter.nw(),
+            self.filter.nw()
+        )
+    }
+} 
+
+impl<E: ExtensionField> Op<f32, E> for Convolution<f32> {
+    fn evaluate(&self, inputs: &[&Tensor<f32>]) -> Result<LayerOut<f32, E>, super::provable::ProvableOpError> {
+        if inputs.len() != 1 {
+            return Err(super::provable::ProvableOpError::ParameterError(
+                "Convolution layer expects 1 input".to_string(),
+            ));
+        }
+        let input = inputs[0];
+        Ok(LayerOut::from_vec(vec![input.conv2d(&self.filter, &self.bias, 1)]))
+    }
+}
+
 impl Convolution<f32> {
     /// used to create a convoluation layer with from the raw float weights and bias.
     /// The wieghts are NOT fft'd as they are when the it is being quantized.
@@ -174,6 +211,153 @@ impl Convolution<f32> {
 
     pub fn float_op(&self, input: &Tensor<f32>) -> Tensor<f32> {
         input.conv2d(&self.filter, &self.bias, 1)
+    }
+}
+
+impl<E: ExtensionField> Op<Element, E> for Convolution<Element> {
+    fn evaluate(&self, inputs: &[&Tensor<Element>]) -> Result<LayerOut<Element, E>, ProvableOpError> {
+        if inputs.len() != 1 {
+            return Err(ProvableOpError::ParameterError(
+                "Convolution layer expects 1 input".to_string(),
+            ));
+        }
+        let input = inputs[0];
+        let (output, proving_data) = self.op(input);
+        Ok(
+            LayerOut { outputs: vec![output], proving_data: Some(proving_data), }
+        )
+    }
+}
+
+impl<E> ProveInfo<E> for Convolution<Element> 
+where
+    E: ExtensionField + DeserializeOwned,
+    E::BaseField: Serialize + DeserializeOwned,
+{
+    fn step_info(
+        &self,
+        id: PolyID,
+        mut aux: ContextAux,
+    ) -> (LayerCtx<E>, ContextAux)
+    {
+        // TO SEE
+        // last_output_size = filter.nrows_2d();
+        // let filter_shape = filter.filter.dims();
+        // let total_dims = last_output_shape.len();
+        // last_output_shape = std::iter::once(filter_shape[0])
+        // .chain(
+        // last_output_shape
+        // .iter()
+        // .skip(total_dims - 2)
+        // .map(|&dim| ceil_log2(dim)),
+        // )
+        // .collect::<Vec<usize>>();
+        let mut filter_shape = self.filter.get_shape();
+        filter_shape.remove(1);
+        aux.last_output_shape = vec![filter_shape];
+
+        let mut delegation_fft: Vec<VPAuxInfo<E>> = Vec::new();
+        let mut delegation_ifft: Vec<VPAuxInfo<E>> = Vec::new();
+        // println!("{},{}",id,filter.filter_size());
+        for i in (0..(self.filter_size().ilog2() as usize)).rev() {
+            delegation_fft.push(VPAuxInfo::<E>::from_mle_list_dimensions(&vec![vec![
+                i + 1,
+                i + 1,
+                i + 1,
+            ]]));
+            delegation_ifft.push(VPAuxInfo::<E>::from_mle_list_dimensions(&vec![vec![
+                i + 1,
+                i + 1,
+                i + 1,
+            ]]));
+        }
+
+        let conv_info = LayerCtx::Convolution(ConvCtx {
+            poly_id: id,
+            bias_poly_id: BIAS_POLY_ID + id,
+            ifft_aux: VPAuxInfo::<E>::from_mle_list_dimensions(&vec![vec![
+                ((self.filter_size()).ilog2() as usize) + 1,
+                ((self.filter_size()).ilog2() as usize) + 1,
+            ]]),
+            fft_aux: VPAuxInfo::<E>::from_mle_list_dimensions(&vec![vec![
+                ((self.filter_size()).ilog2() as usize) + 1,
+                ((self.filter_size()).ilog2() as usize) + 1,
+            ]]),
+            hadamard: VPAuxInfo::<E>::from_mle_list_dimensions(&vec![vec![
+                ((self.kx() * self.filter_size()).ilog2() as usize) + 1,
+                ((self.kx() * self.filter_size()).ilog2() as usize) + 1,
+                ((self.kx() * self.filter_size()).ilog2() as usize) + 1,
+            ]]),
+            delegation_fft,
+            delegation_ifft,
+            kw: self.kw(),
+            kx: self.kx(),
+            filter_size: self.filter_size(),
+        });
+        (conv_info, aux)
+    }
+
+    fn commit_info(&self, id: NodeId) -> Vec<Option<(PolyID, Vec<E>)>> {
+        let filter_evals = self.filter.get_conv_weights();
+        let bias_evals = self.bias.evals_flat();
+        let id = id as PolyID;
+        debug!(
+            "Commitment : conv layer ID {}: size {}",
+            id,
+            filter_evals.len().ilog2()
+        );
+        debug!(
+            "Commitment : conv layer bias ID {}: size {}",
+            BIAS_POLY_ID + id,
+            bias_evals.len().ilog2()
+        );
+        vec![
+            Some((id, filter_evals)),
+            Some((BIAS_POLY_ID + id, bias_evals)),
+        ]
+    }
+}
+
+impl<E, T> ProvableOp<E, T, Element> for Convolution<Element> 
+where 
+    E: ExtensionField,
+    E::BaseField: Serialize + DeserializeOwned,
+    E: Serialize + DeserializeOwned,
+    T: Transcript<E>,
+{
+    fn is_provable(&self) -> bool {
+        true
+    }
+    
+    fn prove(&self, ctx: &LayerCtx<E>, last_claims: Vec<Claim<E>>, step_data: &super::provable::InferenceStep<E, E>, prover: &mut Prover<E, T>) -> Result<Vec<Claim<E>>, ProvableOpError> {
+        if let LayerCtx::Convolution(info) = ctx {
+            Ok(vec![self.prove_convolution_step(
+                prover, 
+                last_claims[0].clone(), 
+                &step_data.outputs.outputs()[0], 
+                &step_data.outputs.proving_data.as_ref().unwrap(), 
+                info
+            )?])
+        } else {
+            return Err(ProvableOpError::TypeError(
+                "Expected convolution layer context".to_string()
+            ))
+        }
+    }
+
+    fn verify(&self, proof: &LayerProof<E>, ctx: LayerCtx<E>, last_claims: Vec<Claim<E>>, verifier: &mut Verifier<E, T>) -> Result<Vec<Claim<E>>, ProvableOpError> {
+        match (proof, ctx) {
+            (LayerProof::Convolution(proof), LayerCtx::Convolution(info)) => {
+                Ok(vec![info.verify_convolution(
+                    verifier, 
+                    last_claims[0].clone(), 
+                    proof
+                )?])
+            },
+            _ => Err(ProvableOpError::TypeError(
+                "Expected convolution layer proof and context".to_string()
+            )),
+        }
     }
 }
 
@@ -227,72 +411,6 @@ impl Convolution<Element> {
         //            )
         //        },
         //    );
-    }
-
-    pub(crate) fn step_info<E: ExtensionField>(
-        &self,
-        id: PolyID,
-        mut aux: ContextAux,
-    ) -> (LayerCtx<E>, ContextAux)
-    where
-        E: ExtensionField + DeserializeOwned,
-        E::BaseField: Serialize + DeserializeOwned,
-    {
-        // TO SEE
-        // last_output_size = filter.nrows_2d();
-        // let filter_shape = filter.filter.dims();
-        // let total_dims = last_output_shape.len();
-        // last_output_shape = std::iter::once(filter_shape[0])
-        // .chain(
-        // last_output_shape
-        // .iter()
-        // .skip(total_dims - 2)
-        // .map(|&dim| ceil_log2(dim)),
-        // )
-        // .collect::<Vec<usize>>();
-        let mut filter_shape = self.filter.get_shape();
-        filter_shape.remove(1);
-        aux.last_output_shape = filter_shape;
-
-        let mut delegation_fft: Vec<VPAuxInfo<E>> = Vec::new();
-        let mut delegation_ifft: Vec<VPAuxInfo<E>> = Vec::new();
-        // println!("{},{}",id,filter.filter_size());
-        for i in (0..(self.filter_size().ilog2() as usize)).rev() {
-            delegation_fft.push(VPAuxInfo::<E>::from_mle_list_dimensions(&vec![vec![
-                i + 1,
-                i + 1,
-                i + 1,
-            ]]));
-            delegation_ifft.push(VPAuxInfo::<E>::from_mle_list_dimensions(&vec![vec![
-                i + 1,
-                i + 1,
-                i + 1,
-            ]]));
-        }
-
-        let conv_info = LayerCtx::Convolution(ConvCtx {
-            poly_id: id,
-            bias_poly_id: BIAS_POLY_ID + id,
-            ifft_aux: VPAuxInfo::<E>::from_mle_list_dimensions(&vec![vec![
-                ((self.filter_size()).ilog2() as usize) + 1,
-                ((self.filter_size()).ilog2() as usize) + 1,
-            ]]),
-            fft_aux: VPAuxInfo::<E>::from_mle_list_dimensions(&vec![vec![
-                ((self.filter_size()).ilog2() as usize) + 1,
-                ((self.filter_size()).ilog2() as usize) + 1,
-            ]]),
-            hadamard: VPAuxInfo::<E>::from_mle_list_dimensions(&vec![vec![
-                ((self.kx() * self.filter_size()).ilog2() as usize) + 1,
-                ((self.kx() * self.filter_size()).ilog2() as usize) + 1,
-                ((self.kx() * self.filter_size()).ilog2() as usize) + 1,
-            ]]),
-            delegation_fft,
-            delegation_ifft,
-            kw: self.kw(),
-            kx: self.kx(),
-            filter_size: self.filter_size(),
-        });
-        (conv_info, aux)
     }
 
     // Prove convolution of a CNN network. This is a convolution between in a 3D matrix X of dimension k_x * n_x * n_x
@@ -794,7 +912,7 @@ mod test {
     use goldilocks::GoldilocksExt2;
 
     use crate::{
-        layers::dense::{self, Dense},
+        layers::{dense::{self, Dense}, provable::{evaluate_layer, Op}},
         onnx_parse::conv2d_shape,
     };
 
@@ -972,8 +1090,8 @@ mod test {
         let padded_nrows = padded_dense.nrows();
         padded_dense.bias = padded_dense.bias.pad_1d(padded_nrows);
         // let no_garbage_fft_output = padded_dense.op(&flat_fft_output);
-        let no_garbage_fft_output = padded_dense.op(&no_garbage_fft_output);
-        let no_garbage_normal_output = dense.op(&flat_normal_output);
+        let no_garbage_fft_output = evaluate_layer::<GoldilocksExt2, _, _>(&padded_dense, &vec![&no_garbage_fft_output]).unwrap().outputs()[0].clone();
+        let no_garbage_normal_output = evaluate_layer::<GoldilocksExt2, _, _>(&dense, &vec![&flat_normal_output]).unwrap().outputs()[0].clone();
         let max_rows = dense.nrows();
         assert_eq!(
             &no_garbage_fft_output.get_data()[..max_rows],

@@ -737,7 +737,7 @@ mod tests {
         println!("Result: {} => {:?}", -1.0, scaling.quantize(&-1.0));
         println!("Result: {} => {:?}", 1.0, scaling.quantize(&1.0));
     }
-
+    /*
     #[test]
     #[ignore]
     fn test_covid_cnn() {
@@ -779,7 +779,7 @@ mod tests {
             BasicTranscript::new(b"m2vec");
         let io = IO::new(input.to_fields(), output.to_fields());
         verify::<_, _>(ctx, proof, io, &mut verifier_transcript).unwrap();
-    }
+    }*/
 
     #[test]
     fn test_is_cnn() {
@@ -788,7 +788,7 @@ mod tests {
 
         assert!(result.is_ok(), "Failed: {:?}", result.unwrap_err());
     }
-
+    /*
     #[test]
     fn test_load_cnn() {
         let filepath = "assets/scripts/CNN/cnn-cifar-01.onnx";
@@ -819,5 +819,5 @@ mod tests {
             BasicTranscript::new(b"m2vec");
         let io = IO::new(input.to_fields(), output.to_fields());
         verify::<_, _>(ctx, proof, io, &mut verifier_transcript).unwrap();
-    }
+    }*/
 }

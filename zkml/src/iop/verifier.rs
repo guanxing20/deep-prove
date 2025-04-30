@@ -31,10 +31,11 @@ impl<E> IO<E> {
     }
 }
 
-pub(crate) struct Verifier<'a, E: ExtensionField, T: Transcript<E>> {
+pub struct Verifier<'a, E: ExtensionField, T: Transcript<E>> {
     pub(crate) commit_verifier: precommit::CommitVerifier<E>,
     pub(crate) witness_verifier: precommit::CommitVerifier<E>,
     pub(crate) transcript: &'a mut T,
+    pub(crate) challenge_storage: Option<ChallengeStorage<E>>,
 }
 
 impl<'a, E: ExtensionField, T: Transcript<E>> Verifier<'a, E, T>
@@ -47,6 +48,7 @@ where
             commit_verifier: precommit::CommitVerifier::new(),
             witness_verifier: precommit::CommitVerifier::new(),
             transcript,
+            challenge_storage: None,
         }
     }
 
@@ -69,12 +71,12 @@ where
 
         // Here we generate and store all lookup related challenges
         // TODO: make this part of verifier struct
-        let challenge_storage = if let Some((_, witness_context)) = proof.witness {
+        self.challenge_storage = Some(if let Some((_, witness_context)) = proof.witness {
             witness_context.write_to_transcript(self.transcript)?;
             ChallengeStorage::<E>::initialise(&ctx, self.transcript)
         } else {
             ChallengeStorage::default()
-        };
+        });
 
         proof.steps.iter().rev().for_each(|proof| {
             if let Some((num, denom)) = proof.get_lookup_data() {
@@ -109,7 +111,7 @@ where
         for proof_and_step in proof.steps.iter().zip(ctx.steps_info.iter()) {
             output_claim = match proof_and_step {
                 (LayerProof::<E>::Activation(proof), LayerCtx::Activation(info)) => {
-                    let (constant_challenge, column_separation_challenge) = challenge_storage
+                    let (constant_challenge, column_separation_challenge) = self.challenge_storage.as_ref().unwrap()
                         .get_challenges_by_name(&TableType::Relu.name())
                         .ok_or(anyhow!(
                             "Couldn't get challenges at Step: {}, LookupType was: {}",
@@ -128,7 +130,7 @@ where
                     info.verify_dense(&mut self, output_claim, &proof)?
                 }
                 (LayerProof::<E>::Requant(proof), LayerCtx::Requant(info)) => {
-                    let (constant_challenge, column_separation_challenge) = challenge_storage
+                    let (constant_challenge, column_separation_challenge) = self.challenge_storage.as_ref().unwrap()
                         .get_challenges_by_name(&TableType::Range.name())
                         .ok_or(anyhow!(
                             "Couldn't get challenges at Step: {}, LookupType was: {}",
@@ -144,7 +146,7 @@ where
                     )?
                 }
                 (LayerProof::Pooling(proof), LayerCtx::Pooling(info)) => {
-                    let (constant_challenge, column_separation_challenge) = challenge_storage
+                    let (constant_challenge, column_separation_challenge) = self.challenge_storage.as_ref().unwrap()
                         .get_challenges_by_name(&TableType::Range.name())
                         .ok_or(anyhow!(
                             "Couldn't get challenges at Step: {}, LookupType was: {}",
@@ -177,7 +179,7 @@ where
             .iter()
             .zip(ctx.lookup.iter())
             .try_for_each(|(table_proof, table_type)| {
-                let (constant_challenge, column_separation_challenge) = challenge_storage
+                let (constant_challenge, column_separation_challenge) = self.challenge_storage.as_ref().unwrap()
                     .get_challenges_by_name(&table_type.name())
                     .ok_or(anyhow!(
                         "No challenges found for table of type: {:?} during verification",

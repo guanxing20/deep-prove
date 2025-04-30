@@ -1,19 +1,15 @@
+use std::collections::HashMap;
+
 use crate::{
-    Claim, Element, Prover,
-    commit::{compute_betas_eval, identity_eval, precommit::PolyID, same_poly},
-    iop::verifier::Verifier,
-    layers::{ContextAux, LayerProof},
-    lookup::{
-        context::TableType,
+    commit::{compute_betas_eval, identity_eval, precommit::PolyID, same_poly}, iop::verifier::Verifier, layers::{ContextAux, LayerProof}, lookup::{
+        context::{LookupWitnessGen, TableType},
         logup_gkr::{
             prover::batch_prove as logup_batch_prove, structs::LogUpProof,
             verifier::verify_logup_proof,
         },
-    },
-    quantization::{Fieldizer, IntoElement},
-    tensor::{Number, Tensor},
+    }, quantization::{Fieldizer, IntoElement}, tensor::{Number, Tensor}, Claim, Element, Prover
 };
-use anyhow::{Context, ensure};
+use anyhow::{Context, ensure, anyhow};
 use ff_ext::ExtensionField;
 use gkr::util::ceil_log2;
 use itertools::{Itertools, izip};
@@ -29,7 +25,7 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use sumcheck::structs::IOPProverState;
 
-use super::LayerCtx;
+use super::{provable::{InferenceStep, LayerOut, NodeId, Op, OpInfo, ProvableOp, ProvableOpError, ProveInfo}, LayerCtx};
 
 pub const MAXPOOL2D_KERNEL_SIZE: usize = 2;
 
@@ -65,29 +61,62 @@ where
     pub(crate) variable_gap: usize,
 }
 
-impl Pooling {
-    pub fn op<T: Number>(&self, input: &Tensor<T>) -> Tensor<T> {
-        match self {
-            Pooling::Maxpool2D(maxpool2d) => maxpool2d.op(input),
-        }
+impl OpInfo for Pooling {
+    fn input_shapes(&self) -> Vec<Vec<usize>> {
+        vec![] // works with any input shape
     }
 
-    pub(crate) fn step_info<E: ExtensionField>(
+    fn output_shapes(&self) -> Vec<Vec<usize>> {
+        vec![] // works with any output shape
+    }
+
+    fn num_outputs(&self, num_inputs: usize) -> usize {
+        num_inputs
+    }
+
+    fn describe(&self) -> String {
+        match self {
+            Pooling::Maxpool2D(maxpool2d) => 
+                format!(
+                    "MaxPool2D{{ kernel size: {}, stride: {} }}",
+                    maxpool2d.kernel_size, maxpool2d.stride
+                ),
+        }
+    }
+}
+
+impl<N: Number, E: ExtensionField> Op<N, E> for Pooling {
+    fn evaluate(&self, inputs: &[&Tensor<N>]) -> Result<LayerOut<N, E>, super::provable::ProvableOpError> {
+        if inputs.len() != 1 {
+            return Err(super::provable::ProvableOpError::ParameterError(
+                "Pooling layer expects one input".to_string(),
+            ));
+        }
+        let input = inputs[0];
+        let output = match self {
+            Pooling::Maxpool2D(maxpool2d) => maxpool2d.op(input),
+        };
+        Ok(LayerOut::from_vec(vec![output]))
+    }
+}
+
+impl<E> ProveInfo<E> for Pooling 
+where
+    E: ExtensionField + DeserializeOwned,
+    E::BaseField: Serialize + DeserializeOwned,
+{
+    fn step_info(
         &self,
         id: PolyID,
         mut aux: ContextAux,
-    ) -> (LayerCtx<E>, ContextAux)
-    where
-        E: ExtensionField + DeserializeOwned,
-        E::BaseField: Serialize + DeserializeOwned,
-    {
+    ) -> (LayerCtx<E>, ContextAux) {
         let info = match self {
             Pooling::Maxpool2D(info) => {
                 aux.tables.insert(TableType::Range);
                 // Pooling only affects the last two dimensions
                 let total_number_dims = aux.last_output_shape.len();
 
-                aux.last_output_shape
+                aux.last_output_shape.first_mut().expect("Pooling layer expects at least one input")
                     .iter_mut()
                     .skip(total_number_dims - 2)
                     .for_each(|dim| *dim = (*dim - info.kernel_size) / info.stride + 1);
@@ -96,6 +125,8 @@ impl Pooling {
                     poly_id: id,
                     num_vars: aux
                         .last_output_shape
+                        .first()
+                        .unwrap()
                         .iter()
                         .map(|dim| ceil_log2(*dim))
                         .sum::<usize>(),
@@ -104,6 +135,105 @@ impl Pooling {
         };
         (info, aux)
     }
+}
+
+impl<E, T, N> ProvableOp<E, T, N> for Pooling 
+where 
+    E: ExtensionField,
+    E::BaseField: Serialize + DeserializeOwned,
+    E: Serialize + DeserializeOwned,
+    T: Transcript<E>,
+    N: Number,
+{
+    fn is_provable(&self) -> bool {
+        true
+    }
+    
+    fn prove(&self, ctx: &LayerCtx<E>, last_claims: Vec<Claim<E>>, step_data: &super::provable::InferenceStep<E, E>, prover: &mut Prover<E, T>) -> Result<Vec<Claim<E>>, super::provable::ProvableOpError> {
+        if let LayerCtx::Pooling(info) = ctx {
+            Ok(vec![self.prove_pooling(
+                prover,
+                last_claims[0].clone(),
+                &step_data.inputs[0],
+                &step_data.outputs.outputs()[0],
+                info,
+            )?])
+        } else {
+            Err(ProvableOpError::ParameterError(
+                "Pooling layer expects a PoolingCtx".to_string(),
+            ))
+        }
+    }
+
+    fn verify(&self, proof: &LayerProof<E>, ctx: LayerCtx<E>, last_claims: Vec<Claim<E>>, verifier: &mut Verifier<E, T>) -> Result<Vec<Claim<E>>, super::provable::ProvableOpError> {
+        match (proof, ctx) {
+            (LayerProof::Pooling(proof), LayerCtx::Pooling(info)) => {
+                let (constant_challenge, column_separation_challenge) = verifier.challenge_storage.as_ref().unwrap()
+                    .get_challenges_by_name(&TableType::Range.name())
+                    .ok_or(anyhow!(
+                        "Couldn't get challenges for LookupType: {}",
+                        TableType::Range.name()
+                ))?;
+                Ok(vec![info.verify_pooling(
+                    verifier, 
+                    last_claims[0].clone(), 
+                    proof, 
+                    constant_challenge, 
+                    column_separation_challenge
+                )?])
+            }
+            _ => Err(ProvableOpError::TypeError(
+                "Expected pooling layer proof and context".to_string()
+            )),
+        }
+    }
+
+    fn gen_lookup_witness(&self, id: NodeId, gen: &mut LookupWitnessGen<E>, step_data: &InferenceStep<Element, E>) -> Result<(), ProvableOpError> {
+        if step_data.inputs.len() != 1 { 
+            return Err(ProvableOpError::ParameterError(
+                "Requant layer expects exactly one input tensor".to_string(),
+            ));
+        }
+
+        if step_data.outputs.outputs().len() != 1 {
+            return Err(ProvableOpError::ParameterError(
+                "Requant layer expects exactly one output tensor".to_string(),
+            ));
+        }
+        
+        gen.tables.insert(TableType::Range);
+        let table_lookup_map = gen.lookups
+            .entry(TableType::Range)
+            .or_insert_with(|| HashMap::default());
+
+        let (merged_lookups, column_evals) = self.gen_lookup_witness::<E>(&step_data.inputs[0]);
+
+        merged_lookups
+            .into_iter()
+            .for_each(|val| *table_lookup_map.entry(val).or_insert(0u64) += 1);
+
+        gen.polys_with_id.push((
+            id as PolyID,
+            step_data.outputs.outputs()[0]
+                .get_data()
+                .iter()
+                .map(Fieldizer::<E>::to_field)
+                .collect(),
+        ));
+        gen.lookups_no_challenges.push((column_evals, 1, TableType::Range));
+        
+        Ok(())
+    }
+}
+
+impl Pooling {
+    pub fn op<T: Number>(&self, input: &Tensor<T>) -> Tensor<T> {
+        match self {
+            Pooling::Maxpool2D(maxpool2d) => maxpool2d.op(input),
+        }
+    }
+
+    
     pub fn gen_lookup_witness<E: ExtensionField>(
         &self,
         input: &Tensor<Element>,

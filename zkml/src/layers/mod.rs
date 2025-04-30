@@ -6,14 +6,20 @@ pub mod hadamard;
 pub mod pooling;
 pub mod requant;
 pub mod reshape;
+pub mod provable;
+
+use std::fmt::Debug;
 
 use anyhow::Result;
 use ff_ext::ExtensionField;
+use goldilocks::GoldilocksExt2;
 use itertools::Itertools;
 use pooling::{PoolingCtx, PoolingProof};
+use provable::{evaluate_layer, LayerOut, OpInfo, ProvableNode, ProvableOpError, ProveInfo};
 use requant::RequantCtx;
 use reshape::Reshape;
 use statrs::statistics::{Data, Distribution};
+use transcript::Transcript;
 
 use crate::{
     Element,
@@ -30,7 +36,6 @@ use crate::{
     tensor::{ConvData, Number, Tensor},
 };
 use activation::ActivationCtx;
-use common::{Op, QuantizableOp};
 use convolution::{ConvCtx, ConvProof, SchoolBookConvCtx};
 use dense::{DenseCtx, DenseProof};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -71,6 +76,7 @@ where
     Requant(RequantCtx),
     Pooling(PoolingCtx),
     Table(TableCtx<E>),
+    Reshape(()),
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -107,6 +113,7 @@ where
             Self::Requant(_) => "Requant".to_string(),
             Self::Pooling(_) => "Pooling".to_string(),
             Self::Table(..) => "Table".to_string(),
+            Self::Reshape(..) => "Reshape".to_string(),
         }
     }
 
@@ -115,6 +122,39 @@ where
             Self::Dense(..) => false,
             _ => true,
         }
+    }
+}
+
+impl<E, T, N> ProvableNode<E, T, N> 
+where 
+    E: ExtensionField,
+    E::BaseField: Serialize + DeserializeOwned,
+    E: Serialize + DeserializeOwned,
+    T: Transcript<E>,
+    N: Number,
+{
+    pub fn describe(&self) -> String {
+        self.operation.describe()
+    }
+
+    pub fn is_provable(&self) -> bool {
+        self.operation.is_provable()
+    }
+
+    pub(crate) fn run(&self, inputs: &[&Tensor<N>]) -> Result<LayerOut<N, E>, ProvableOpError> 
+    where 
+        E: ExtensionField,
+        N: Number,
+    {
+        self.operation.evaluate(inputs)
+    }
+     
+    pub(crate) fn step_info(
+        &self,
+        id: PolyID,
+        aux: ContextAux
+    ) -> (LayerCtx<E>, ContextAux) {
+        self.operation.step_info(id, aux)
     }
 }
 
@@ -129,7 +169,7 @@ impl<T: Number> Layer<T> {
             Layer::SchoolBookConvolution(ref filter) => filter.get_shape(),
 
             Layer::Activation(Activation::Relu(_)) => Relu::shape(),
-            Layer::Requant(info) => info.shape(),
+            Layer::Requant(_) => vec![], // No predefined shape
             Layer::Pooling(Pooling::Maxpool2D(info)) => vec![info.kernel_size, info.kernel_size],
             Layer::Reshape(ref _reshape) => vec![1],
         }
@@ -164,8 +204,7 @@ impl<T: Number> Layer<T> {
             }
             Layer::Requant(info) => {
                 format!(
-                    "Requant: shape: {}, shift: {}, offset: 2^{}",
-                    info.shape()[1],
+                    "Requant: shift: {}, offset: 2^{}",
                     info.right_shift,
                     (info.range << 1).ilog2() as usize,
                 )
@@ -174,7 +213,7 @@ impl<T: Number> Layer<T> {
                 "MaxPool2D{{ kernel size: {}, stride: {} }}",
                 info.kernel_size, info.stride
             ),
-            Layer::Reshape(ref reshape) => describe_op::<T, Reshape>(reshape),
+            Layer::Reshape(ref reshape) => reshape.describe(),
         }
     }
     pub fn needs_requant(&self) -> bool {
@@ -189,10 +228,6 @@ impl<T: Number> Layer<T> {
             _ => true,
         }
     }
-}
-
-fn describe_op<N: Number, O: Op<N>>(op: &O) -> String {
-    format!("{}: {:?}", op.describe(), op.output_shape())
 }
 
 impl Layer<f32> {
@@ -212,8 +247,8 @@ impl Layer<f32> {
     /// TODO: limitation of enum is we can't have same names as in Element run
     pub(crate) fn run(&self, input: &Tensor<f32>) -> Tensor<f32> {
         match self {
-            Layer::Dense(ref dense) => dense.op(input),
-            Layer::Activation(activation) => activation.op(input),
+            Layer::Dense(ref dense) => evaluate_layer::<GoldilocksExt2, _, _>(dense, &vec![input]).unwrap().outputs()[0].clone(),
+            Layer::Activation(activation) => evaluate_layer::<GoldilocksExt2, _, _>(activation, &vec![input]).unwrap().outputs()[0].clone(),
             Layer::Convolution(ref conv_pair) => {
                 input.conv2d(&conv_pair.filter, &conv_pair.bias, 1)
             }
@@ -223,7 +258,7 @@ impl Layer<f32> {
             Layer::SchoolBookConvolution(ref conv_pair) => {
                 input.conv2d(&conv_pair.filter, &conv_pair.bias, 1)
             }
-            Layer::Reshape(ref reshape) => reshape.op(input),
+            Layer::Reshape(ref reshape) => evaluate_layer::<GoldilocksExt2, _, _>(reshape, &vec![input]).unwrap().outputs()[0].clone(),
             Layer::Requant(_) => {
                 panic!(
                     "InferenceObserver: requantization layer found while observing inference on float !?"
@@ -258,8 +293,8 @@ impl Layer<Element> {
     // layer which is matmul
     pub fn op<F: ExtensionField>(&self, input: &Tensor<Element>) -> Result<LayerOutput<F>> {
         let output = match &self {
-            Layer::Dense(ref dense) => Ok(LayerOutput::NormalOut(dense.op(input))),
-            Layer::Activation(activation) => Ok(LayerOutput::NormalOut(activation.op(input))),
+            Layer::Dense(ref dense) => Ok(LayerOutput::NormalOut(evaluate_layer::<GoldilocksExt2, _, _>(dense, &vec![input]).unwrap().outputs()[0].clone())),
+            Layer::Activation(activation) => Ok(LayerOutput::NormalOut(evaluate_layer::<GoldilocksExt2, _, _>(activation, &vec![input]).unwrap().outputs()[0].clone())),
             Layer::Convolution(ref filter) => Ok(LayerOutput::ConvOut(filter.op(input))),
             // Layer::Convolution(ref filter) => LayerOutput::NormalOut(input.conv2d(&filter.filter,&filter.bias,1)),
             // Traditional convolution is used for debug purposes. That is because the actual convolution
@@ -275,7 +310,7 @@ impl Layer<Element> {
 
             Layer::Requant(info) => info.op(input).map(|r| LayerOutput::NormalOut(r)),
             Layer::Pooling(info) => Ok(LayerOutput::NormalOut(info.op(input))),
-            Layer::Reshape(reshape) => Ok(LayerOutput::NormalOut(reshape.op(input))),
+            Layer::Reshape(reshape) => Ok(LayerOutput::NormalOut(evaluate_layer::<GoldilocksExt2, _, _>(reshape, &vec![input]).unwrap().outputs()[0].clone())),
         }?;
         match output {
             LayerOutput::NormalOut(ref output) => {

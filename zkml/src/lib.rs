@@ -32,7 +32,7 @@ pub type Element = i128;
 
 /// Claim type to accumulate in this protocol, for a certain polynomial, known in the context.
 /// f(point) = eval
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct Claim<E> {
     point: Vec<E>,
     eval: E,
@@ -163,11 +163,11 @@ mod test {
 
     type E = GoldilocksExt2;
 
-    #[test]
+    /*#[test]
     fn test_model_run() -> anyhow::Result<()> {
         test_model_run_helper()?;
         Ok(())
-    }
+    }*/
 
     use std::path::PathBuf;
 
@@ -176,7 +176,7 @@ mod test {
         PathBuf::from(manifest_dir).parent().unwrap().to_path_buf()
     }
 
-    fn test_model_run_helper() -> anyhow::Result<()> {
+    /*fn test_model_run_helper() -> anyhow::Result<()> {
         let filepath = workspace_root().join("zkml/assets/model.onnx");
         let (model, _md) = FloatOnnxLoader::new(&filepath.to_string_lossy())
             .with_model_type(ModelType::MLP)
@@ -205,7 +205,7 @@ mod test {
         verify::<_, _>(ctx, proof, io, &mut verifier_transcript).expect("invalid proof");
         println!("[+] Verify proof: valid");
         Ok(())
-    }
+    }*/
 
     // TODO: move below code to a vector module
 

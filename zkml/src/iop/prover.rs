@@ -1,16 +1,13 @@
+use std::collections::HashMap;
+
 use super::{ChallengeStorage, Context, Proof, TableProof};
 use crate::{
-    Claim, Element, VectorTranscript,
-    commit::{compute_betas_eval, precommit},
-    layers::{Layer, LayerCtx, LayerProof},
-    lookup::{
-        context::{TABLE_POLY_ID_OFFSET, generate_lookup_witnesses},
+    commit::{compute_betas_eval, precommit}, layers::{provable::{InferenceTrace, NodeId, ProvableModel}, Layer, LayerCtx, LayerProof}, lookup::{
+        context::{generate_lookup_witnesses, TABLE_POLY_ID_OFFSET},
         logup_gkr::{prover::batch_prove as logup_batch_prove, structs::LogUpInput},
-    },
-    model::{InferenceStep, InferenceTrace},
-    tensor::{Tensor, get_root_of_unity},
+    }, tensor::{get_root_of_unity, Tensor}, Claim, Element, VectorTranscript
 };
-use anyhow::{anyhow, bail};
+use anyhow::{anyhow, bail, ensure};
 use ff_ext::ExtensionField;
 
 use multilinear_extensions::{
@@ -83,7 +80,7 @@ where
         self.proofs.push(proof);
     }
     //#[instrument(name="prove step",skip_all,fields(step = step.layer.describe()),level = "debug")]
-    fn prove_step<'b>(
+    /*fn prove_step<'b>(
         &mut self,
         last_claim: Claim<E>,
         input: &Tensor<E>,
@@ -119,7 +116,7 @@ where
         };
 
         claim
-    }
+    }*/
 
     #[timed::timed_instrument(level = "debug")]
     fn prove_tables(&mut self) -> anyhow::Result<()> {
@@ -410,18 +407,18 @@ where
         // return Proof;
     }
 
-    pub fn prove<'b>(
+    pub fn prove(
         mut self,
-        full_trace: InferenceTrace<'b, Element, E>,
+        model: &ProvableModel<E, T, Element>,
+        full_trace: InferenceTrace<Element, E>,
     ) -> anyhow::Result<Proof<E>> {
-        let trace = full_trace.provable_steps();
         // write commitments and polynomials info to transcript
         self.ctx.write_to_transcript(self.transcript)?;
         // then create the context for the witness polys -
         debug!("Prover : instantiate witness ctx...");
-        self.instantiate_witness_ctx(&trace)?;
+        self.instantiate_witness_ctx(&full_trace, model)?;
         debug!("Prover : instantiate witness ctx done...");
-        let trace = trace.to_field();
+        let trace = full_trace.to_field();
         // this is the random set of variables to fix at each step derived as the output of
         // sumcheck.
         // For the first step, so before the first sumcheck, we generate it from FS.
@@ -429,11 +426,9 @@ where
         // input vector.
         let r_i = self
             .transcript
-            .read_challenges(trace.final_output().get_data().len().ilog2() as usize);
+            .read_challenges(trace.output()?.get_data().len().ilog2() as usize);
         let y_i = trace
-            .last_step()
-            .output
-            .clone()
+            .output()?
             .get_data()
             .to_vec()
             .into_mle()
@@ -444,12 +439,42 @@ where
             eval: y_i,
         };
 
-        // let trace_size = trace.last_step().id;
-        // we start by the output to prove up to the input, GKR style
-        for ((input, step), info) in trace.iter().rev().zip(self.ctx.steps_info.iter()) {
-            last_claim = self.prove_step(last_claim, input, step, &info)?;
+        let mut claims_by_layer: HashMap<NodeId, Vec<Claim<E>>> = HashMap::new();
+        for (node_id, node) in model.to_backward_iterator() {
+            let claims = node.outputs.iter().map(|out| {
+                // For now, we support in proving only one edge per output wire,
+                // as if an output is used as input in different nodes, we need
+                // to batch claims about the same polynomial. ToDo: batch claims
+                assert_eq!(out.edges.len(), 1);
+                let edge = &out.edges[0];
+                Ok(if let Some(id) = &edge.node {
+                    let claims_for_node = claims_by_layer.get(id).ok_or(
+                        anyhow!("No claims found for layer {}", id)
+                    )?;
+                    ensure!(edge.index < claims_for_node.len(), 
+                        "Not enough claims found for node {}: required claim for input {}, but {} claims found",
+                        id,
+                        edge.index,
+                        claims_for_node.len()
+                    );
+                    claims_for_node[edge.index].clone() // ToDo: avoid clone
+                } else {
+                    // it's an output node, so we use directly the claim for the output
+                    last_claim.clone()
+                })
+            }).collect::<anyhow::Result<Vec<_>>>()?;
+            let step_data = trace.get_step(&node_id).ok_or(
+                anyhow!("Step in trace not found for node {}", node_id)
+            )?;
+            let ctx = self.ctx.steps_info.get(&node_id).ok_or(
+                anyhow!("Layer ctx not found for node {}", node_id)
+            )?;
+            let claims = node.operation.prove(ctx, claims, step_data, &mut self)?;
+            claims_by_layer.insert(node_id, claims);
         }
 
+        // let trace_size = trace.last_step().id;
+        
         // Now we have to make the table proofs
         self.prove_tables()?;
 
@@ -472,12 +497,13 @@ where
 
     /// Looks at all the individual polys to accumulate from the witnesses and create the context from that.
     #[timed_instrument(level = "debug")]
-    fn instantiate_witness_ctx<'b>(
+    fn instantiate_witness_ctx(
         &mut self,
-        trace: &InferenceTrace<'b, Element, E>,
+        trace: &InferenceTrace<Element, E>,
+        model: &ProvableModel<E, T, Element>,
     ) -> anyhow::Result<()> {
         let (witness_ctx, challenge_storage, lookup_witnesses, table_witnesses) =
-            generate_lookup_witnesses::<E, T>(trace, self.transcript)?;
+            generate_lookup_witnesses::<E, T>(trace, model, self.transcript)?;
         // let (lookup_witness, polys) =
         //     lookup::WitnessContext::<E>::initialise_witness_ctx(&self.ctx.lookup, trace)?;
 

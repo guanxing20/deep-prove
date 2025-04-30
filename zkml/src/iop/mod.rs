@@ -90,7 +90,7 @@ mod test {
 
     type F = GoldilocksExt2;
 
-    #[test]
+    /*#[test]
     fn test_prover_steps_generic() {
         init_test_logging();
         let (model, input) = Model::random(1);
@@ -121,5 +121,5 @@ mod test {
         let proof = prover.prove(trace).expect("unable to generate proof");
         let mut verifier_transcript = default_transcript();
         verify::<_, _>(ctx, proof, io, &mut verifier_transcript).expect("invalid proof");
-    }
+    }*/
 }

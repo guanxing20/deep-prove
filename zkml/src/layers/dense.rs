@@ -15,10 +15,12 @@ use multilinear_extensions::{
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sumcheck::structs::{IOPProof, IOPProverState, IOPVerifierState};
-use tracing::{trace, warn};
+use tracing::{debug, trace, warn};
 use transcript::Transcript;
 
 use crate::{Element, tensor::Tensor};
+
+use super::provable::{LayerOut, NodeId, Op, OpInfo, ProvableOp, ProvableOpError, ProveInfo};
 
 /// Bias to compute the bias ID polynomials. Since originally we take the index of each
 /// layer to be the index of the layer, we need to add a bias to avoid collision with other
@@ -67,20 +69,153 @@ impl<T: Number> Dense<T> {
         self.matrix.nrows_2d()
     }
 
-    pub fn op(&self, input: &Tensor<T>) -> Tensor<T> {
-        if input.get_shape().len() != 1 {
-            let flat_input = input.flatten();
-            let matvec = self.matrix.matvec(&flat_input);
-            matvec.add(&self.bias)
-        } else {
-            self.matrix.matvec(input).add(&self.bias)
-        }
-    }
-
     pub fn pad_next_power_of_two(self) -> Self {
         let matrix = self.matrix.pad_next_power_of_two();
         let bias = self.bias.pad_1d(matrix.nrows_2d());
         Self { matrix, bias }
+    }
+}
+
+impl<N: Number> OpInfo for Dense<N> {
+    fn input_shapes(&self) -> Vec<Vec<usize>> {
+        vec![vec![self.ncols()]]
+    }
+    
+    fn output_shapes(&self) -> Vec<Vec<usize>> {
+        vec![self.bias.get_shape()]
+    }
+
+    fn num_outputs(&self, num_inputs: usize) -> usize {
+        num_inputs
+    }
+    
+    fn describe(&self) -> String {
+        format!(
+            "Dense: ({},{})",
+            self.matrix.nrows_2d(),
+            self.matrix.ncols_2d(),
+        )
+    }
+}
+
+impl<N: Number, E: ExtensionField> Op<N, E> for Dense<N> {
+    fn evaluate(&self, inputs: &[&Tensor<N>]) -> Result<LayerOut<N, E>, ProvableOpError> {
+        if inputs.len() != 1 {
+            return Err(ProvableOpError::ParameterError(
+                "Dense layer expects one input".to_string(),
+            ));
+        }
+        let input = inputs[0];
+        Ok(LayerOut::from_vec(vec![
+            if input.get_shape().len() != 1 {
+                let flat_input = input.flatten();
+                let matvec = self.matrix.matvec(&flat_input);
+                matvec.add(&self.bias)
+            } else {
+                self.matrix.matvec(input).add(&self.bias)
+            }
+        ]))
+    }
+}
+
+impl<E> ProveInfo<E> for Dense<Element> 
+where 
+    E: ExtensionField,
+    E::BaseField: Serialize + DeserializeOwned,
+    E: Serialize + DeserializeOwned,
+{
+    fn step_info(
+        &self,
+        id: PolyID,
+        mut aux: ContextAux,
+    ) -> (LayerCtx<E>, ContextAux) {
+        // construct dimension of the polynomial given to the sumcheck
+        let ncols = self.matrix.ncols_2d();
+        aux.last_output_shape = vec![vec![self.matrix.nrows_2d()]];
+        // each poly is only two polynomial right now: matrix and vector
+        // for matrix, each time we fix the variables related to rows so we are only left
+        // with the variables related to columns
+        let matrix_num_vars = ncols.ilog2() as usize;
+        let vector_num_vars = matrix_num_vars;
+        // there is only one product (i.e. quadratic sumcheck)
+        let dense_info = LayerCtx::Dense(DenseCtx {
+            matrix_poly_id: id,
+            matrix_poly_aux: VPAuxInfo::<E>::from_mle_list_dimensions(&vec![vec![
+                matrix_num_vars,
+                vector_num_vars,
+            ]]),
+            bias_poly_id: BIAS_POLY_ID + id,
+        });
+        (dense_info, aux)
+    }
+
+    fn commit_info(&self, id: NodeId) -> Vec<Option<(PolyID, Vec<E>)>> {
+        let evals = self.matrix.evals_2d();
+        let bias_evals = self.bias.evals_flat();
+        let id = id as PolyID;
+        debug!(
+            "Commitment : dense layer ID {}: size {}",
+            id,
+            evals.len().ilog2()
+        );
+        debug!(
+            "Commitment : dense layer bias ID {}: size {}",
+            BIAS_POLY_ID + id,
+            bias_evals.len().ilog2()
+        );
+        vec![
+            Some((id, evals)),
+            Some((BIAS_POLY_ID + id, bias_evals)),
+        ]
+    }
+}
+
+impl<E, T> ProvableOp<E, T, Element> for Dense<Element> 
+where 
+    E: ExtensionField,
+    E::BaseField: Serialize + DeserializeOwned,
+    E: Serialize + DeserializeOwned,
+    T: Transcript<E>,
+{
+    fn is_provable(&self) -> bool {
+        true
+    }
+
+    fn prove(
+        &self, 
+        ctx: &LayerCtx<E>, 
+        last_claims: Vec<Claim<E>>,
+        step_data: &super::provable::InferenceStep<E, E>, 
+        prover: &mut Prover<E, T>
+    ) -> Result<Vec<Claim<E>>, ProvableOpError> {
+        if let LayerCtx::Dense(dense_info) = ctx {
+            Ok(vec![self.prove_step(
+                prover,
+                last_claims[0].clone(), //ToDo: remove clone
+                &step_data.inputs[0],
+                &step_data.outputs.outputs()[0],
+                dense_info,
+            )?])
+        } else {
+            return Err(ProvableOpError::TypeError(
+                "Expected dense layer context".to_string()
+            ))
+        }
+    }
+    
+    fn verify(&self, proof: &LayerProof<E>, ctx: LayerCtx<E>, last_claims: Vec<Claim<E>>, verifier: &mut Verifier<E, T>) -> Result<Vec<Claim<E>>, ProvableOpError> {
+        match (proof, ctx) {
+            (LayerProof::Dense(dense_proof), LayerCtx::Dense(dense_info)) => {
+                Ok(vec![dense_info.verify_dense(
+                    verifier, 
+                    last_claims[0].clone(), 
+                    dense_proof
+                )?])
+            }
+            _ => Err(ProvableOpError::TypeError(
+                "Expected dense layer proof and context".to_string()
+            )),
+        }
     }
 }
 
@@ -257,35 +392,6 @@ impl Dense<Element> {
         }));
         Ok(claim)
     }
-
-    pub(crate) fn step_info<E: ExtensionField>(
-        &self,
-        id: PolyID,
-        mut ctx_aux: ContextAux,
-    ) -> (LayerCtx<E>, ContextAux)
-    where
-        E: ExtensionField + DeserializeOwned,
-        E::BaseField: Serialize + DeserializeOwned,
-    {
-        // construct dimension of the polynomial given to the sumcheck
-        let ncols = self.matrix.ncols_2d();
-        ctx_aux.last_output_shape = vec![self.matrix.nrows_2d()];
-        // each poly is only two polynomial right now: matrix and vector
-        // for matrix, each time we fix the variables related to rows so we are only left
-        // with the variables related to columns
-        let matrix_num_vars = ncols.ilog2() as usize;
-        let vector_num_vars = matrix_num_vars;
-        // there is only one product (i.e. quadratic sumcheck)
-        let dense_info = LayerCtx::Dense(DenseCtx {
-            matrix_poly_id: id,
-            matrix_poly_aux: VPAuxInfo::<E>::from_mle_list_dimensions(&vec![vec![
-                matrix_num_vars,
-                vector_num_vars,
-            ]]),
-            bias_poly_id: BIAS_POLY_ID + id,
-        });
-        (dense_info, ctx_aux)
-    }
 }
 
 impl<E: ExtensionField> DenseCtx<E>
@@ -369,6 +475,10 @@ impl<E: ExtensionField> DenseProof<E> {
 
 #[cfg(test)]
 mod test {
+    use goldilocks::GoldilocksExt2;
+
+    use crate::layers::provable::evaluate_layer;
+
     use super::*;
 
     impl<T: Number> Dense<T> {
@@ -525,8 +635,8 @@ mod test {
         let input_tensor = Tensor::<Element>::new(vec![3], quantized_input);
 
         // Apply the dense operation on both original and padded
-        let output = dense.op(&input_tensor);
-        let padded_output = padded.op(&input_tensor.pad_1d(4));
+        let output = evaluate_layer::<GoldilocksExt2, _, _>(&dense, &vec![&input_tensor]).unwrap().outputs()[0].clone();
+        let padded_output = evaluate_layer::<GoldilocksExt2, _, _>(&padded, &vec![&input_tensor.pad_1d(4)]).unwrap().outputs()[0].clone();
 
         // Check that the result is correct (for the non-padded parts)
         for i in 0..2 {
