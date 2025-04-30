@@ -347,26 +347,6 @@ impl Tensor<Element> {
     /// It is okay to assume the inputs to the prover is already the FFT version and the prover can commit to the FFT values.
     /// This function computes iFFT of the weights so that we can compute the scaling factors used.
     pub fn get_real_weights<F: ExtensionField>(&self) -> Vec<Vec<Vec<Element>>> {
-        // let mut w_fft =
-        // vec![
-        // vec![vec![F::ZERO; 2 * self.nw() * self.nw()]; self.kx().next_power_of_two()];
-        // self.kw().next_power_of_two()
-        // ];
-        // TODO: use par_iter
-        // let mut ctr = 0;
-        // for i in 0..w_fft.len() {
-        // for j in 0..w_fft[i].len() {
-        // for k in 0..w_fft[i][j].len() {
-        // w_fft[i][j][k] = self.data[ctr].to_field();
-        // ctr += 1;
-        // }
-        // }
-        // }
-        // for i in 0..w_fft.len() {
-        // for j in 0..w_fft[i].len() {
-        // fft(&mut w_fft[i][j], true);
-        // }
-        // }
         let mut real_weights =
             vec![vec![vec![0 as Element; self.nw() * self.nw()]; self.kx()]; self.kw()];
 
@@ -392,12 +372,6 @@ impl Tensor<Element> {
         // input to field elements
         let n_x = x.shape[1].next_power_of_two();
         let real_input = x.data.par_iter().map(|e| e.to_field()).collect::<Vec<_>>();
-        // let w: Vec<F> = self
-        // .data
-        // .par_iter()
-        // .map(|e| e.to_field())
-        // .collect::<Vec<_>>();
-
         let new_n = 2 * n_x * n_x;
 
         let (x_vec, input): (Vec<Vec<F>>, Vec<Vec<F>>) = real_input
