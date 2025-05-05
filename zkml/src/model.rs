@@ -398,13 +398,16 @@ impl Model<f32> {
 #[cfg(test)]
 pub(crate) mod test {
     use crate::{
+        ScalingFactor,
         layers::{
             Layer,
             activation::{Activation, Relu},
             convolution::Convolution,
             dense::Dense,
             pooling::{MAXPOOL2D_KERNEL_SIZE, Maxpool2D, Pooling},
+            requant::Requant,
         },
+        quantization,
         testing::{random_bool_vector, random_vector},
     };
     use ark_std::rand::{Rng, RngCore, thread_rng};
@@ -416,6 +419,7 @@ pub(crate) mod test {
         virtual_poly::VirtualPolynomial,
     };
     use sumcheck::structs::{IOPProverState, IOPVerifierState};
+    use tract_onnx::tract_core::ops::matmul::quant;
 
     use crate::{Element, default_transcript, quantization::TensorFielder, tensor::Tensor};
 
@@ -446,10 +450,25 @@ pub(crate) mod test {
                     // last row becomes new column
                     let (nrows, ncols): (usize, usize) = (rng.gen_range(3..15), last_row);
                     last_row = nrows;
-                    model.add_layer(Layer::Dense(Dense::random(vec![
-                        nrows.next_power_of_two(),
-                        ncols.next_power_of_two(),
-                    ])));
+                    let dense =
+                        Dense::random(vec![nrows.next_power_of_two(), ncols.next_power_of_two()]);
+                    // Figure out the requant information such that output is still within range
+                    let (min_output_range, max_output_range) =
+                        dense.output_range(*quantization::MIN, *quantization::MAX);
+                    let output_scaling_factor = ScalingFactor::from_scale(
+                        ((max_output_range - min_output_range) as f64
+                            / (*quantization::MAX - *quantization::MIN) as f64)
+                            as f32,
+                        None,
+                    );
+                    let input_scaling_factor = ScalingFactor::from_scale(1.0, None);
+                    let max_model = dense.matrix.max_value().max(dense.bias.max_value()) as f32;
+                    let model_scaling_factor = ScalingFactor::from_absolute_max(max_model, None);
+                    let shift =
+                        input_scaling_factor.shift(&model_scaling_factor, &output_scaling_factor);
+                    let requant = Requant::new(min_output_range as usize, shift);
+                    model.add_layer(Layer::Dense(dense));
+                    model.add_layer(Layer::Requant(requant));
                 } else if selector % MOD_SELECTOR == SELECTOR_RELU {
                     model.add_layer(Layer::Activation(Activation::Relu(Relu::new())));
                     // no need to change the `last_row` since RELU layer keeps the same shape
@@ -761,7 +780,9 @@ pub(crate) mod test {
     use ff::Field;
     #[test]
     fn test_model_sequential() {
-        let (model, input) = Model::random(1);
+        let (mut model, input) = Model::random(1);
+        // remove the requant layer just for this specific test we dont need it.
+        model.layers.remove(model.layers.len() - 1);
         model.describe();
         let bb = model.clone();
         let trace = bb.run::<F>(input.clone()).unwrap().to_field();
