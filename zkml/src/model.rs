@@ -462,11 +462,8 @@ pub(crate) mod test {
                         None,
                     );
                     let input_scaling_factor = ScalingFactor::from_scale(1.0, None);
-                    let max_model = dense.matrix.max_value().max(dense.bias.max_value()) as f64;
-                    let model_scaling_factor =
-                        (2.0 * max_model) / (*quantization::MAX - *quantization::MIN) as f64;
-                    let model_scaling_factor =
-                        ScalingFactor::from_scale(model_scaling_factor as f32, None);
+                    let max_model = dense.matrix.max_value().max(dense.bias.max_value()) as f32;
+                    let model_scaling_factor = ScalingFactor::from_absolute_max(max_model, None);
                     let shift =
                         input_scaling_factor.shift(&model_scaling_factor, &output_scaling_factor);
                     let requant = Requant::new(min_output_range as usize, shift);
