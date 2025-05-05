@@ -104,21 +104,20 @@ impl Requant {
         // Debug information to uncomment when debugging scaling factor. Sometimes the right shift is too high
         // and we can observe values being null'd, e.g. set to 0 very quickly. Which messes up the distribution and
         // thus the inference.
-        let stats = (d.mean().unwrap(), d.variance().unwrap());
-        debug!(
-            "AFTER REQUANT: shift {} : {:.2} % OUT OF RANGE (over total {})-> stats mean {:?} var {:?} \n\t->{:?}\n\t->{:?}",
-            self.right_shift,
-            not_ok_count as f32 / res.len() as f32 * 100.0,
-            res.len(),
-            stats.0,
-            stats.1,
-            &input.get_data()[..10.min(input.get_data().len())],
-            &res[..10.min(res.len())],
-        );
-        // ensure!(
-        //    not_ok_count == 0,
-        //    "Requantization led to out of range values"
-        //);
+        #[cfg(test)]
+        {
+            let stats = (d.mean().unwrap(), d.variance().unwrap());
+            debug!(
+                "AFTER REQUANT: shift {} : {:.2} % OUT OF RANGE (over total {})-> stats mean {:?} var {:?} \n\t->{:?}\n\t->{:?}",
+                self.right_shift,
+                not_ok_count as f32 / res.len() as f32 * 100.0,
+                res.len(),
+                stats.0,
+                stats.1,
+                &input.get_data()[..10.min(input.get_data().len())],
+                &res[..10.min(res.len())],
+            );
+        }
         Ok(crate::tensor::Tensor::<Element>::new(
             input.get_shape(),
             res,
@@ -364,6 +363,7 @@ impl Requant {
             );
         tmp_eval - E::from(max_bit as u64)
     }
+    #[timed::timed_instrument(name = "Prover::prove_requant")]
     pub(crate) fn prove_step<E: ExtensionField, T: Transcript<E>>(
         &self,
         prover: &mut Prover<E, T>,

@@ -5,6 +5,7 @@ use std::{
     path::Path,
     time,
 };
+use timed_core::Output;
 use zkml::{
     model::Model,
     quantization::{AbsoluteMax, InferenceObserver, ModelMetadata, ScalingStrategy},
@@ -71,6 +72,7 @@ pub fn main() -> anyhow::Result<()> {
         .finish();
 
     tracing::subscriber::set_global_default(subscriber).expect("Failed to set global subscriber");
+    timed_core::set_output(Output::CSV("deepprove.csv".to_string()));
     let args = Args::parse();
     run(args).context("error running bench:")?;
 
@@ -224,6 +226,7 @@ fn run_float_model(raw_inputs: &InputJSON, model: &Model<f32>) -> f32 {
 fn run(args: Args) -> anyhow::Result<()> {
     info!("[+] Reading raw input/output from {}", args.io);
     let run_inputs = InputJSON::from(&args.io, args.num_samples).context("loading input:")?;
+    info!("[+] Found {} IO samples", run_inputs.input_data.len());
     let calibration_inputs = run_inputs.filter(args.calibration_indices.as_ref());
     let run_inputs = run_inputs.filter(args.run_indices.as_ref());
     let strategy = quantization_strategy_from(&args, &calibration_inputs);

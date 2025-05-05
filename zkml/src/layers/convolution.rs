@@ -431,9 +431,7 @@ impl Convolution<Element> {
     // Prove convolution of a CNN network. This is a convolution between in a 3D matrix X of dimension k_x * n_x * n_x
     // and a 4D filter matrix W of dimension k_w * k_x * n_w * n_w. The output is a 3D matrix Y of dimension k_w * n_x * n_x
     // We want to batch prove the following: Y[i] = iFFT(sum_{j \in [n_x]}(FFT(X[j]) o FFT(W[i][j])).
-    #[instrument(name = "Prover::prove_convolution_step", skip_all, level = "debug")]
-    #[timed::timed_instrument(level = "debug")]
-
+    #[timed::timed_instrument(name = "Prover::prove_convolution_step")]
     pub fn prove_convolution_step<E: ExtensionField, T: Transcript<E>>(
         &self,
         prover: &mut Prover<E, T>,

@@ -121,8 +121,11 @@ fn pad_dense(mut d: Dense<Element>, si: &mut ShapeInfo) -> Result<Dense<Element>
             );
         }
     }
-    let ncols = new_cols.next_power_of_two();
-    let nrows = d.matrix.nrows_2d().next_power_of_two();
+    // The reason to pad to a minimum of 4 is that any subsequent activation function will
+    // be needing at least input shape of total size 4 due to usage of lookups.
+    // current logup gkr implementation requires at least 2 variables for poly.
+    let ncols = pad_minimum(new_cols);
+    let nrows = pad_minimum(d.matrix.nrows_2d());
 
     if let Some(ref previous_shape) = si.ignore_garbage_pad.as_ref() {
         let previous_input_shape_og = previous_shape.0.clone();
@@ -139,4 +142,13 @@ fn pad_dense(mut d: Dense<Element>, si: &mut ShapeInfo) -> Result<Dense<Element>
     d.bias = d.bias.pad_1d(nrows);
     si.input_shape_padded = vec![nrows];
     Ok(d)
+}
+
+fn pad_minimum(dim: usize) -> usize {
+    let r = dim.next_power_of_two();
+    if r < 4 {
+        4
+    } else {
+        r
+    }
 }

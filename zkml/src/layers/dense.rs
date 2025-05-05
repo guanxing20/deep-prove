@@ -17,6 +17,7 @@ use multilinear_extensions::{
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sumcheck::structs::{IOPProof, IOPProverState, IOPVerifierState};
+use timed::timed_instrument;
 use tracing::{trace, warn};
 use transcript::Transcript;
 
@@ -170,6 +171,7 @@ impl Dense<Element> {
         let max = 2u64.pow(power as u32) as Element;
         return (min, max);
     }
+    #[timed::timed_instrument(name = "Prover::prove_dense")]
     pub fn prove_step<'b, E, T>(
         &self,
         prover: &mut Prover<E, T>,
