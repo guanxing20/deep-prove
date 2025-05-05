@@ -1241,7 +1241,12 @@ pub fn padded_conv2d_shape(input_shape: &[usize], filter_shape: &[usize]) -> Vec
 #[cfg(test)]
 mod test {
     use crate::{
-        layers::{activation::{Activation, Relu}, dense::{self, Dense}, pooling::{maxpool2d_shape, Maxpool2D, Pooling}}, NextPowerOfTwo
+        NextPowerOfTwo,
+        layers::{
+            activation::{Activation, Relu},
+            dense::{self, Dense},
+            pooling::{Maxpool2D, Pooling, maxpool2d_shape},
+        },
     };
 
     use super::*;
@@ -1467,10 +1472,12 @@ mod test {
 
         let output = input.conv2d(&filter, &bias, 1);
         let dims = filter.get_shape();
-        let fft_conv = Convolution::new(filter.clone(), bias).into_padded_and_ffted(&input_shape_padded);
+        let fft_conv =
+            Convolution::new(filter.clone(), bias).into_padded_and_ffted(&input_shape_padded);
         let mut fft_input = input.clone();
         fft_input.pad_to_shape(input_shape_padded.clone());
-        let (fft_output, _proving_data) = fft_conv.op::<GoldilocksExt2>(&fft_input,&input_shape_og);
+        let (fft_output, _proving_data) =
+            fft_conv.op::<GoldilocksExt2>(&fft_input, &input_shape_og);
 
         input_shape_og = conv2d_shape(&input_shape_og, &filter.get_shape());
         input_shape_padded = conv2d_shape(&input_shape_padded, &dims).next_power_of_two();
@@ -1495,10 +1502,12 @@ mod test {
         println!("2ND CONV: input.get_shape() : {:?}", output.get_shape());
         let output = output.conv2d(&filter, &bias, 1);
         let dims = filter.get_shape();
-        let fft_conv = Convolution::new(filter.clone(),bias).into_padded_and_ffted(&input_shape_padded);
+        let fft_conv =
+            Convolution::new(filter.clone(), bias).into_padded_and_ffted(&input_shape_padded);
         let mut fft_input = fft_output;
         fft_input.pad_to_shape(input_shape_padded.clone());
-        let (fft_output, _proving_data) = fft_conv.op::<GoldilocksExt2>(&fft_input,&input_shape_og);
+        let (fft_output, _proving_data) =
+            fft_conv.op::<GoldilocksExt2>(&fft_input, &input_shape_og);
 
         input_shape_og = conv2d_shape(&input_shape_og, &filter.get_shape());
         input_shape_padded = conv2d_shape(&input_shape_padded, &dims).next_power_of_two();

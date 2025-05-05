@@ -146,9 +146,5 @@ fn pad_dense(mut d: Dense<Element>, si: &mut ShapeInfo) -> Result<Dense<Element>
 
 fn pad_minimum(dim: usize) -> usize {
     let r = dim.next_power_of_two();
-    if r < 4 {
-        4
-    } else {
-        r
-    }
+    if r < 4 { 4 } else { r }
 }
