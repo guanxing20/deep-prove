@@ -25,7 +25,7 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use sumcheck::structs::IOPProverState;
 
-use super::{provable::{InferenceStep, LayerOut, NodeId, Op, OpInfo, ProvableOp, ProvableOpError, ProveInfo}, LayerCtx};
+use super::{provable::{StepData, LayerOut, NodeId, Op, OpInfo, ProvableOp, ProvableOpError, ProveInfo, VerifiableCtx}, LayerCtx};
 
 pub const MAXPOOL2D_KERNEL_SIZE: usize = 2;
 
@@ -149,7 +149,7 @@ where
         true
     }
     
-    fn prove(&self, ctx: &LayerCtx<E>, last_claims: Vec<Claim<E>>, step_data: &super::provable::InferenceStep<E, E>, prover: &mut Prover<E, T>) -> Result<Vec<Claim<E>>, super::provable::ProvableOpError> {
+    fn prove(&self, id: NodeId, ctx: &LayerCtx<E>, last_claims: Vec<Claim<E>>, step_data: &super::provable::StepData<E, E>, prover: &mut Prover<E, T>) -> Result<Vec<Claim<E>>, super::provable::ProvableOpError> {
         if let LayerCtx::Pooling(info) = ctx {
             Ok(vec![self.prove_pooling(
                 prover,
@@ -157,6 +157,7 @@ where
                 &step_data.inputs[0],
                 &step_data.outputs.outputs()[0],
                 info,
+                id,
             )?])
         } else {
             Err(ProvableOpError::ParameterError(
@@ -165,30 +166,7 @@ where
         }
     }
 
-    fn verify(&self, proof: &LayerProof<E>, ctx: LayerCtx<E>, last_claims: Vec<Claim<E>>, verifier: &mut Verifier<E, T>) -> Result<Vec<Claim<E>>, super::provable::ProvableOpError> {
-        match (proof, ctx) {
-            (LayerProof::Pooling(proof), LayerCtx::Pooling(info)) => {
-                let (constant_challenge, column_separation_challenge) = verifier.challenge_storage.as_ref().unwrap()
-                    .get_challenges_by_name(&TableType::Range.name())
-                    .ok_or(anyhow!(
-                        "Couldn't get challenges for LookupType: {}",
-                        TableType::Range.name()
-                ))?;
-                Ok(vec![info.verify_pooling(
-                    verifier, 
-                    last_claims[0].clone(), 
-                    proof, 
-                    constant_challenge, 
-                    column_separation_challenge
-                )?])
-            }
-            _ => Err(ProvableOpError::TypeError(
-                "Expected pooling layer proof and context".to_string()
-            )),
-        }
-    }
-
-    fn gen_lookup_witness(&self, id: NodeId, gen: &mut LookupWitnessGen<E>, step_data: &InferenceStep<Element, E>) -> Result<(), ProvableOpError> {
+    fn gen_lookup_witness(&self, id: NodeId, gen: &mut LookupWitnessGen<E>, step_data: &StepData<Element, E>) -> Result<(), ProvableOpError> {
         if step_data.inputs.len() != 1 { 
             return Err(ProvableOpError::ParameterError(
                 "Requant layer expects exactly one input tensor".to_string(),
@@ -223,6 +201,36 @@ where
         gen.lookups_no_challenges.push((column_evals, 1, TableType::Range));
         
         Ok(())
+    }
+}
+
+impl<E, T> VerifiableCtx<E, T> for PoolingCtx 
+where 
+    E: ExtensionField,
+    E::BaseField: Serialize + DeserializeOwned,
+    E: Serialize + DeserializeOwned,
+    T: Transcript<E>,
+{
+    fn verify(&self, proof: &LayerProof<E>, last_claims: &[Claim<E>], verifier: &mut Verifier<E, T>) -> Result<Vec<Claim<E>>, ProvableOpError> {
+        if let LayerProof::Pooling(proof) = proof {
+            let (constant_challenge, column_separation_challenge) = verifier.challenge_storage.as_ref().unwrap()
+                .get_challenges_by_name(&TableType::Range.name())
+                .ok_or(anyhow!(
+                    "Couldn't get challenges for LookupType: {}",
+                    TableType::Range.name()
+            ))?;
+            Ok(vec![self.verify_pooling(
+                verifier, 
+                last_claims[0].clone(), 
+                proof, 
+                constant_challenge, 
+                column_separation_challenge
+            )?])
+        } else {
+            Err(ProvableOpError::TypeError(
+                "Expected pooling layer proof and context".to_string()
+            ))
+        }
     }
 }
 
@@ -267,6 +275,7 @@ impl Pooling {
         // output of dense layer evaluation
         output: &Tensor<E>,
         info: &PoolingCtx,
+        id: NodeId,
     ) -> anyhow::Result<Claim<E>>
     where
         E::BaseField: Serialize + DeserializeOwned,
@@ -399,7 +408,7 @@ impl Pooling {
 
         let zerocheck_evals = sumcheck_state.get_mle_final_evaluations()[..4].to_vec();
         // Push the step proof to the list
-        prover.push_proof(LayerProof::Pooling(PoolingProof {
+        prover.push_proof(id, LayerProof::Pooling(PoolingProof {
             sumcheck: proof,
             lookup: logup_proof,
             io_accumulation: claim_acc_proof,

@@ -20,7 +20,7 @@ use transcript::Transcript;
 
 use crate::{Element, tensor::Tensor};
 
-use super::provable::{LayerOut, NodeId, Op, OpInfo, ProvableOp, ProvableOpError, ProveInfo};
+use super::provable::{LayerOut, NodeId, Op, OpInfo, ProvableOp, ProvableOpError, ProveInfo, VerifiableCtx};
 
 /// Bias to compute the bias ID polynomials. Since originally we take the index of each
 /// layer to be the index of the layer, we need to add a bias to avoid collision with other
@@ -182,10 +182,11 @@ where
     }
 
     fn prove(
-        &self, 
+        &self,
+        id: NodeId,
         ctx: &LayerCtx<E>, 
         last_claims: Vec<Claim<E>>,
-        step_data: &super::provable::InferenceStep<E, E>, 
+        step_data: &super::provable::StepData<E, E>, 
         prover: &mut Prover<E, T>
     ) -> Result<Vec<Claim<E>>, ProvableOpError> {
         if let LayerCtx::Dense(dense_info) = ctx {
@@ -195,6 +196,7 @@ where
                 &step_data.inputs[0],
                 &step_data.outputs.outputs()[0],
                 dense_info,
+                id,
             )?])
         } else {
             return Err(ProvableOpError::TypeError(
@@ -202,19 +204,26 @@ where
             ))
         }
     }
-    
-    fn verify(&self, proof: &LayerProof<E>, ctx: LayerCtx<E>, last_claims: Vec<Claim<E>>, verifier: &mut Verifier<E, T>) -> Result<Vec<Claim<E>>, ProvableOpError> {
-        match (proof, ctx) {
-            (LayerProof::Dense(dense_proof), LayerCtx::Dense(dense_info)) => {
-                Ok(vec![dense_info.verify_dense(
-                    verifier, 
-                    last_claims[0].clone(), 
-                    dense_proof
-                )?])
-            }
-            _ => Err(ProvableOpError::TypeError(
-                "Expected dense layer proof and context".to_string()
-            )),
+}
+
+impl<E, T> VerifiableCtx<E, T> for DenseCtx<E> 
+where 
+    E: ExtensionField,
+    E::BaseField: Serialize + DeserializeOwned,
+    E: Serialize + DeserializeOwned,
+    T: Transcript<E>,
+{
+    fn verify(&self, proof: &LayerProof<E>, last_claims: &[Claim<E>], verifier: &mut Verifier<E, T>) -> Result<Vec<Claim<E>>, ProvableOpError> {
+        if let LayerProof::Dense(dense_proof) = proof {
+            Ok(vec![self.verify_dense(
+                verifier, 
+                last_claims[0].clone(), 
+                dense_proof
+            )?])
+        } else {
+            Err(ProvableOpError::TypeError(
+            "Expected dense layer proof and context".to_string()
+            ))
         }
     }
 }
@@ -268,6 +277,7 @@ impl Dense<Element> {
         input: &Tensor<E>,
         output: &Tensor<E>,
         info: &DenseCtx<E>,
+        id: NodeId,
     ) -> anyhow::Result<Claim<E>>
     where
         E: ExtensionField + Serialize + DeserializeOwned,
@@ -385,7 +395,7 @@ impl Dense<Element> {
             point: proof.point.clone(),
             eval: state.get_mle_final_evaluations()[1],
         };
-        prover.push_proof(LayerProof::Dense(DenseProof {
+        prover.push_proof(id, LayerProof::Dense(DenseProof {
             sumcheck: proof,
             bias_eval,
             individual_claims: state.get_mle_final_evaluations(),

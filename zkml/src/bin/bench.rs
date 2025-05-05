@@ -65,6 +65,7 @@ fn parse_usize(s: &str) -> Result<usize, String> {
         .map_err(|e| format!("Invalid index: {}", e))
 }
 
+
 pub fn main() -> anyhow::Result<()> {
     let subscriber = fmt::Subscriber::builder()
         .with_env_filter(EnvFilter::from_default_env())
@@ -72,7 +73,7 @@ pub fn main() -> anyhow::Result<()> {
 
     tracing::subscriber::set_global_default(subscriber).expect("Failed to set global subscriber");
     let args = Args::parse();
-    run(args).context("error running bench:")?;
+    //run(args).context("error running bench:")?;
 
     Ok(())
 }
@@ -220,7 +221,7 @@ fn run_float_model(raw_inputs: &InputJSON, model: &Model<f32>) -> f32 {
 
     calculate_average_accuracy(&accuracies)
 }
-
+#[cfg(not(test))]
 fn run(args: Args) -> anyhow::Result<()> {
     info!("[+] Reading raw input/output from {}", args.io);
     let run_inputs = InputJSON::from(&args.io, args.num_samples).context("loading input:")?;

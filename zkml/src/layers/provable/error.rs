@@ -14,6 +14,7 @@ pub enum ProvableOpError {
     /// Error variant returned when there is a problem with type conversion
     ConversionError(String),
     GenericError(anyhow::Error),
+    NotProvableLayer(String),
 }
 
 impl Display for ProvableOpError {
@@ -31,6 +32,9 @@ impl Display for ProvableOpError {
             ProvableOpError::GenericError(error) => {
                         write!(f, "ProvableOp generic error: {}", error.to_string())
             },
+            ProvableOpError::NotProvableLayer(s) => {
+                write!(f, "Trying to prove or verify a non provable layer: {s}")
+            }
         }
     }
 }

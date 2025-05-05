@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::{commit::precommit, layers::LayerProof, lookup::logup_gkr::structs::LogUpProof};
+use crate::{commit::precommit, layers::{provable::NodeId, LayerProof}, lookup::logup_gkr::structs::LogUpProof};
 use ff_ext::ExtensionField;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 pub mod context;
@@ -19,7 +19,7 @@ where
     E: Serialize + DeserializeOwned,
 {
     /// The successive sumchecks proofs. From output layer to input.
-    steps: Vec<LayerProof<E>>,
+    steps: HashMap<NodeId, LayerProof<E>>,
     /// The proofs for any lookup tables used
     table_proofs: Vec<TableProof<E>>,
     /// the commitment proofs related to the weights

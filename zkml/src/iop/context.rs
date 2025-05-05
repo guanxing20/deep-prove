@@ -1,9 +1,8 @@
 use crate::{
-    iop::precommit::{self, PolyID}, layers::{provable::{NodeId, ProvableModel}, LayerCtx}, lookup::context::{LookupContext, TableType}, model::Model, tensor::Number, Element
+    iop::precommit::{self, PolyID}, layers::{provable::{ModelCtx, NodeCtx, ProvableModel}, LayerCtx}, lookup::context::{LookupContext, TableType}, Element
 };
 use anyhow::{anyhow, ensure, Context as CC};
 use ff_ext::ExtensionField;
-use itertools::Itertools;
 use mpcs::BasefoldCommitment;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::collections::{BTreeSet, HashMap};
@@ -35,7 +34,7 @@ where
     /// Information about each steps of the model. That's the information that the verifier
     /// needs to know from the setup to avoid the prover being able to cheat.
     /// in REVERSED order already since proving goes from last layer to first layer.
-    pub steps_info: HashMap<NodeId, LayerCtx<E>>,
+    pub steps_info: ModelCtx<E>,
     /// Context related to the commitment and accumulation of claims related to the weights of model.
     /// This part contains the commitment of the weights.
     pub weights: precommit::Context<E>,
@@ -138,7 +137,11 @@ where
             }).collect::<anyhow::Result<Vec<_>>>()?;
             ctx_aux.last_output_shape = node_input_shapes;
             let (info, new_aux) = node.step_info(id as PolyID, ctx_aux);
-            step_infos.insert(id, info);
+            step_infos.insert(id, NodeCtx {
+                inputs: node.inputs.clone(),
+                outputs: node.outputs.clone(),
+                ctx: info,
+            });
             ctx_aux =  new_aux;
             shapes.insert(id, ctx_aux.last_output_shape.clone());
         }
@@ -149,7 +152,7 @@ where
         debug!("Context : lookup generation ...");
         let lookup_ctx = LookupContext::new(&ctx_aux.tables);
         Ok(Self {
-            steps_info: step_infos,
+            steps_info: ModelCtx { nodes: step_infos },
             weights: commit_ctx,
             lookup: lookup_ctx,
         })
@@ -157,8 +160,8 @@ where
     }
 
     pub fn write_to_transcript<T: Transcript<E>>(&self, t: &mut T) -> anyhow::Result<()> {
-        for steps in self.steps_info.values() {
-            match steps {
+        for (_ , step_ctx) in self.steps_info.to_backward_iterator() {
+            match &step_ctx.ctx {
                 LayerCtx::Dense(info) => {
                     t.append_field_element(&E::BaseField::from(info.matrix_poly_id as u64));
                     info.matrix_poly_aux.write_to_transcript(t);

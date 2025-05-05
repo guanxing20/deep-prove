@@ -22,7 +22,7 @@ use transcript::Transcript;
 
 use crate::{Element, tensor::Tensor};
 
-use super::{provable::{LayerOut, NodeId, Op, OpInfo, ProvableOp, ProvableOpError, ProveInfo}, LayerCtx};
+use super::{provable::{LayerOut, NodeId, Op, OpInfo, ProvableOp, ProvableOpError, ProveInfo, VerifiableCtx}, LayerCtx};
 
 pub(crate) const BIAS_POLY_ID: PolyID = 200_000;
 /// Convolution layer description (weights)
@@ -329,14 +329,15 @@ where
         true
     }
     
-    fn prove(&self, ctx: &LayerCtx<E>, last_claims: Vec<Claim<E>>, step_data: &super::provable::InferenceStep<E, E>, prover: &mut Prover<E, T>) -> Result<Vec<Claim<E>>, ProvableOpError> {
+    fn prove(&self, id: NodeId, ctx: &LayerCtx<E>, last_claims: Vec<Claim<E>>, step_data: &super::provable::StepData<E, E>, prover: &mut Prover<E, T>) -> Result<Vec<Claim<E>>, ProvableOpError> {
         if let LayerCtx::Convolution(info) = ctx {
             Ok(vec![self.prove_convolution_step(
                 prover, 
                 last_claims[0].clone(), 
                 &step_data.outputs.outputs()[0], 
                 &step_data.outputs.proving_data.as_ref().unwrap(), 
-                info
+                info,
+                id,
             )?])
         } else {
             return Err(ProvableOpError::TypeError(
@@ -344,19 +345,26 @@ where
             ))
         }
     }
+}
 
-    fn verify(&self, proof: &LayerProof<E>, ctx: LayerCtx<E>, last_claims: Vec<Claim<E>>, verifier: &mut Verifier<E, T>) -> Result<Vec<Claim<E>>, ProvableOpError> {
-        match (proof, ctx) {
-            (LayerProof::Convolution(proof), LayerCtx::Convolution(info)) => {
-                Ok(vec![info.verify_convolution(
+impl<E, T> VerifiableCtx<E, T> for ConvCtx<E> 
+where 
+    E: ExtensionField,
+    E::BaseField: Serialize + DeserializeOwned,
+    E: Serialize + DeserializeOwned,
+    T: Transcript<E>,
+{
+    fn verify(&self, proof: &LayerProof<E>, last_claims: &[Claim<E>], verifier: &mut Verifier<E, T>) -> Result<Vec<Claim<E>>, ProvableOpError> {
+        if let LayerProof::Convolution(proof) = proof {
+                Ok(vec![self.verify_convolution(
                     verifier, 
                     last_claims[0].clone(), 
                     proof
                 )?])
-            },
-            _ => Err(ProvableOpError::TypeError(
+            } else {
+            Err(ProvableOpError::TypeError(
                 "Expected convolution layer proof and context".to_string()
-            )),
+            ))
         }
     }
 }
@@ -428,6 +436,7 @@ impl Convolution<Element> {
         _output: &Tensor<E>,
         proving_data: &ConvData<E>,
         info: &ConvCtx<E>,
+        id: NodeId,
     ) -> anyhow::Result<Claim<E>>
     where
         E::BaseField: Serialize + DeserializeOwned,
@@ -595,7 +604,7 @@ impl Convolution<Element> {
             &mut proving_data.input.clone(),
         );
 
-        prover.push_proof(LayerProof::Convolution(ConvProof {
+        prover.push_proof(id, LayerProof::Convolution(ConvProof {
             fft_proof: fft_proof.clone(),
             fft_claims: fft_claim.clone(),
             ifft_proof,

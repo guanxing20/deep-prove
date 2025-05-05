@@ -2,12 +2,12 @@ use std::collections::HashMap;
 
 use super::{ChallengeStorage, Context, Proof, TableProof};
 use crate::{
-    commit::{compute_betas_eval, precommit}, layers::{provable::{InferenceTrace, NodeId, ProvableModel}, Layer, LayerCtx, LayerProof}, lookup::{
+    commit::{compute_betas_eval, precommit}, layers::{provable::{InferenceStep, InferenceTrace, NodeId}, LayerProof}, lookup::{
         context::{generate_lookup_witnesses, TABLE_POLY_ID_OFFSET},
         logup_gkr::{prover::batch_prove as logup_batch_prove, structs::LogUpInput},
-    }, tensor::{get_root_of_unity, Tensor}, Claim, Element, VectorTranscript
+    }, tensor::get_root_of_unity, Claim, Element, VectorTranscript
 };
-use anyhow::{anyhow, bail, ensure};
+use anyhow::{anyhow, ensure};
 use ff_ext::ExtensionField;
 
 use multilinear_extensions::{
@@ -29,7 +29,7 @@ where
 {
     ctx: &'a Context<E>,
     // proofs for each layer being filled
-    proofs: Vec<LayerProof<E>>,
+    proofs: HashMap<NodeId, LayerProof<E>>,
     table_proofs: Vec<TableProof<E>>,
     pub(crate) transcript: &'a mut T,
     pub(crate) commit_prover: precommit::CommitProver<E>,
@@ -76,8 +76,8 @@ where
             .pop()
             .ok_or(anyhow!("No more lookup witness!"))
     }
-    pub(crate) fn push_proof(&mut self, proof: LayerProof<E>) {
-        self.proofs.push(proof);
+    pub(crate) fn push_proof(&mut self, node_id: NodeId, proof: LayerProof<E>) {
+        self.proofs.insert(node_id, proof);
     }
     //#[instrument(name="prove step",skip_all,fields(step = step.layer.describe()),level = "debug")]
     /*fn prove_step<'b>(
@@ -407,16 +407,15 @@ where
         // return Proof;
     }
 
-    pub fn prove(
+    pub fn prove<'b>(
         mut self,
-        model: &ProvableModel<E, T, Element>,
-        full_trace: InferenceTrace<Element, E>,
+        full_trace: InferenceTrace<'b, E, T, Element>,
     ) -> anyhow::Result<Proof<E>> {
         // write commitments and polynomials info to transcript
         self.ctx.write_to_transcript(self.transcript)?;
         // then create the context for the witness polys -
         debug!("Prover : instantiate witness ctx...");
-        self.instantiate_witness_ctx(&full_trace, model)?;
+        self.instantiate_witness_ctx(&full_trace)?;
         debug!("Prover : instantiate witness ctx done...");
         let trace = full_trace.to_field();
         // this is the random set of variables to fix at each step derived as the output of
@@ -434,42 +433,28 @@ where
             .into_mle()
             .evaluate(&r_i);
 
-        let mut last_claim = Claim {
+        let last_claim = Claim {
             point: r_i,
             eval: y_i,
         };
 
         let mut claims_by_layer: HashMap<NodeId, Vec<Claim<E>>> = HashMap::new();
-        for (node_id, node) in model.to_backward_iterator() {
-            let claims = node.outputs.iter().map(|out| {
-                // For now, we support in proving only one edge per output wire,
-                // as if an output is used as input in different nodes, we need
-                // to batch claims about the same polynomial. ToDo: batch claims
-                assert_eq!(out.edges.len(), 1);
-                let edge = &out.edges[0];
-                Ok(if let Some(id) = &edge.node {
-                    let claims_for_node = claims_by_layer.get(id).ok_or(
-                        anyhow!("No claims found for layer {}", id)
-                    )?;
-                    ensure!(edge.index < claims_for_node.len(), 
-                        "Not enough claims found for node {}: required claim for input {}, but {} claims found",
-                        id,
-                        edge.index,
-                        claims_for_node.len()
-                    );
-                    claims_for_node[edge.index].clone() // ToDo: avoid clone
-                } else {
-                    // it's an output node, so we use directly the claim for the output
-                    last_claim.clone()
-                })
-            }).collect::<anyhow::Result<Vec<_>>>()?;
-            let step_data = trace.get_step(&node_id).ok_or(
+        for (node_id, ctx) in self.ctx.steps_info.to_backward_iterator() {
+            let InferenceStep {
+                op: node_operation,
+                step_data,
+            } = trace.get_step(&node_id).ok_or(
                 anyhow!("Step in trace not found for node {}", node_id)
             )?;
-            let ctx = self.ctx.steps_info.get(&node_id).ok_or(
-                anyhow!("Layer ctx not found for node {}", node_id)
-            )?;
-            let claims = node.operation.prove(ctx, claims, step_data, &mut self)?;
+            println!("Proving node with id {node_id}: {:?}", node_operation.describe());
+            let claims_for_prove = ctx.get_claims_for_node(&claims_by_layer, &last_claim)?;
+            let claims = if node_operation.is_provable() {
+                node_operation.prove( node_id, &ctx.ctx, claims_for_prove, step_data, &mut self)?
+            } else {
+                // we only propagate the claims, without changing them, as a non-provable layer
+                // shouldn't change the input values
+                claims_for_prove
+            };
             claims_by_layer.insert(node_id, claims);
         }
 
@@ -497,16 +482,15 @@ where
 
     /// Looks at all the individual polys to accumulate from the witnesses and create the context from that.
     #[timed_instrument(level = "debug")]
-    fn instantiate_witness_ctx(
+    fn instantiate_witness_ctx<'b>(
         &mut self,
-        trace: &InferenceTrace<Element, E>,
-        model: &ProvableModel<E, T, Element>,
+        trace: &InferenceTrace<'b, E, T, Element>,
     ) -> anyhow::Result<()> {
         let (witness_ctx, challenge_storage, lookup_witnesses, table_witnesses) =
-            generate_lookup_witnesses::<E, T>(trace, model, self.transcript)?;
+            generate_lookup_witnesses::<E, T>(trace, &self.ctx.steps_info, self.transcript)?;
         // let (lookup_witness, polys) =
         //     lookup::WitnessContext::<E>::initialise_witness_ctx(&self.ctx.lookup, trace)?;
-
+        
         self.witness_ctx = witness_ctx;
         self.challenge_storage = challenge_storage;
         self.lookup_witness = lookup_witnesses;

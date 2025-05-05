@@ -18,7 +18,7 @@ use transcript::Transcript;
 
 use crate::{quantization::BIT_LEN, tensor::Tensor};
 
-use super::provable::{InferenceStep, LayerOut, NodeId, Op, OpInfo, ProvableOp, ProvableOpError, ProveInfo};
+use super::provable::{StepData, LayerOut, NodeId, Op, OpInfo, ProvableOp, ProvableOpError, ProveInfo, VerifiableCtx};
 
 use anyhow::anyhow;
 
@@ -129,13 +129,14 @@ where
         true
     }
     
-    fn prove(&self, ctx: &LayerCtx<E>, last_claims: Vec<Claim<E>>, step_data: &super::provable::InferenceStep<E, E>, prover: &mut Prover<E, T>) -> Result<Vec<Claim<E>>, ProvableOpError> {
+    fn prove(&self, id: NodeId, ctx: &LayerCtx<E>, last_claims: Vec<Claim<E>>, step_data: &super::provable::StepData<E, E>, prover: &mut Prover<E, T>) -> Result<Vec<Claim<E>>, ProvableOpError> {
         if let LayerCtx::Activation(info) = ctx {
             Ok(vec![self.prove_step(
                 prover,
                 &last_claims[0],
                 step_data.outputs.outputs()[0].get_data(),
                 info,
+                id,
             )?])
         } else {
             return Err(ProvableOpError::TypeError(
@@ -143,31 +144,8 @@ where
             ))
         }
     }
-    
-    fn verify(&self, proof: &LayerProof<E>, ctx: LayerCtx<E>, last_claims: Vec<Claim<E>>, verifier: &mut Verifier<E, T>) -> Result<Vec<Claim<E>>, ProvableOpError> {
-        match (proof, ctx) {
-            (LayerProof::Activation(proof), LayerCtx::Activation(info)) => {
-                let (constant_challenge, column_separation_challenge) = verifier.challenge_storage.as_ref().unwrap()
-                    .get_challenges_by_name(&TableType::Relu.name())
-                    .ok_or(anyhow!(
-                        "Couldn't get challenges for LookupType: {}",
-                        TableType::Relu.name()
-                    ))?;
-                Ok(vec![info.verify_activation(
-                    verifier, 
-                    last_claims[0].clone(),
-                    proof, 
-                    constant_challenge, 
-                    column_separation_challenge
-                )?])
-            },
-            _ => Err(ProvableOpError::TypeError(
-                "Expected activation layer proof and context".to_string()
-            )),
-        }
-    }
 
-    fn gen_lookup_witness(&self, id: NodeId, gen: &mut LookupWitnessGen<E>, step_data: &InferenceStep<Element, E>) -> Result<(), ProvableOpError> {
+    fn gen_lookup_witness(&self, id: NodeId, gen: &mut LookupWitnessGen<E>, step_data: &StepData<Element, E>) -> Result<(), ProvableOpError> {
         gen.tables.insert(TableType::Relu);
 
         if step_data.inputs.len() != 1{
@@ -222,6 +200,36 @@ where
     }
 }
 
+impl<E, T> VerifiableCtx<E, T> for ActivationCtx 
+where 
+    E: ExtensionField,
+    E::BaseField: Serialize + DeserializeOwned,
+    E: Serialize + DeserializeOwned,
+    T: Transcript<E>,
+{
+    fn verify(&self, proof: &LayerProof<E>, last_claims: &[Claim<E>], verifier: &mut Verifier<E, T>) -> Result<Vec<Claim<E>>, ProvableOpError> {
+        if let LayerProof::Activation(proof) = proof {
+            let (constant_challenge, column_separation_challenge) = verifier.challenge_storage.as_ref().unwrap()
+            .get_challenges_by_name(&TableType::Relu.name())
+            .ok_or(anyhow!(
+                "Couldn't get challenges for LookupType: {}",
+                TableType::Relu.name()
+            ))?;
+        Ok(vec![self.verify_activation(
+            verifier, 
+            last_claims[0].clone(),
+            proof, 
+            constant_challenge, 
+            column_separation_challenge
+        )?])
+        } else {
+             Err(ProvableOpError::TypeError(
+                "Expected activation layer proof and context".to_string()
+            ))
+        }
+    }
+}
+
 impl Activation {
 
     pub(crate) fn prove_step<E: ExtensionField, T: Transcript<E>>(
@@ -230,6 +238,7 @@ impl Activation {
         last_claim: &Claim<E>,
         output: &[E],
         step: &ActivationCtx,
+        node_id: NodeId,
     ) -> anyhow::Result<Claim<E>>
     where
         E: ExtensionField + Serialize + DeserializeOwned,
@@ -256,7 +265,7 @@ impl Activation {
             .add_claim(step.poly_id, claim_acc_proof.extract_claim())?;
 
         // Add the proof in
-        prover.push_proof(LayerProof::Activation(ActivationProof {
+        prover.push_proof(node_id, LayerProof::Activation(ActivationProof {
             io_accumulation: claim_acc_proof,
             lookup: logup_proof,
         }));

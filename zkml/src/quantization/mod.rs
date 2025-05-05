@@ -180,7 +180,7 @@ pub trait TensorFielder<F> {
     fn to_fields(self) -> Tensor<F>;
 }
 
-impl<F: ExtensionField, T> TensorFielder<F> for Tensor<T>
+impl<F: ExtensionField, T> TensorFielder<F> for &Tensor<T>
 where
     T: Fieldizer<F>,
 {

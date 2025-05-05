@@ -70,7 +70,7 @@ impl Number for Element {
     const MIN: Element = Element::MIN;
     const MAX: Element = Element::MAX;
     fn random<R: Rng>(rng: &mut R) -> Self {
-        rng.gen_range(*quantization::MIN..=*quantization::MAX)
+        rng.gen_range(*quantization::MIN/4..=*quantization::MAX/4)
     }
     fn absolute_value(&self) -> Self {
         self.abs()

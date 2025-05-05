@@ -9,7 +9,7 @@ use tracing::{debug, warn};
 use transcript::Transcript;
 
 use crate::{
-    commit::precommit::Context, iop::ChallengeStorage, layers::{activation::Relu, provable::{InferenceTrace, ProvableModel}}, lookup::logup_gkr::structs::LogUpInput, quantization::{self, Fieldizer}, Element
+    commit::precommit::Context, iop::ChallengeStorage, layers::{activation::Relu, provable::{InferenceTrace, ModelCtx, ProvableModel}}, lookup::logup_gkr::structs::LogUpInput, quantization::{self, Fieldizer}, Element
 };
 
 use super::logup_gkr::error::LogUpError;
@@ -160,9 +160,9 @@ impl<E: ExtensionField> LookupWitnessGen<E> {
 
 pub(crate) const COLUMN_SEPARATOR: Element = 1i128 << 32;
 
-pub fn generate_lookup_witnesses<E: ExtensionField, T: Transcript<E>>(
-    trace: &InferenceTrace<Element, E>,
-    model: &ProvableModel<E, T, Element>,
+pub fn generate_lookup_witnesses<'a, E: ExtensionField, T: Transcript<E>>(
+    trace: &InferenceTrace<'a, E, T, Element>,
+    ctx: &ModelCtx<E>,
     transcript: &mut T,
 ) -> Result<
     (
@@ -180,11 +180,11 @@ where
     let mut witness_gen = LookupWitnessGen::<E>::new();
     
     debug!("Lookup witness generation: generating poly fields...");
-    for (node_id, node) in model.to_unstable_iterator() {
-        let step_data = trace.get_step(node_id).ok_or(
-            LogUpError::ParamterError(format!("Node with id {} not found in trace", node_id))
+    for (node_id, _) in ctx.to_forward_iterator() {
+        let step = trace.get_step(&node_id).ok_or(
+            LogUpError::ProvingError(format!("Node {node_id} not found in trace"))
         )?;
-        node.operation.gen_lookup_witness(*node_id, &mut witness_gen, step_data).map_err(|e|
+        step.op.gen_lookup_witness(node_id, &mut witness_gen, &step.step_data).map_err(|e|
             LogUpError::ParamterError(format!("Error generating lookup witness for node {} with error: {}", node_id, e.to_string()
             ))
         )?;   
