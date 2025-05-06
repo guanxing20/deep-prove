@@ -1,13 +1,13 @@
 use std::collections::HashMap;
 
 use crate::{
-    commit::same_poly, iop::{context::ContextAux, verifier::Verifier}, layers::{LayerCtx, LayerProof, PolyID}, lookup::{
+    commit::same_poly, iop::{context::{ContextAux, ShapeStep}, verifier::Verifier}, layers::{LayerCtx, LayerProof, PolyID}, lookup::{
         context::{LookupWitnessGen, TableType, COLUMN_SEPARATOR},
         logup_gkr::{
             prover::batch_prove as logup_batch_prove, structs::LogUpProof,
             verifier::verify_logup_proof,
         },
-    }, quantization::Fieldizer, tensor::Number, Claim, Element, Prover
+    }, padding::PaddingMode, quantization::Fieldizer, tensor::Number, Claim, Element, Prover
 };
 use ff_ext::ExtensionField;
 use gkr::util::ceil_log2;
@@ -48,13 +48,6 @@ where
 }
 
 impl OpInfo for Activation {
-    fn input_shapes(&self) -> Vec<Vec<usize>> {
-        vec![] // works with any input shape
-    }
-
-    fn output_shapes(&self) -> Vec<Vec<usize>> {
-        self.input_shapes() // preserve input shape
-    }
 
     fn num_outputs(&self, num_inputs: usize) -> usize {
         num_inputs
@@ -63,10 +56,14 @@ impl OpInfo for Activation {
     fn describe(&self) -> String {
         format!("RELU: {}", 1 << Relu::num_vars())
     }
+    
+    fn output_shapes(&self, input_shapes: &[Vec<usize>], _padding_mode: PaddingMode) -> Vec<Vec<usize>> {
+        input_shapes.to_vec() // same as input shapes
+    }
 }
 
 impl<N: Number, E: ExtensionField> Op<N, E> for Activation {
-    fn evaluate(&self, inputs: &[&Tensor<N>]) -> Result<LayerOut<N, E>, super::provable::ProvableOpError> {
+    fn evaluate(&self, inputs: &[&Tensor<N>], _unpadded_input_shapes: Vec<Vec<usize>>) -> Result<LayerOut<N, E>, super::provable::ProvableOpError> {
         if inputs.len() != 1 {
             return Err(ProvableOpError::ParameterError(
                 "Activation layer expects one input".to_string(),
@@ -117,14 +114,6 @@ where
             T: Transcript<E>,
             N: Number,
 {
-    fn padded_input_shapes(&self) -> Vec<Vec<usize>> {
-        vec![vec![Relu::poly_len()]] // input shape for provable layer
-    }
-
-    fn padded_output_shapes(&self) -> Vec<Vec<usize>> {
-        vec![vec![Relu::poly_len()]] // output shape for provable layer
-    }
-
     fn is_provable(&self) -> bool {
         true
     }
@@ -200,14 +189,13 @@ where
     }
 }
 
-impl<E, T> VerifiableCtx<E, T> for ActivationCtx 
+impl<E> VerifiableCtx<E> for ActivationCtx 
 where 
     E: ExtensionField,
     E::BaseField: Serialize + DeserializeOwned,
     E: Serialize + DeserializeOwned,
-    T: Transcript<E>,
 {
-    fn verify(&self, proof: &LayerProof<E>, last_claims: &[Claim<E>], verifier: &mut Verifier<E, T>) -> Result<Vec<Claim<E>>, ProvableOpError> {
+    fn verify<T: Transcript<E>>(&self, proof: &LayerProof<E>, last_claims: &[Claim<E>], verifier: &mut Verifier<E, T>, _shape_step: &ShapeStep) -> Result<Vec<Claim<E>>, ProvableOpError> {
         if let LayerProof::Activation(proof) = proof {
             let (constant_challenge, column_separation_challenge) = verifier.challenge_storage.as_ref().unwrap()
             .get_challenges_by_name(&TableType::Relu.name())
@@ -227,6 +215,10 @@ where
                 "Expected activation layer proof and context".to_string()
             ))
         }
+    }
+    
+    fn output_shapes(&self, input_shapes: &[Vec<usize>], _padding_mode: PaddingMode) -> Vec<Vec<usize>> {
+        input_shapes.to_vec()
     }
 }
 

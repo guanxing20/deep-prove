@@ -2,15 +2,14 @@ mod error;
 mod model;
 
 use ff_ext::ExtensionField;
-use itertools::Itertools;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use std::{collections::{BTreeMap, HashMap}, fmt::Debug};
+use std::{collections::{BTreeMap, HashMap}, fmt::{format, Debug}};
 use anyhow::{Result, ensure, anyhow};
 use transcript::Transcript;
 
-use crate::{commit::precommit::PolyID, iop::{context::ContextAux, verifier::Verifier}, lookup::context::LookupWitnessGen, tensor::{ConvData, Number}, Claim, Element, Prover, Tensor};
+use crate::{commit::precommit::PolyID, iop::{context::{ContextAux, ShapeStep}, verifier::Verifier}, lookup::context::LookupWitnessGen, padding::PaddingMode, tensor::{ConvData, Number}, Claim, Element, Prover, Tensor};
 
-use super::{LayerCtx, LayerProof};
+use super::{activation::ActivationCtx, reshape::Reshape, LayerCtx, LayerProof};
 
 pub(crate) type NodeId = u64;
 
@@ -183,11 +182,8 @@ where
 }
 
 pub trait OpInfo {
-    /// Returns the expected input shapes (in input order)
-    fn input_shapes(&self) -> Vec<Vec<usize>>;
-        
     /// Returns the shapes of the outputs (in the same order)
-    fn output_shapes(&self) -> Vec<Vec<usize>>;
+    fn output_shapes(&self, input_shapes: &[Vec<usize>], padding_mode: PaddingMode) -> Vec<Vec<usize>>;
 
     fn num_outputs(&self, num_inputs: usize) -> usize;
 
@@ -196,15 +192,16 @@ pub trait OpInfo {
 
 pub trait Op<T: Number, E: ExtensionField>: OpInfo {
     /// Evaluates the operation given any inputs tensors and constant inputs.
-    fn evaluate(&self, inputs: &[&Tensor<T>]) -> Result<LayerOut<T, E>, ProvableOpError>;
+    fn evaluate(&self, inputs: &[&Tensor<T>], unpadded_input_shapes: Vec<Vec<usize>>) -> Result<LayerOut<T, E>, ProvableOpError>;
 }
 
 
 pub(crate) fn evaluate_layer<E: ExtensionField, T: Number, O: Op<T, E>>(
         layer: &O, 
-        inputs: &[&Tensor<T>]
+        inputs: &[&Tensor<T>],
+        unpadded_input_shapes: Option<Vec<Vec<usize>>>
     ) -> Result<LayerOut<T, E>, ProvableOpError> {
-        layer.evaluate(inputs) 
+        layer.evaluate(inputs, unpadded_input_shapes.unwrap_or_default()) 
     }
 
 pub trait ProveInfo<E: ExtensionField> 
@@ -231,24 +228,6 @@ where
             T: Transcript<E>,
             N: Number,
 {
-    /// Returns the inputs shapes padded for proving
-    fn padded_input_shapes(&self) -> Vec<Vec<usize>> {
-        self.input_shapes().iter().map(|shape|
-            shape.iter().map(|dim|
-                dim.next_power_of_two()
-            ).collect()
-        ).collect()
-    }
-
-    /// Returns the outputs shapes padded for proving
-    fn padded_output_shapes(&self) -> Vec<Vec<usize>> {
-        self.output_shapes().iter().map(|shape|
-            shape.iter().map(|dim|
-                dim.next_power_of_two()
-            ).collect()
-        ).collect()
-    }
-
     fn is_provable(&self) -> bool;
     
     /// Produces a proof of correct execution for this operation.
@@ -263,29 +242,54 @@ where
     }
 }
 
-pub trait VerifiableCtx<E, T>: Debug
+pub trait VerifiableCtx<E>: Debug
 where 
     E: ExtensionField,
     E::BaseField: Serialize + DeserializeOwned,
     E: Serialize + DeserializeOwned,
-    T: Transcript<E>,
 {   
-    fn verify(&self, proof: &LayerProof<E>, last_claims: &[Claim<E>], verifier: &mut Verifier<E, T>) -> Result<Vec<Claim<E>>, ProvableOpError>;
+    fn verify<T: Transcript<E>>(&self, proof: &LayerProof<E>, last_claims: &[Claim<E>], verifier: &mut Verifier<E, T>, shape_step: &ShapeStep) -> Result<Vec<Claim<E>>, ProvableOpError>;
+
+    fn output_shapes(&self, input_shapes: &[Vec<usize>], padding_mode: PaddingMode) -> Vec<Vec<usize>>;
 }
 
-impl<E: ExtensionField, T: Transcript<E>> VerifiableCtx<E, T> for LayerCtx<E> 
+pub(crate) fn output_shapes<E: ExtensionField, C: VerifiableCtx<E>>(
+    ctx: &C, 
+    input_shapes: &[Vec<usize>], 
+    padding_mode: PaddingMode
+) -> Vec<Vec<usize>> 
+where 
+    E::BaseField: Serialize + DeserializeOwned,
+    E: Serialize + DeserializeOwned,
+{
+    ctx.output_shapes(input_shapes, padding_mode)
+}
+
+impl<E: ExtensionField> VerifiableCtx<E> for LayerCtx<E> 
 where 
     E::BaseField: Serialize + DeserializeOwned,
     E: Serialize + DeserializeOwned,
 {   
-    fn verify(&self, proof: &LayerProof<E>, last_claims: &[Claim<E>], verifier: &mut Verifier<E, T>) -> Result<Vec<Claim<E>>, ProvableOpError> {
+    fn verify<T: Transcript<E>>(&self, proof: &LayerProof<E>, last_claims: &[Claim<E>], verifier: &mut Verifier<E, T>, shape_step: &ShapeStep) -> Result<Vec<Claim<E>>, ProvableOpError> {
         match self {
-            LayerCtx::Dense(dense_ctx) => dense_ctx.verify(proof, last_claims, verifier),
-            LayerCtx::Convolution(conv_ctx) => conv_ctx.verify(proof, last_claims, verifier),
-            LayerCtx::Activation(activation_ctx) => activation_ctx.verify(proof, last_claims, verifier),
-            LayerCtx::Requant(requant_ctx) => requant_ctx.verify(proof, last_claims, verifier),
-            LayerCtx::Pooling(pooling_ctx) => pooling_ctx.verify(proof, last_claims, verifier),
+            LayerCtx::Dense(dense_ctx) => dense_ctx.verify(proof, last_claims, verifier, shape_step),
+            LayerCtx::Convolution(conv_ctx) => conv_ctx.verify(proof, last_claims, verifier, shape_step),
+            LayerCtx::Activation(activation_ctx) => activation_ctx.verify(proof, last_claims, verifier, shape_step),
+            LayerCtx::Requant(requant_ctx) => requant_ctx.verify(proof, last_claims, verifier, shape_step),
+            LayerCtx::Pooling(pooling_ctx) => pooling_ctx.verify(proof, last_claims, verifier, shape_step),
             _ => Err(ProvableOpError::NotProvableLayer(format!("{:?}", self))),
+        }
+    }
+    
+    fn output_shapes(&self, input_shapes: &[Vec<usize>], padding_mode: PaddingMode) -> Vec<Vec<usize>> {
+        match self {
+            LayerCtx::Dense(dense_ctx) => dense_ctx.output_shapes(input_shapes, padding_mode),
+            LayerCtx::Convolution(conv_ctx) => conv_ctx.output_shapes(input_shapes, padding_mode),
+            LayerCtx::Activation(activation_ctx) => output_shapes::<E, _>(activation_ctx, input_shapes, padding_mode),
+            LayerCtx::Requant(requant_ctx) => output_shapes::<E, _>(requant_ctx, input_shapes, padding_mode),
+            LayerCtx::Pooling(pooling_ctx) => output_shapes::<E, _>(pooling_ctx, input_shapes, padding_mode),
+            LayerCtx::Reshape => <Reshape as OpInfo>::output_shapes(&Reshape, input_shapes, padding_mode),
+            _ => unreachable!()
         }
     }
 }
@@ -304,4 +308,5 @@ impl<'a, E: ExtensionField, T, N, D> InferenceStep<'a, E, T, N, D> {
 pub struct StepData<N, E: ExtensionField> {
     pub(crate) inputs: Vec<Tensor<N>>,
     pub(crate) outputs: LayerOut<N, E>,
+    pub(crate) unpadded_output_shapes: Vec<Vec<usize>>,
 }

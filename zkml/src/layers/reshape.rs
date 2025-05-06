@@ -3,8 +3,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use transcript::Transcript;
 
 use crate::{
-    Element, ScalingFactor, Tensor, commit::precommit::PolyID, iop::context::ContextAux,
-    layers::LayerCtx, tensor::Number,
+    commit::precommit::PolyID, iop::context::ContextAux, layers::LayerCtx, padding::PaddingMode, tensor::Number, Element, NextPowerOfTwo, ScalingFactor, Tensor
 };
 
 use super::{
@@ -14,12 +13,8 @@ use super::{
 pub struct Reshape;
 
 impl OpInfo for Reshape {
-    fn input_shapes(&self) -> Vec<Vec<usize>> {
-        vec![] // works with any input shape
-    }
-
-    fn output_shapes(&self) -> Vec<Vec<usize>> {
-        self.input_shapes().into_iter().map(|s|
+    fn output_shapes(&self, input_shapes: &[Vec<usize>], _padding_mode: PaddingMode) -> Vec<Vec<usize>> {
+        input_shapes.into_iter().map(|s|
             vec![s.iter().product()]
         ).collect()
     }
@@ -29,12 +24,12 @@ impl OpInfo for Reshape {
     }
 
     fn describe(&self) -> String {
-        format!("Reshape: {:?}", self.output_shapes()[0])
+        "Reshape".to_string()
     }
 }
 
 impl<N: Number, E: ExtensionField> Op<N, E> for Reshape {
-    fn evaluate(&self, inputs: &[&Tensor<N>]) -> Result<LayerOut<N, E>, super::provable::ProvableOpError> {
+    fn evaluate(&self, inputs: &[&Tensor<N>], _unpadded_input_shapes: Vec<Vec<usize>>) -> Result<LayerOut<N, E>, super::provable::ProvableOpError> {
         if inputs.len() != 1 {
             return Err(super::provable::ProvableOpError::ParameterError(
                 "Reshape expects exactly one input".to_string(),
@@ -53,9 +48,12 @@ where
     fn step_info(
         &self,
         _id: PolyID,
-        aux: ContextAux,
+        mut aux: ContextAux,
     ) -> (LayerCtx<E>, ContextAux) {
-        (LayerCtx::Reshape(()), aux)
+        aux.last_output_shape.iter_mut().for_each(|s| 
+            *s = s.next_power_of_two()
+        );
+        (LayerCtx::Reshape, aux)
     }
 }
 
@@ -75,17 +73,5 @@ where
 impl Reshape {
     pub(crate) fn quantize(&self, _s: &ScalingFactor, _bias_s: Option<&ScalingFactor>) -> Layer<Element> {
         Layer::Reshape(Reshape)
-    }
-    
-    pub(crate) fn step_info<E: ExtensionField>(
-        &self,
-        _id: PolyID,
-        _aux: ContextAux,
-    ) -> Option<(LayerCtx<E>, ContextAux)>
-    where
-        E: ExtensionField + DeserializeOwned,
-        E::BaseField: Serialize + DeserializeOwned,
-    {
-        None
     }
 }

@@ -27,20 +27,16 @@ impl ModelMetadata {
 }
 
 pub(crate) struct MetadataBuilder {
-    input_scaling: Option<ScalingFactor>,
+    input_scaling: ScalingFactor,
     layers_scaling: HashMap<usize, ScalingFactor>,
 }
 
 impl MetadataBuilder {
-    pub fn new() -> Self {
+    pub fn new(input_scaling: ScalingFactor) -> Self {
         Self {
-            input_scaling: None,
+            input_scaling,
             layers_scaling: HashMap::new(),
         }
-    }
-
-    pub fn set_input_scaling(&mut self, input_scaling: ScalingFactor) {
-        self.input_scaling = Some(input_scaling);
     }
 
     pub fn set_layers_scaling(&mut self, layer_id: usize, output_scaling: ScalingFactor) {
@@ -49,7 +45,7 @@ impl MetadataBuilder {
 
     pub fn build(self) -> ModelMetadata {
         ModelMetadata {
-            input: self.input_scaling.unwrap(),
+            input: self.input_scaling,
             output_layers_scaling: self.layers_scaling,
             float_model: None,
         }

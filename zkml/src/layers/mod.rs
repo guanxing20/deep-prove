@@ -3,6 +3,7 @@ pub mod common;
 pub mod convolution;
 pub mod dense;
 pub mod hadamard;
+pub mod matvec;
 pub mod pooling;
 pub mod requant;
 pub mod reshape;
@@ -15,16 +16,17 @@ use ff_ext::ExtensionField;
 use goldilocks::GoldilocksExt2;
 use itertools::Itertools;
 use pooling::{PoolingCtx, PoolingProof};
-use provable::{evaluate_layer, LayerOut, OpInfo, ProvableNode, ProvableOpError, ProveInfo};
+use provable::{evaluate_layer, LayerOut, Op, OpInfo, ProvableNode, ProvableOpError, ProveInfo};
 use requant::RequantCtx;
 use reshape::Reshape;
 use statrs::statistics::{Data, Distribution};
 use transcript::Transcript;
+use tracing::debug;
 
 use crate::{
     Element,
     commit::precommit::PolyID,
-    iop::context::{ContextAux, TableCtx},
+    iop::context::{ContextAux, ShapeStep, TableCtx},
     layers::{
         activation::{Activation, ActivationProof, Relu},
         convolution::Convolution,
@@ -32,6 +34,7 @@ use crate::{
         pooling::Pooling,
         requant::{Requant, RequantProof},
     },
+    padding::PaddingMode,
     quantization::ScalingFactor,
     tensor::{ConvData, Number, Tensor},
 };
@@ -39,7 +42,6 @@ use activation::ActivationCtx;
 use convolution::{ConvCtx, ConvProof, SchoolBookConvCtx};
 use dense::{DenseCtx, DenseProof};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use sha2::Sha256;
 
 #[derive(Clone, Debug)]
 pub enum Layer<T> {
@@ -76,7 +78,7 @@ where
     Requant(RequantCtx),
     Pooling(PoolingCtx),
     Table(TableCtx<E>),
-    Reshape(()),
+    Reshape,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -89,6 +91,7 @@ where
     Activation(ActivationProof<E>),
     Requant(RequantProof<E>),
     Pooling(PoolingProof<E>),
+    Reshape,
 }
 #[derive(Clone, Debug)]
 pub enum LayerOutput<F>
@@ -113,15 +116,54 @@ where
             Self::Requant(_) => "Requant".to_string(),
             Self::Pooling(_) => "Pooling".to_string(),
             Self::Table(..) => "Table".to_string(),
-            Self::Reshape(..) => "Reshape".to_string(),
+            Self::Reshape => "Reshape".to_string(),
         }
     }
 
+    // TODO: is this used and correct ??
     pub fn requires_lookup(&self) -> bool {
         match self {
             Self::Dense(..) => false,
+            Self::Reshape => false,
             _ => true,
         }
+    }
+    pub fn output_shape(&self, input_shape: &[usize], padding_mode: PaddingMode) -> Vec<usize> {
+        match self {
+            Self::Dense(ref dense) => dense.output_shape(input_shape, padding_mode),
+            Self::Convolution(ref filter) => filter.output_shape(input_shape, padding_mode),
+            Self::SchoolBookConvolution(ref _filter) => {
+                panic!("SchoolBookConvolution should NOT be used in proving")
+            }
+            Self::Activation(..) => input_shape.to_vec(),
+            Self::Requant(..) => input_shape.to_vec(),
+            Self::Pooling(ref pooling) => pooling.output_shape(input_shape),
+            Self::Reshape => <Reshape as OpInfo>::output_shapes(&Reshape, &vec![input_shape.to_vec()], padding_mode)[0].clone(),
+            Self::Table(..) => panic!("Table should NOT be used in proving"),
+        }
+    }
+    pub fn next_shape_step(&self, last_step: &ShapeStep) -> ShapeStep {
+        let unpadded_output = last_step.unpadded_output_shape.iter().map(|shape|
+            self.output_shape(&shape, PaddingMode::NoPadding)
+        ).collect();
+        let padded_output = last_step.padded_output_shape.iter().map(|shape|
+            self.output_shape(&shape, PaddingMode::Padding)
+        ).collect();
+        ShapeStep::next_step(last_step, unpadded_output, padded_output)
+    }
+    pub fn shape_step(&self, unpadded_input: &[Vec<usize>], padded_input: &[Vec<usize>]) -> ShapeStep {
+        let unpadded_output = unpadded_input.iter().map(|shape|
+            self.output_shape(&shape, PaddingMode::NoPadding)
+        ).collect();
+        let padded_output = padded_input.iter().map(|shape| 
+            self.output_shape(&shape, PaddingMode::Padding)
+        ).collect();
+        ShapeStep::new(
+            unpadded_input.to_vec(),
+            padded_input.to_vec(),
+            unpadded_output,
+            padded_output,
+        )
     }
 }
 
@@ -141,12 +183,12 @@ where
         self.operation.is_provable()
     }
 
-    pub(crate) fn run(&self, inputs: &[&Tensor<N>]) -> Result<LayerOut<N, E>, ProvableOpError> 
+    pub(crate) fn run(&self, inputs: &[&Tensor<N>], unpadded_input_shapes: Vec<Vec<usize>>) -> Result<LayerOut<N, E>, ProvableOpError> 
     where 
         E: ExtensionField,
         N: Number,
     {
-        self.operation.evaluate(inputs)
+        self.operation.evaluate(inputs, unpadded_input_shapes)
     }
      
     pub(crate) fn step_info(
@@ -159,32 +201,40 @@ where
 }
 
 impl<T: Number> Layer<T> {
-    /// TODO: this method should be renamed to output_shape. THe internals of the layer should only be disclosed
-    /// for some node but not all (e.g. reshape doesn't have an internal shape).
-    pub fn shape(&self) -> Vec<usize> {
+    pub fn output_shape(&self, input_shape: &[usize], padding_mode: PaddingMode) -> Vec<usize> {
+        match self {
+            Layer::Dense(ref dense) => dense.output_shape(input_shape, padding_mode),
+            Layer::Convolution(ref filter) => filter.output_shape(input_shape, padding_mode),
+            Layer::SchoolBookConvolution(ref filter) => {
+                filter.output_shape(input_shape, padding_mode)
+            }
+            Layer::Activation(Activation::Relu(_)) => input_shape.to_vec(),
+            Layer::Requant(_) => input_shape.to_vec(),
+            Layer::Pooling(Pooling::Maxpool2D(info)) => info.output_shape(input_shape),
+            Layer::Reshape(ref r) => r.output_shapes(&vec![input_shape.to_vec()], padding_mode)[0].clone(),
+        }
+    }
+    /// Returns the shape of the layer as used in the model. If the layer do NOT have a shape per se,
+    /// e.g. RELU for example, it returns None.
+    pub fn model_shape(&self) -> Option<Vec<usize>> {
         match &self {
-            Layer::Dense(ref dense) => vec![dense.matrix.nrows_2d(), dense.matrix.ncols_2d()],
+            Layer::Dense(ref dense) => Some(dense.matrix.get_shape()),
 
-            Layer::Convolution(ref filter) => filter.get_shape(),
-            Layer::SchoolBookConvolution(ref filter) => filter.get_shape(),
+            Layer::Convolution(ref filter) => Some(filter.get_shape()),
+            Layer::SchoolBookConvolution(ref filter) => Some(filter.get_shape()),
 
-            Layer::Activation(Activation::Relu(_)) => Relu::shape(),
-            Layer::Requant(_) => vec![], // No predefined shape
-            Layer::Pooling(Pooling::Maxpool2D(info)) => vec![info.kernel_size, info.kernel_size],
-            Layer::Reshape(ref _reshape) => vec![1],
+            Layer::Activation(Activation::Relu(_)) => None,
+            Layer::Requant(_) => None,
+            Layer::Pooling(Pooling::Maxpool2D(info)) => {
+                Some(vec![info.kernel_size, info.kernel_size])
+            }
+            Layer::Reshape(ref _reshape) => None,
         }
     }
 
     pub fn describe(&self) -> String {
         match &self {
-            Layer::Dense(ref dense) => {
-                format!(
-                    "Dense: ({},{})",
-                    dense.matrix.nrows_2d(),
-                    dense.matrix.ncols_2d(),
-                    // matrix.fmt_integer()
-                )
-            }
+            Layer::Dense(ref dense) => dense.describe(),
             Layer::Convolution(ref filter) => {
                 format!(
                     "Conv: ({},{},{},{})",
@@ -233,22 +283,28 @@ impl<T: Number> Layer<T> {
 impl Layer<f32> {
     pub fn quantize(self, s: &ScalingFactor, bias_s: Option<&ScalingFactor>) -> Layer<Element> {
         match self {
-            Layer::Dense(dense) => Layer::Dense(dense.quantize(s, bias_s)),
-            Layer::Convolution(conv) => Layer::Convolution(conv.quantize(&s, bias_s)),
-            Layer::SchoolBookConvolution(conv) => {
-                Layer::SchoolBookConvolution(conv.quantize(&s, bias_s))
+            Layer::Dense(dense) => {
+                Layer::Dense(dense.quantize(s, bias_s.expect("bias_s is required for dense layer")))
             }
+            Layer::Convolution(conv) => Layer::Convolution(conv.quantize(
+                &s,
+                bias_s.expect("bias_s is required for convolution layer"),
+            )),
+            Layer::SchoolBookConvolution(conv) => Layer::SchoolBookConvolution(conv.quantize(
+                &s,
+                bias_s.expect("bias_s is required for schoolbook convolution layer"),
+            )),
             Layer::Activation(activation) => Layer::Activation(activation),
             Layer::Requant(requant) => Layer::Requant(requant),
             Layer::Pooling(pooling) => Layer::Pooling(pooling),
-            Layer::Reshape(reshape) => reshape.quantize(s, bias_s),
+            Layer::Reshape(_reshape) => Layer::Reshape(Reshape),
         }
     }
     /// TODO: limitation of enum is we can't have same names as in Element run
     pub(crate) fn run(&self, input: &Tensor<f32>) -> Tensor<f32> {
         match self {
-            Layer::Dense(ref dense) => evaluate_layer::<GoldilocksExt2, _, _>(dense, &vec![input]).unwrap().outputs()[0].clone(),
-            Layer::Activation(activation) => evaluate_layer::<GoldilocksExt2, _, _>(activation, &vec![input]).unwrap().outputs()[0].clone(),
+            Layer::Dense(ref dense) => evaluate_layer::<GoldilocksExt2, _, _>(dense, &vec![input], None).unwrap().outputs()[0].clone(),
+            Layer::Activation(activation) => evaluate_layer::<GoldilocksExt2, _, _>(activation, &vec![input], None).unwrap().outputs()[0].clone(),
             Layer::Convolution(ref conv_pair) => {
                 input.conv2d(&conv_pair.filter, &conv_pair.bias, 1)
             }
@@ -258,7 +314,7 @@ impl Layer<f32> {
             Layer::SchoolBookConvolution(ref conv_pair) => {
                 input.conv2d(&conv_pair.filter, &conv_pair.bias, 1)
             }
-            Layer::Reshape(ref reshape) => evaluate_layer::<GoldilocksExt2, _, _>(reshape, &vec![input]).unwrap().outputs()[0].clone(),
+            Layer::Reshape(ref reshape) => evaluate_layer::<GoldilocksExt2, _, _>(reshape, &vec![input], None).unwrap().outputs()[0].clone(),
             Layer::Requant(_) => {
                 panic!(
                     "InferenceObserver: requantization layer found while observing inference on float !?"
@@ -281,40 +337,37 @@ impl Layer<Element> {
             Layer::Activation(activation) => activation.step_info(id, aux),
             Layer::Requant(requant) => requant.step_info(id, aux),
             Layer::Pooling(pooling) => pooling.step_info(id, aux),
-            _ => panic!(
-                "Layer::step_info: layer {} can not be proven",
-                self.describe()
-            ),
+            Layer::Reshape(reshape) => reshape.step_info(id, aux),
         }
     }
 
     /// Run the operation associated with that layer with the given input
     // TODO: move to tensor library : right now it works because we assume there is only Dense
     // layer which is matmul
-    pub fn op<F: ExtensionField>(&self, input: &Tensor<Element>) -> Result<LayerOutput<F>> {
+    pub fn op<F: ExtensionField>(
+        &self,
+        input: &Tensor<Element>,
+        unpadded_shape: &[usize],
+    ) -> Result<LayerOutput<F>> {
         let output = match &self {
-            Layer::Dense(ref dense) => Ok(LayerOutput::NormalOut(evaluate_layer::<GoldilocksExt2, _, _>(dense, &vec![input]).unwrap().outputs()[0].clone())),
-            Layer::Activation(activation) => Ok(LayerOutput::NormalOut(evaluate_layer::<GoldilocksExt2, _, _>(activation, &vec![input]).unwrap().outputs()[0].clone())),
-            Layer::Convolution(ref filter) => Ok(LayerOutput::ConvOut(filter.op(input))),
-            // Layer::Convolution(ref filter) => LayerOutput::NormalOut(input.conv2d(&filter.filter,&filter.bias,1)),
+            Layer::Dense(ref dense) => Ok(LayerOutput::NormalOut(evaluate_layer::<GoldilocksExt2, _, _>(dense, &vec![input], Some(vec![unpadded_shape.to_vec()])).unwrap().outputs()[0].clone())),
+            Layer::Activation(activation) => Ok(LayerOutput::NormalOut(evaluate_layer::<GoldilocksExt2, _, _>(activation, &vec![input], Some(vec![unpadded_shape.to_vec()])).unwrap().outputs()[0].clone())),
+            Layer::Convolution(ref filter) => {
+                Ok(LayerOutput::ConvOut(filter.op(input, unpadded_shape)))
+            }
             // Traditional convolution is used for debug purposes. That is because the actual convolution
             // we use relies on the FFT algorithm. This convolution does not have a snark implementation.
-            Layer::SchoolBookConvolution(ref conv_pair) => {
-                // LayerOutput::NormalOut(filter.cnn_naive_convolution(input))
-                Ok(LayerOutput::NormalOut(input.conv2d(
-                    &conv_pair.filter,
-                    &conv_pair.bias,
-                    1,
-                )))
-            }
+            Layer::SchoolBookConvolution(ref conv_pair) => Ok(LayerOutput::NormalOut(
+                input.conv2d(&conv_pair.filter, &conv_pair.bias, 1),
+            )),
 
             Layer::Requant(info) => info.op(input).map(|r| LayerOutput::NormalOut(r)),
             Layer::Pooling(info) => Ok(LayerOutput::NormalOut(info.op(input))),
-            Layer::Reshape(reshape) => Ok(LayerOutput::NormalOut(evaluate_layer::<GoldilocksExt2, _, _>(reshape, &vec![input]).unwrap().outputs()[0].clone())),
+            Layer::Reshape(reshape) => Ok(LayerOutput::NormalOut(evaluate_layer::<GoldilocksExt2, _, _>(reshape, &vec![input], Some(vec![unpadded_shape.to_vec()])).unwrap().outputs()[0].clone())),
         }?;
         match output {
             LayerOutput::NormalOut(ref output) => {
-                println!(
+                debug!(
                     "Layer::{:?}: shape {:?} op: {:?} - min {:?}, max {:?}",
                     self.describe(),
                     output.get_shape(),
@@ -325,7 +378,7 @@ impl Layer<Element> {
             }
             LayerOutput::ConvOut((ref output, _)) => {
                 let d = Data::new(output.get_data().iter().map(|e| *e as f64).collect_vec());
-                println!(
+                debug!(
                     "Layer::{:?}: shape {:?} op: {:?} - min {:?}, max {:?}, mean {:?}, std {:?}",
                     self.describe(),
                     output.get_shape(),
@@ -341,19 +394,6 @@ impl Layer<Element> {
     }
 }
 
-use hex;
-use sha2::Digest;
-pub fn hashit(data: &[Element]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(
-        data.iter()
-            .map(|e| e.to_be_bytes())
-            .flatten()
-            .collect::<Vec<_>>(),
-    );
-    hex::encode(hasher.finalize().to_vec())
-}
-
 impl<E: ExtensionField> LayerProof<E>
 where
     E::BaseField: Serialize + DeserializeOwned,
@@ -365,6 +405,7 @@ where
             Self::Activation(_) => "Activation".to_string(),
             Self::Requant(_) => "Requant".to_string(),
             Self::Pooling(_) => "Pooling".to_string(),
+            Self::Reshape => "Reshape".to_string(),
         }
     }
 
@@ -372,6 +413,7 @@ where
         match self {
             LayerProof::Dense(..) => None,
             LayerProof::Convolution(..) => None,
+            LayerProof::Reshape => None,
             LayerProof::Activation(ActivationProof { lookup, .. })
             | LayerProof::Requant(RequantProof { lookup, .. })
             | LayerProof::Pooling(PoolingProof { lookup, .. }) => Some(lookup.fractional_outputs()),

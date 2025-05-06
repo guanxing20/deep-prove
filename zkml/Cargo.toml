@@ -20,7 +20,6 @@ ff.workspace = true
 ff_ext = { version = "0.1.0", path = "../ff_ext" }
 gkr = { version = "0.1.0", path = "../gkr" }
 goldilocks.workspace = true
-hex = "0.4.3"
 itertools.workspace = true
 mpcs = { version = "0.1.0", path = "../mpcs" }
 multilinear_extensions = { version = "0.1.0", path = "../multilinear_extensions", features = [
@@ -33,7 +32,6 @@ rayon.workspace = true
 rmp-serde = "1.3.0"
 serde.workspace = true
 serde_json.workspace = true
-sha2 = "0.10.8"
 simple-frontend = { path = "../simple-frontend" }
 statrs = "0.18.0"
 sumcheck = { version = "0.1.0", path = "../sumcheck" }

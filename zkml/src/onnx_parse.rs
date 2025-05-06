@@ -3,9 +3,9 @@ use crate::{
     layers::{
         Layer,
         activation::{Activation, Relu},
-        convolution::Convolution,
+        convolution::{Convolution, conv2d_shape},
         dense::Dense,
-        pooling::{MAXPOOL2D_KERNEL_SIZE, Maxpool2D, Pooling},
+        pooling::{MAXPOOL2D_KERNEL_SIZE, Maxpool2D, Pooling, maxpool2d_shape},
         reshape::Reshape,
     },
     padding::pad_model,
@@ -14,7 +14,7 @@ use crate::{
 use anyhow::{Context, Error, Result, bail, ensure};
 use itertools::Itertools;
 use std::{collections::HashMap, i8, time::Instant};
-use tracing::{debug, info, warn};
+use tracing::{debug, info, trace, warn};
 use tract_onnx::{
     pb::{GraphProto, NodeProto},
     prelude::*,
@@ -68,9 +68,8 @@ impl FloatOnnxLoader {
             kept_float = Some(float_model.clone());
         }
         let (quantized_model, mut md) = self.scaling_strategy.quantize(float_model)?;
-        md.float_model = kept_float;
         let padded_model = pad_model(quantized_model)?;
-        // let padded_model = quantized_model;
+        md.float_model = kept_float;
         Ok((padded_model, md))
     }
 }
@@ -220,6 +219,15 @@ fn model_input_shape(graph: &GraphProto) -> Vec<usize> {
     input_shape
 }
 
+pub fn safe_conv2d_shape(input_shape: &[usize], filter_shape: &[usize]) -> Result<Vec<usize>> {
+    let result = check_filter(filter_shape);
+    assert!(result.is_ok(), "conv2d: Failed {:?}", result.unwrap_err());
+
+    check_cnn_input(input_shape).context("conv2d: invalid input shape")?;
+
+    Ok(conv2d_shape(input_shape, filter_shape))
+}
+
 pub fn check_filter(filter_shape: &[usize]) -> Result<()> {
     ensure!(filter_shape.len() == 4, "Filter should be 4D tensor.");
     ensure!(
@@ -235,38 +243,9 @@ pub fn check_cnn_input(input_shape: &[usize]) -> Result<()> {
     Ok(())
 }
 
-/// Assumes stride=1, padding=0, and dilation=1
-/// https://pytorch.org/docs/stable/generated/torch.nn.Conv2d.html
-pub fn conv2d_shape(input_shape: &[usize], filter_shape: &[usize]) -> Result<Vec<usize>> {
-    let result = check_filter(filter_shape);
-    assert!(result.is_ok(), "conv2d: Failed {:?}", result.unwrap_err());
-
-    check_cnn_input(input_shape).context("conv2d: invalid input shape")?;
-
-    let stride = 1usize;
-    let padding = 0usize;
-    let dilation = 1usize;
-
-    let h_in = input_shape[2];
-    let kernel = filter_shape[2];
-    let h_out = (h_in + 2 * padding - dilation * (kernel - 1) - 1) / stride + 1;
-    Ok(vec![filter_shape[0], h_out, h_out])
-}
-
-/// Assumes kernel=2, stride=2, padding=0, and dilation=1
-/// https://pytorch.org/docs/stable/generated/torch.nn.MaxPool2d.html
-pub fn maxpool2d_shape(input_shape: &[usize]) -> Result<Vec<usize>> {
+pub fn safe_maxpool2d_shape(input_shape: &[usize]) -> Result<Vec<usize>> {
     check_cnn_input(input_shape).context("maxpool2d: invalid input shape")?;
-
-    let stride = 2usize;
-    let padding = 0usize;
-    let kernel = 2usize;
-    let dilation = 1usize;
-
-    let d1 = input_shape[0];
-    let d2 = (input_shape[1] + 2 * padding - dilation * (kernel - 1) - 1) / stride + 1;
-
-    Ok(vec![d1, d2, d2])
+    Ok(maxpool2d_shape(input_shape))
 }
 
 /// Enum representing the different types of models that can be loaded
@@ -338,7 +317,6 @@ pub fn load_float_model(filepath: &str) -> Result<Model<f32>> {
     }
 
     let mut input_shape_og = input_shape.clone();
-    println!("Input shape: {:?}", input_shape);
     let mut initializers: HashMap<String, Tensor> = HashMap::new();
     for item in graph.initializer {
         let dt = tract_onnx::pb::tensor_proto::DataType::from_i32(item.data_type)
@@ -349,7 +327,7 @@ pub fn load_float_model(filepath: &str) -> Result<Model<f32>> {
         let key = item.name.to_string();
         initializers.insert(key, value);
     }
-    println!(
+    debug!(
         "Initializers: TENSOR NAMES: {:?}",
         initializers.keys().collect_vec()
     );
@@ -358,12 +336,9 @@ pub fn load_float_model(filepath: &str) -> Result<Model<f32>> {
     // the next layer's expected input matches.
     info!("load_model:BEFORE loop of graph nodes extraction");
     for (i, node) in graph.node.iter().enumerate() {
-        println!("NODE: {:?}", node.op_type.as_str());
         match node.op_type.as_str() {
             op if LINEAR_ALG.contains(&op) => {
                 let WeightBiasInfo { weights, bias } = fetch_weight_and_bias(node, &initializers)?;
-                // println!("DENSE weights shape: {:?}", weights.get_shape());
-                // println!("DENSE MATRIX: {:?}", weights.get_data());
                 ensure!(bias.get_shape().len() == 1, "bias is not a vector");
                 input_shape_og = vec![weights.get_shape()[0]];
                 let nrows = weights.get_shape()[0];
@@ -383,7 +358,6 @@ pub fn load_float_model(filepath: &str) -> Result<Model<f32>> {
                 layers.push(Layer::Dense(Dense::new_from_weights(weights, bias)));
             }
             op if ACTIVATION.contains(&op) => {
-                // assert!(input_shape_padded.iter().all(|d| d.is_power_of_two()));
                 let layer = Layer::Activation(Activation::Relu(Relu::new()));
                 layers.push(layer);
             }
@@ -391,17 +365,7 @@ pub fn load_float_model(filepath: &str) -> Result<Model<f32>> {
                 let now = Instant::now();
                 let _ = fetch_conv2d_attributes(node)?;
                 let WeightBiasInfo { weights, bias } = fetch_weight_and_bias(node, &initializers)?;
-                // println!(
-                //    "RUN CONV: input shape {:?} - og {:?} ",
-                //    input_shape, input_shape_og
-                //);
-                // println!(
-                //    "RUN CONV: filter shape {:?}, bias shape {:?} -- filter 4d {:?}",
-                //    weights.get_shape(),
-                //    bias.get_shape(),
-                //    weights.get4d()
-                //);
-                input_shape_og = conv2d_shape(&input_shape_og, &weights.get_shape())?;
+                input_shape_og = safe_conv2d_shape(&input_shape_og, &weights.get_shape())?;
                 let weight_shape = weights.get_shape();
                 // Perform basic sanity checks on the tensor dimensions
                 let shape_test = check_filter(&weight_shape);
@@ -411,67 +375,19 @@ pub fn load_float_model(filepath: &str) -> Result<Model<f32>> {
                     "Bias length doesn't match filter shape"
                 );
 
-                // Pad the tensors to the next power of two.
-                // weights = weights.pad_next_power_of_two();
-                // bias = bias.pad_next_power_of_two();
-
-                // Make sure that input shape is already padded and is well formed
-                // assert!(input_shape_padded.iter().all(|d| d.is_power_of_two()));
-                // assert!(input_shape_padded.len() == 3);
-
-                // Since we are doing an FFT based conv, we need to pad the last two dimensions of the filter to match the input.
-                // let weight_shape = weights.get_shape();
-                // let (filter_height, filter_weight) = (weight_shape[2], weight_shape[3]);
-                // let (input_height, input_weight) = (input_shape_padded[1], input_shape_padded[2]);
-
-                // assert!(
-                //    filter_height <= input_height && filter_weight <= input_weight,
-                //    "Filter dimensions have to be smaller than input dimensions"
-                //);
-
-                // weight = weight.pad_last_two_dimensions(vec![input_height, input_weight]);
-
-                // Filter need to know the shape of the input
-                // weight.update_input_shape(&input_shape_padded);
-
-                // The conversion to fft'd weights is done when the quantization happens, see conv.quantize()
-                // let weight = crate::tensor::Tensor::new_conv(
-                //    weights.get_shape(),
-                //    input_shape_padded.clone(),
-                //    weights.get_data(),
-                //);
-                // let dims = weight.dims(); // save the shape of the filter to compute the output shape
-
-                // this is the non fft'd convolution layer
-                // let layer = Layer::SchoolBookConvolution(Convolution { filter: weights, bias: bias });
-                let layer = Layer::Convolution(Convolution::new_raw(weights, bias));
-                // let layer = Layer::SchoolBookConvolution(Convolution::new(weight, _bias));
-
+                let layer = Layer::Convolution(Convolution::new(weights, bias));
                 layers.push(layer);
-
-                // let output_shape = conv2d_shape(&input_shape_padded, &dims)?;
-                // input_shape_padded = output_shape
-                //    .iter()
-                //    .map(|i| i.next_power_of_two())
-                //    .collect_vec();
                 debug!("EXTRACTIONG conv2d time: {:?}", now.elapsed());
             }
             op if DOWNSAMPLING.contains(&op) => {
-                input_shape_og = maxpool2d_shape(&input_shape_og)?;
-                // Make sure that input shape is already padded and is well formed
-                // assert!(input_shape_padded.iter().all(|d| d.is_power_of_two()));
-
+                input_shape_og = safe_maxpool2d_shape(&input_shape_og)?;
                 let _ = fetch_maxpool_attributes(node)?;
                 let layer = Layer::Pooling(Pooling::Maxpool2D(Maxpool2D::default()));
                 layers.push(layer);
-                // input_shape_padded = maxpool2d_shape(&input_shape_padded)?;
             }
             op if RESHAPE.contains(&op) => {
-                // ignore_garbage_pad = Some((input_shape_og.clone(), input_shape_padded.clone()));
                 layers.push(Layer::Reshape(Reshape));
                 input_shape_og = vec![input_shape_og.iter().product()];
-                // assert!(input_shape_padded.iter().all(|d| d.is_power_of_two()));
-                // input_shape_padded = vec![input_shape_padded.iter().product()];
             }
             _ => bail!("Unsupported operation"),
         };
@@ -487,9 +403,7 @@ pub fn load_float_model(filepath: &str) -> Result<Model<f32>> {
     info!("load_model:AFTER loop of graph nodes extraction");
 
     // Create and return the model
-    let mut model = Model::new();
-    // TODO: change to og for reading without padding
-    model.set_input_shape(input_shape);
+    let mut model = Model::new(&input_shape);
     for layer in layers {
         debug!("Added the layer: {}", layer.describe());
         model.add_layer(layer);
@@ -543,7 +457,7 @@ fn extract_tensor_f32_data(
         .filter_map(|key| initializers.get(key).cloned())
         .collect_vec();
 
-    println!(
+    trace!(
         "node input: {:?} - match {:?}-> tensor_vec len() {:?}",
         node.input,
         node.input
@@ -561,9 +475,9 @@ fn extract_tensor_f32_data(
     // Get the tensor data
     let tensor_t = &tensor_vec[0];
     let mut tensor_shape = tensor_t.shape().to_vec();
-    let mut tensor_data = tensor_t.as_slice::<f32>().unwrap().to_vec();
+    let tensor_data = tensor_t.as_slice::<f32>()?.to_vec();
 
-    if node.op_type == "MatMul" && weight_or_bias == "weight" {
+    let tensor_t_f32 = if node.op_type == "MatMul" && weight_or_bias == "weight" {
         tensor_shape.reverse();
         let (m, n) = (tensor_shape[0], tensor_shape[1]);
         let mut transposed_data = vec![0.0; tensor_data.len()];
@@ -571,20 +485,13 @@ fn extract_tensor_f32_data(
         // Transpose the data matrix
         for i in 0..m {
             for j in 0..n {
-                transposed_data[i * n + j] = tensor_data[j * m + i];
+                transposed_data[i * n + j] = tensor_data[j * m + i] * alpha_or_beta;
             }
         }
-        tensor_data = transposed_data;
-    }
-    // Apply alpha/beta multiplier
-    // let tensor_t_f32 = tensor_t
-    //     .as_slice::<f32>()
-    //     .unwrap()
-    //     .into_iter()
-    //     .map(|x| x * alpha_or_beta)
-    //     .collect_vec();
-    // Apply alpha/beta multiplier
-    let tensor_t_f32 = tensor_data.into_iter().map(|x| x * alpha_or_beta).collect();
+        transposed_data
+    } else {
+        tensor_data.into_iter().map(|x| x * alpha_or_beta).collect()
+    };
 
     Ok(Some((tensor_t_f32, tensor_shape)))
 }
@@ -721,7 +628,7 @@ mod tests {
             .build()
             .unwrap();
         let input =
-            crate::tensor::Tensor::<f32>::random(vec![model.input_shape()[0]]).quantize(&md.input);
+            crate::tensor::Tensor::<f32>::random(&vec![model.input_shape()[0]]).quantize(&md.input);
         let input = model.prepare_input(input);
         let trace = model.run::<F>(input.clone()).unwrap();
         println!("Result: {:?}", trace.final_output());
@@ -756,7 +663,7 @@ mod tests {
 
         info!("CREAting random tensor input");
         let (model, md) = result.unwrap();
-        let input = crate::tensor::Tensor::<f32>::random(model.input_shape()).quantize(&md.input);
+        let input = crate::tensor::Tensor::<f32>::random(&model.input_shape()).quantize(&md.input);
         info!("random input tensor CREATED : {:?}", input.get_shape());
         let input = model.prepare_input(input);
         info!("RUNNING MODEL...");
@@ -802,8 +709,9 @@ mod tests {
         assert!(result.is_ok(), "Failed: {:?}", result.unwrap_err());
 
         let (model, md) = result.unwrap();
-        let input = crate::tensor::Tensor::<f32>::random(model.input_shape()).quantize(&md.input);
-        let input = model.prepare_input(input);
+        let native_input =
+            crate::tensor::Tensor::<f32>::random(&model.unpadded_input_shape()).quantize(&md.input);
+        let input = model.prepare_input(native_input);
         let trace = model.run::<F>(input.clone()).unwrap();
         println!("Result: {:?}", trace.final_output());
 

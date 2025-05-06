@@ -307,20 +307,20 @@ fn run(args: Args) -> anyhow::Result<()> {
                 continue; // Skip to the next input without writing to CSV
             }
         };
-        // TEST
-        {
-            // This prints the min/max in f32 of the output of each layer for this run
-            let dequantized_trace = trace.dequantized(&md);
-            for step in dequantized_trace.steps.iter() {
-                println!(
-                    "DEQUANTIZED STEP {}: output min/max: {}/{}",
-                    step.id,
-                    step.output.min(),
-                    step.output.max()
-                );
-            }
-        }
-
+        // TEST:
+        //  This prints the min/max in f32 of the output of each layer for this run
+        //  Useful to check consistency with pytorch for example
+        //{
+        //    let dequantized_trace = trace.dequantized(&md);
+        //    for step in dequantized_trace.steps.iter() {
+        //        println!(
+        //            "DEQUANTIZED STEP {}: output min/max: {}/{}",
+        //            step.id,
+        //            step.output.min(),
+        //            step.output.max()
+        //        );
+        //    }
+        //}
         let output = trace.final_output().clone();
         let accuracy = argmax_compare(&given_output, &output.get_data().to_vec());
         accuracies.push(accuracy);

@@ -1,13 +1,13 @@
 use std::collections::HashMap;
 
 use crate::{
-    commit::{compute_betas_eval, identity_eval, precommit::PolyID, same_poly}, iop::verifier::Verifier, layers::{ContextAux, LayerProof}, lookup::{
+    commit::{compute_betas_eval, identity_eval, precommit::PolyID, same_poly}, iop::{context::ShapeStep, verifier::Verifier}, layers::{ContextAux, LayerProof}, lookup::{
         context::{LookupWitnessGen, TableType},
         logup_gkr::{
             prover::batch_prove as logup_batch_prove, structs::LogUpProof,
             verifier::verify_logup_proof,
         },
-    }, quantization::{Fieldizer, IntoElement}, tensor::{Number, Tensor}, Claim, Element, Prover
+    }, padding::PaddingMode, quantization::{Fieldizer, IntoElement}, tensor::{Number, Tensor}, Claim, Element, Prover
 };
 use anyhow::{Context, ensure, anyhow};
 use ff_ext::ExtensionField;
@@ -19,6 +19,7 @@ use multilinear_extensions::{
 };
 use serde::de::DeserializeOwned;
 use sumcheck::structs::{IOPProof, IOPVerifierState};
+use tract_onnx::prelude::tract_linalg::frame::reduce::max;
 use transcript::Transcript;
 
 use rayon::prelude::*;
@@ -62,12 +63,12 @@ where
 }
 
 impl OpInfo for Pooling {
-    fn input_shapes(&self) -> Vec<Vec<usize>> {
-        vec![] // works with any input shape
-    }
-
-    fn output_shapes(&self) -> Vec<Vec<usize>> {
-        vec![] // works with any output shape
+    fn output_shapes(&self, input_shapes: &[Vec<usize>], _padding_mode: PaddingMode) -> Vec<Vec<usize>> {
+        match self {
+            Pooling::Maxpool2D(maxpool2_d) => input_shapes.into_iter().map(|shape|
+                maxpool2_d.output_shape(shape)
+            ).collect()
+        }
     }
 
     fn num_outputs(&self, num_inputs: usize) -> usize {
@@ -86,7 +87,7 @@ impl OpInfo for Pooling {
 }
 
 impl<N: Number, E: ExtensionField> Op<N, E> for Pooling {
-    fn evaluate(&self, inputs: &[&Tensor<N>]) -> Result<LayerOut<N, E>, super::provable::ProvableOpError> {
+    fn evaluate(&self, inputs: &[&Tensor<N>], _unpadded_input_shapes: Vec<Vec<usize>>) -> Result<LayerOut<N, E>, super::provable::ProvableOpError> {
         if inputs.len() != 1 {
             return Err(super::provable::ProvableOpError::ParameterError(
                 "Pooling layer expects one input".to_string(),
@@ -204,14 +205,13 @@ where
     }
 }
 
-impl<E, T> VerifiableCtx<E, T> for PoolingCtx 
+impl<E> VerifiableCtx<E> for PoolingCtx 
 where 
     E: ExtensionField,
     E::BaseField: Serialize + DeserializeOwned,
     E: Serialize + DeserializeOwned,
-    T: Transcript<E>,
 {
-    fn verify(&self, proof: &LayerProof<E>, last_claims: &[Claim<E>], verifier: &mut Verifier<E, T>) -> Result<Vec<Claim<E>>, ProvableOpError> {
+    fn verify<T: Transcript<E>>(&self, proof: &LayerProof<E>, last_claims: &[Claim<E>], verifier: &mut Verifier<E, T>, _shape_step: &ShapeStep) -> Result<Vec<Claim<E>>, ProvableOpError> {
         if let LayerProof::Pooling(proof) = proof {
             let (constant_challenge, column_separation_challenge) = verifier.challenge_storage.as_ref().unwrap()
                 .get_challenges_by_name(&TableType::Range.name())
@@ -231,6 +231,12 @@ where
                 "Expected pooling layer proof and context".to_string()
             ))
         }
+    }
+
+    fn output_shapes(&self, input_shapes: &[Vec<usize>], padding_mode: PaddingMode) -> Vec<Vec<usize>> {
+        input_shapes.into_iter().map(|shape|
+            self.poolinfo.output_shape(&shape)
+        ).collect()
     }
 }
 
@@ -421,6 +427,9 @@ impl Pooling {
 }
 
 impl PoolingCtx {
+    pub fn output_shape(&self, input_shape: &[usize]) -> Vec<usize> {
+        maxpool2d_shape(input_shape)
+    }
     pub(crate) fn verify_pooling<E: ExtensionField, T: Transcript<E>>(
         &self,
         verifier: &mut Verifier<E, T>,
@@ -575,6 +584,10 @@ impl Maxpool2D {
         input.maxpool2d(self.kernel_size, self.stride)
     }
 
+    pub fn output_shape(&self, input_shape: &[usize]) -> Vec<usize> {
+        maxpool2d_shape(input_shape)
+    }
+
     /// Computes MLE evaluations related to proving Maxpool function.
     /// The outputs of this function are the four polynomials corresponding to the input to the Maxpool, each with two variables fixed
     /// so that PROD (Output - poly_i) == 0 at every evaluation point.
@@ -663,6 +676,19 @@ impl Maxpool2D {
     }
 }
 
+/// Assumes kernel=2, stride=2, padding=0, and dilation=1
+/// https://pytorch.org/docs/stable/generated/torch.nn.MaxPool2d.html
+pub fn maxpool2d_shape(input_shape: &[usize]) -> Vec<usize> {
+    let stride = 2usize;
+    let padding = 0usize;
+    let kernel = 2usize;
+    let dilation = 1usize;
+
+    let d1 = input_shape[0];
+    let d2 = (input_shape[1] + 2 * padding - dilation * (kernel - 1) - 1) / stride + 1;
+
+    vec![d1, d2, d2]
+}
 #[cfg(test)]
 mod tests {
     use crate::{commit::compute_betas_eval, default_transcript};
@@ -912,6 +938,7 @@ mod tests {
             // in order output - 00, output - 10, output - 01, output - 11, eq I believe
             let final_mle_evals = state.get_mle_final_evaluations();
 
+            // let (r1, r2) = (<F as Field>::random(&mut rng), <F as Field>::random(&mut rng));
             let [r1, r2] = [<F as Field>::random(&mut rng); 2];
             let one_minus_r1 = F::ONE - r1;
             let one_minus_r2 = F::ONE - r2;

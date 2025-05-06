@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::{
-    commit::{self, precommit}, iop::ChallengeStorage, layers::provable::{NodeCtx, NodeId, ProvableOpError, VerifiableCtx}, lookup::{context::TableType, logup_gkr::verifier::verify_logup_proof}, tensor::Tensor, Claim, VectorTranscript
+    commit::{self, precommit}, iop::{context::ShapeStep, ChallengeStorage}, layers::provable::{NodeCtx, NodeId, ProvableOpError, VerifiableCtx}, lookup::{context::TableType, logup_gkr::verifier::verify_logup_proof}, tensor::Tensor, try_unzip, Claim, VectorTranscript
 };
 use anyhow::{anyhow, ensure};
 use ff_ext::ExtensionField;
@@ -10,6 +10,7 @@ use itertools::Itertools;
 use multilinear_extensions::mle::{IntoMLE, MultilinearExtension};
 
 use serde::{Serialize, de::DeserializeOwned};
+use tracing::info;
 use transcript::Transcript;
 
 use super::{Context, Proof, TableProof};
@@ -106,6 +107,35 @@ where
             eval: computed_sum,
         };
 
+        let mut shape_steps: HashMap<NodeId, ShapeStep> = HashMap::new();
+        for (node_id, node_ctx) in ctx.steps_info.to_forward_iterator() {
+            let (unpadded_input_shapes, padded_input_shapes): (Vec<_>, Vec<_>) = try_unzip(node_ctx.inputs.iter().map(|edge| {
+                if let Some(n) = edge.node {
+                    let step = shape_steps.get(&n).ok_or(
+                        anyhow!("Shapes for node {n} not found")
+                    )?;
+                    ensure!(
+                        edge.index < step.unpadded_input_shape.len(),
+                        "Required input {} for node {n}, but there are only {} inputs shapes",
+                        edge.index,
+                        step.unpadded_input_shape.len(),
+                    );
+                    Ok((
+                        step.unpadded_input_shape[edge.index].clone(), step.padded_input_shape[edge.index].clone()
+                    ))
+                } else {
+                    ensure!(edge.index < ctx.unpadded_input_shapes.len(),
+                        "Required input {} of model, but there are only {} inputs shapes",
+                        edge.index,
+                        ctx.unpadded_input_shapes.len(),
+                    );
+                    Ok((ctx.unpadded_input_shapes[edge.index].clone(), io.input[edge.index].get_shape()))
+                }
+            }))?;
+            let shape_step = node_ctx.ctx.shape_step(&unpadded_input_shapes, &padded_input_shapes);
+            shape_steps.insert(node_id, shape_step);
+        }
+
         // 4. Verify each proof sequentially, Always make sure the proof corresponds to the expected type of proof in the context.
         // We have two `HashSet`s, one for the type of table used and one for the lookup challenges used
         let mut claims_by_layer: HashMap<NodeId, Vec<Claim<E>>> = HashMap::new();
@@ -113,13 +143,16 @@ where
             let node_proof = proof.steps.get(&node_id).ok_or(
                 anyhow!("Proof for node {} not found", node_id)
             )?;
+            let shape_step = shape_steps.get(&node_id).ok_or(
+                anyhow!("Shape for node {node_id} not found")
+            )?;
             println!(
                 "VERIFIER: Verifying proof {}",
                 node_proof.variant_name(),
             );
             let claims_for_verify = step.get_claims_for_node(&claims_by_layer, &output_claim)?;
             let claims = {
-                let res = step.ctx.verify(node_proof, &claims_for_verify, &mut self);
+                let res = step.ctx.verify(node_proof, &claims_for_verify, &mut self, shape_step);
                 if let Err(ProvableOpError::NotProvableLayer(_)) = res {
                     // we only propagate the claims, without changing them, as a non-provable layer
                     // shouldn't change the input values

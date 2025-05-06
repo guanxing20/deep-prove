@@ -6,7 +6,7 @@ use ff_ext::ExtensionField;
 use mpcs::BasefoldCommitment;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::collections::{BTreeSet, HashMap};
-use tracing::{debug, trace};
+use tracing::{debug, info, trace};
 use transcript::Transcript;
 
 /// Info related to the lookup protocol tables.
@@ -22,6 +22,8 @@ where
     pub num_vars: usize,
     pub table_commitment: BasefoldCommitment<E>,
 }
+
+pub const RESHAPE_FS_ID: u64 = 0xdeadbeef;
 
 /// Common information between prover and verifier
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -40,6 +42,45 @@ where
     pub weights: precommit::Context<E>,
     /// Context holding all the different table types we use in lookups
     pub lookup: LookupContext,
+    /// unpadded shape of the first initial input
+    pub unpadded_input_shapes: Vec<Vec<usize>>,
+}
+
+/// Similar to the InferenceStep but only records the input and output shapes
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ShapeStep {
+    pub unpadded_input_shape: Vec<Vec<usize>>,
+    pub unpadded_output_shape: Vec<Vec<usize>>,
+    pub padded_input_shape: Vec<Vec<usize>>,
+    pub padded_output_shape: Vec<Vec<usize>>,
+}
+
+impl ShapeStep {
+    pub fn new(
+        unpadded_input: Vec<Vec<usize>>,
+        padded_input: Vec<Vec<usize>>,
+        unpadded_output: Vec<Vec<usize>>,
+        padded_output: Vec<Vec<usize>>,
+    ) -> ShapeStep {
+        Self {
+            unpadded_input_shape: unpadded_input,
+            padded_input_shape: padded_input,
+            unpadded_output_shape: unpadded_output,
+            padded_output_shape: padded_output,
+        }
+    }
+    pub fn next_step(
+        last_step: &ShapeStep,
+        unpadded_output: Vec<Vec<usize>>,
+        padded_output: Vec<Vec<usize>>,
+    ) -> ShapeStep {
+        ShapeStep {
+            unpadded_input_shape: last_step.unpadded_output_shape.clone(),
+            unpadded_output_shape: unpadded_output,
+            padded_input_shape: last_step.padded_output_shape.clone(),
+            padded_output_shape: padded_output,
+        }
+    }
 }
 
 /// Auxiliary information for the context creation
@@ -73,7 +114,7 @@ where
         };
         let mut step_infos = Vec::with_capacity(model.layer_count());
         debug!("Context : layer info generation ...");
-        for (id, layer) in model.provable_layers() {
+        for (id, layer) in model.layers() {
             trace!(
                 "Context : {}-th layer {}info generation ...",
                 id,
@@ -83,6 +124,10 @@ where
             step_infos.push(info);
             ctx_aux = new_aux;
         }
+        info!(
+            "step_infos: {:?}",
+            step_infos.iter().map(|x| x.variant_name()).join(", ")
+        );
         debug!("Context : commitment generating ...");
         let commit_ctx = precommit::Context::generate_from_model(model)
             .context("can't generate context for commitment part")?;
@@ -92,6 +137,7 @@ where
             steps_info: step_infos.into_iter().rev().collect_vec(),
             weights: commit_ctx,
             lookup: lookup_ctx,
+            unpadded_input_shape: model.unpadded_input_shape(),
         })
     }*/
 
@@ -155,6 +201,7 @@ where
             steps_info: ModelCtx { nodes: step_infos },
             weights: commit_ctx,
             lookup: lookup_ctx,
+            unpadded_input_shapes: model.unpadded_input_shapes(),
         })
 
     }
@@ -197,8 +244,10 @@ where
                     info.ifft_aux.write_to_transcript(t);
                     info.hadamard.write_to_transcript(t);
                 }
-                LayerCtx::SchoolBookConvolution(_info) => {},
-                LayerCtx::Reshape(_) => {},
+                LayerCtx::SchoolBookConvolution(_info) => {}
+                LayerCtx::Reshape => {
+                    t.append_field_element(&E::BaseField::from(RESHAPE_FS_ID as u64));
+                }
             }
         }
         self.weights.write_to_transcript(t)?;

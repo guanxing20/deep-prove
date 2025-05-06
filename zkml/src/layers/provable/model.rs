@@ -5,7 +5,7 @@ use ff_ext::ExtensionField;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use transcript::Transcript;
 
-use crate::{layers::{provable::Edge, LayerCtx}, quantization::{Fieldizer, TensorFielder}, tensor::Number, Tensor, IO};
+use crate::{layers::{provable::Edge, LayerCtx}, padding::PaddingMode, quantization::{Fieldizer, TensorFielder}, tensor::Number, try_unzip, Tensor, IO};
 
 use super::{InferenceStep, Node, NodeCtx, NodeEgdes, NodeId, ProvableNode, ProvableOp, StepData};
 
@@ -13,6 +13,7 @@ use super::{InferenceStep, Node, NodeCtx, NodeEgdes, NodeId, ProvableNode, Prova
 pub struct Model<Op> {
     pub(crate) nodes: HashMap<NodeId, Node<Op>>,
     pub(crate) input_shapes: Vec<Vec<usize>>,
+    pub(crate) unpadded_input_shapes: Vec<Vec<usize>>,
 }
 
 pub type ProvableModel<E, T, D> = Model<Box<dyn ProvableOp<E, T, D>>>;
@@ -56,11 +57,26 @@ impl<Op> Model<Op> {
     }
 
     pub(crate) fn new_from_input_shapes(
-        input_shapes: Vec<Vec<usize>>
+        unpadded_input_shapes: Vec<Vec<usize>>
     ) -> Self {
+        let input_shapes = unpadded_input_shapes.iter().map(|shape|
+            shape.into_iter().map(|dim| dim.next_power_of_two()).collect()
+        ).collect(); 
         Self {
             nodes: HashMap::new(),
             input_shapes,
+            unpadded_input_shapes,
+        }
+    }
+
+    pub(crate) fn unpadded_input_shapes(&self) -> Vec<Vec<usize>> {
+        self.unpadded_input_shapes.clone()
+    }
+
+    pub(crate) fn input_shapes(&self, padding: PaddingMode) -> Vec<Vec<usize>> {
+        match padding {
+            PaddingMode::NoPadding => self.unpadded_input_shapes.clone(),
+            PaddingMode::Padding => self.input_shapes.clone(),
         }
     }
 
@@ -259,7 +275,8 @@ impl<'a, E: ExtensionField, T , N, D> Trace<'a, E, T, N, D> {
                         outputs: super::LayerOut { 
                                 outputs: step.step_data.outputs.outputs.into_iter().map(|out| out.to_fields()).collect(), 
                                 proving_data: step.step_data.outputs.proving_data, 
-                            }
+                            },
+                        unpadded_output_shapes: step.step_data.unpadded_output_shapes,
                         }
                     }
                 )
@@ -294,21 +311,35 @@ where
         };
         let iter = self.to_forward_iterator();
         for (node_id, node) in iter {
-            let inputs = node.inputs.iter().map(|edge|
+            let (inputs, shapes): (Vec<_>, Vec<_>) = try_unzip(node.inputs.iter().map(|edge|
                 Ok(if let Some(n) = &edge.node {
                     let step = trace.get_step(n);
                     ensure!(step.is_some(), "Node {} not found in trace", n);
                     let step = step.unwrap();
                     let outputs = step.step_data.outputs.outputs();
-                    outputs[edge.index]
+                    ensure!(edge.index < outputs.len(), 
+                        "Requested output {} for node {}, which has only {} outputs",
+                        edge.index, n, outputs.len()
+                    );
+                    // get shape of this output
+                    let out_shapes = &step.step_data.unpadded_output_shapes;
+                    (
+                        outputs[edge.index],
+                        out_shapes[edge.index].clone(),
+                    )
                 } else {
-                    &input[edge.index]
+                    (   
+                        &input[edge.index], 
+                        self.unpadded_input_shapes()[edge.index].clone(),
+                    )
                 })
-            ).collect::<anyhow::Result<Vec<_>>>()?;
-            let output = node.operation.evaluate(inputs.as_slice())?;
+            ))?;
+            let output_shapes = node.operation.output_shapes(&shapes, PaddingMode::NoPadding);
+            let output = node.operation.evaluate(inputs.as_slice(), shapes)?;
             let new_step = StepData {
                 inputs: inputs.into_iter().cloned().collect(),
                 outputs: output,
+                unpadded_output_shapes: output_shapes,
             };
             trace.new_step(node_id, InferenceStep {
                 op: &node.operation,
@@ -340,7 +371,7 @@ mod tests {
     use goldilocks::GoldilocksExt2;
     use transcript::BasicTranscript;
 
-    use crate::{layers::{activation::{Activation, Relu}, dense::Dense, provable::{Edge, OpInfo, ProvableNode}}, quantization::TensorFielder, testing::random_vector, verify, Context, Element, Prover, Tensor, IO};
+    use crate::{layers::{activation::{Activation, Relu}, dense::Dense, provable::{Edge, OpInfo, ProvableNode}}, padding::PaddingMode, quantization::TensorFielder, testing::random_vector, verify, Context, Element, Prover, Tensor, IO};
 
     use super::ProvableModel;
 
@@ -349,10 +380,10 @@ mod tests {
     type D = Element;
 
     fn build_test_model<const INPUT_SIZE: usize, const PADDED: bool>() -> ProvableModel<E, T, D> {
-        let padded_input_size = if PADDED {
-            INPUT_SIZE.next_power_of_two()
+        let (padded_input_size, padding_mode) = if PADDED {
+            (INPUT_SIZE.next_power_of_two(), PaddingMode::Padding)
         } else {
-            INPUT_SIZE
+            (INPUT_SIZE, PaddingMode::NoPadding)
         };
         let input_shape = vec![padded_input_size];
         let mut model  = ProvableModel::<
@@ -370,7 +401,7 @@ mod tests {
         } else {
             dense
         };
-        let dense_out_shape = &dense.output_shapes()[0];
+        let dense_out_shape = &dense.output_shapes(&model.input_shapes(padding_mode), padding_mode)[0];
         let input_node = model.add_node(ProvableNode::new(
             vec![Edge {
                 node: None, // it's the input tensor for the model
@@ -415,7 +446,7 @@ mod tests {
     fn test_model_inference() {
         const INPUT_SIZE: usize = 45;
         let model = build_test_model::<INPUT_SIZE, false>();
-        let input_shape = model.input_shapes[0].clone();        
+        let input_shape = model.input_shapes(PaddingMode::NoPadding)[0].clone();        
 
         let input = random_vector(input_shape.iter().product());
         let input_tensor = Tensor::new(input_shape, input);
@@ -431,7 +462,7 @@ mod tests {
 
         dbg!(&model);        
 
-        let input_tensor = Tensor::random(input_shape);
+        let input_tensor = Tensor::random(&input_shape);
         let trace = model.run(&[input_tensor]).unwrap();
         let mut tr: BasicTranscript<GoldilocksExt2> =
                             BasicTranscript::new(b"model");
