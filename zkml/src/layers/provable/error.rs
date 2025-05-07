@@ -21,17 +21,17 @@ impl Display for ProvableOpError {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         match self {
             ProvableOpError::ParameterError(s) => {
-                        write!(f, "Incorrect parameters passed to ProvableOp: {}", s)
-                    }
+                write!(f, "Incorrect parameters passed to ProvableOp: {}", s)
+            }
             ProvableOpError::TypeError(s) => {
-                        write!(f, "Incompatible type used in ProvableOp: {}", s)
-                    }
+                write!(f, "Incompatible type used in ProvableOp: {}", s)
+            }
             ProvableOpError::ConversionError(s) => {
-                        write!(f, "Provable Op conversion error: {}", s)
-                    }
+                write!(f, "Provable Op conversion error: {}", s)
+            }
             ProvableOpError::GenericError(error) => {
-                        write!(f, "ProvableOp generic error: {}", error.to_string())
-            },
+                write!(f, "ProvableOp generic error: {}", error.to_string())
+            }
             ProvableOpError::NotProvableLayer(s) => {
                 write!(f, "Trying to prove or verify a non provable layer: {s}")
             }

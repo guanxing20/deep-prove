@@ -65,7 +65,6 @@ fn parse_usize(s: &str) -> Result<usize, String> {
         .map_err(|e| format!("Invalid index: {}", e))
 }
 
-
 pub fn main() -> anyhow::Result<()> {
     let subscriber = fmt::Subscriber::builder()
         .with_env_filter(EnvFilter::from_default_env())
@@ -73,7 +72,7 @@ pub fn main() -> anyhow::Result<()> {
 
     tracing::subscriber::set_global_default(subscriber).expect("Failed to set global subscriber");
     let args = Args::parse();
-    //run(args).context("error running bench:")?;
+    // run(args).context("error running bench:")?;
 
     Ok(())
 }
@@ -221,7 +220,7 @@ fn run_float_model(raw_inputs: &InputJSON, model: &Model<f32>) -> f32 {
 
     calculate_average_accuracy(&accuracies)
 }
-#[cfg(not(test))]
+#[cfg(feature = "bench")]
 fn run(args: Args) -> anyhow::Result<()> {
     info!("[+] Reading raw input/output from {}", args.io);
     let run_inputs = InputJSON::from(&args.io, args.num_samples).context("loading input:")?;
@@ -307,20 +306,20 @@ fn run(args: Args) -> anyhow::Result<()> {
                 continue; // Skip to the next input without writing to CSV
             }
         };
-        // TEST
-        {
-            // This prints the min/max in f32 of the output of each layer for this run
-            let dequantized_trace = trace.dequantized(&md);
-            for step in dequantized_trace.steps.iter() {
-                println!(
-                    "DEQUANTIZED STEP {}: output min/max: {}/{}",
-                    step.id,
-                    step.output.min(),
-                    step.output.max()
-                );
-            }
-        }
-
+        // TEST:
+        //  This prints the min/max in f32 of the output of each layer for this run
+        //  Useful to check consistency with pytorch for example
+        //{
+        //    let dequantized_trace = trace.dequantized(&md);
+        //    for step in dequantized_trace.steps.iter() {
+        //        println!(
+        //            "DEQUANTIZED STEP {}: output min/max: {}/{}",
+        //            step.id,
+        //            step.output.min(),
+        //            step.output.max()
+        //        );
+        //    }
+        //}
         let output = trace.final_output().clone();
         let accuracy = argmax_compare(&given_output, &output.get_data().to_vec());
         accuracies.push(accuracy);

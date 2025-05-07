@@ -32,7 +32,7 @@ pub type Element = i128;
 
 /// Claim type to accumulate in this protocol, for a certain polynomial, known in the context.
 /// f(point) = eval
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct Claim<E> {
     point: Vec<E>,
     eval: E,
@@ -103,6 +103,17 @@ pub(crate) fn to_bit_sequence_le(
     (0..bit_length).map(move |i| ((num >> i) & 1) as usize)
 }
 
+pub(crate) fn try_unzip<I, C, T, E>(iter: I) -> Result<C, E>
+where
+    I: IntoIterator<Item = Result<T, E>>,
+    C: Extend<T> + Default,
+{
+    iter.into_iter().try_fold(C::default(), |mut c, r| {
+        c.extend([r?]);
+        Ok(c)
+    })
+}
+
 pub trait VectorTranscript<E: ExtensionField> {
     fn read_challenges(&mut self, n: usize) -> Vec<E>;
 }
@@ -140,6 +151,17 @@ pub fn argmax<T: PartialOrd>(v: &[T]) -> Option<usize> {
     Some(max_index)
 }
 
+pub trait NextPowerOfTwo {
+    /// Returns a new vector where each element is the next power of two.
+    fn next_power_of_two(&self) -> Self;
+}
+// For unsigned integer vectors
+impl NextPowerOfTwo for Vec<usize> {
+    fn next_power_of_two(&self) -> Self {
+        self.iter().map(|&i| i.next_power_of_two()).collect()
+    }
+}
+
 #[cfg(test)]
 mod test {
     use ark_std::rand::{Rng, thread_rng};
@@ -163,11 +185,11 @@ mod test {
 
     type E = GoldilocksExt2;
 
-    /*#[test]
-    fn test_model_run() -> anyhow::Result<()> {
-        test_model_run_helper()?;
-        Ok(())
-    }*/
+    // #[test]
+    // fn test_model_run() -> anyhow::Result<()> {
+    // test_model_run_helper()?;
+    // Ok(())
+    // }
 
     use std::path::PathBuf;
 
@@ -176,36 +198,36 @@ mod test {
         PathBuf::from(manifest_dir).parent().unwrap().to_path_buf()
     }
 
-    /*fn test_model_run_helper() -> anyhow::Result<()> {
-        let filepath = workspace_root().join("zkml/assets/model.onnx");
-        let (model, _md) = FloatOnnxLoader::new(&filepath.to_string_lossy())
-            .with_model_type(ModelType::MLP)
-            .build()?;
-
-        println!("[+] Loaded onnx file");
-        let ctx = Context::<E>::generate(&model, None).expect("unable to generate context");
-        println!("[+] Setup parameters");
-
-        let shape = model.input_shape();
-        assert_eq!(shape.len(), 1);
-        let input = Tensor::random(vec![shape[0] - 1]);
-        let input = model.prepare_input(input);
-
-        let trace = model.run(input.clone()).unwrap();
-        let output = trace.final_output().clone();
-        println!("[+] Run inference. Result: {:?}", output);
-
-        let mut prover_transcript = default_transcript();
-        let prover = Prover::<_, _>::new(&ctx, &mut prover_transcript);
-        println!("[+] Run prover");
-        let proof = prover.prove(trace).expect("unable to generate proof");
-
-        let mut verifier_transcript = default_transcript();
-        let io = IO::new(input.to_fields(), output.to_fields());
-        verify::<_, _>(ctx, proof, io, &mut verifier_transcript).expect("invalid proof");
-        println!("[+] Verify proof: valid");
-        Ok(())
-    }*/
+    // fn test_model_run_helper() -> anyhow::Result<()> {
+    // let filepath = workspace_root().join("zkml/assets/model.onnx");
+    // let (model, _md) = FloatOnnxLoader::new(&filepath.to_string_lossy())
+    // .with_model_type(ModelType::MLP)
+    // .build()?;
+    //
+    // println!("[+] Loaded onnx file");
+    // let ctx = Context::<E>::generate(&model, None).expect("unable to generate context");
+    // println!("[+] Setup parameters");
+    //
+    // let shape = model.input_shape();
+    // assert_eq!(shape.len(), 1);
+    // let input = Tensor::random(&vec![shape[0] - 1]);
+    // let input = model.prepare_input(input);
+    //
+    // let trace = model.run(input.clone()).unwrap();
+    // let output = trace.final_output().clone();
+    // println!("[+] Run inference. Result: {:?}", output);
+    //
+    // let mut prover_transcript = default_transcript();
+    // let prover = Prover::<_, _>::new(&ctx, &mut prover_transcript);
+    // println!("[+] Run prover");
+    // let proof = prover.prove(trace).expect("unable to generate proof");
+    //
+    // let mut verifier_transcript = default_transcript();
+    // let io = IO::new(input.to_fields(), output.to_fields());
+    // verify::<_, _>(ctx, proof, io, &mut verifier_transcript).expect("invalid proof");
+    // println!("[+] Verify proof: valid");
+    // Ok(())
+    // }
 
     // TODO: move below code to a vector module
 

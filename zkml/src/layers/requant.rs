@@ -1,15 +1,27 @@
 use crate::{
-    commit::same_poly, iop::verifier::Verifier, layers::LayerProof, lookup::{context::LookupWitnessGen, logup_gkr::{prover::batch_prove as logup_batch_prove, verifier::verify_logup_proof}}, quantization, Claim, Prover, Tensor
+    Claim, Prover, Tensor,
+    commit::same_poly,
+    iop::{context::ShapeStep, verifier::Verifier},
+    layers::LayerProof,
+    lookup::{
+        context::LookupWitnessGen,
+        logup_gkr::{prover::batch_prove as logup_batch_prove, verifier::verify_logup_proof},
+    },
+    padding::PaddingMode,
+    quantization,
 };
 use anyhow::{Result, anyhow};
 use ff::Field;
 use ff_ext::ExtensionField;
 use gkr::util::ceil_log2;
 use itertools::Itertools;
-use multilinear_extensions::mle::{IntoMLE, MultilinearExtension};
+use multilinear_extensions::mle::IntoMLE;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use statrs::statistics::{Data, Distribution};
-use std::{collections::HashMap, ops::{Add, Mul, Sub}};
+use std::{
+    collections::HashMap,
+    ops::{Add, Mul, Sub},
+};
 use tracing::{debug, warn};
 use transcript::Transcript;
 
@@ -21,7 +33,13 @@ use crate::{
     quantization::Fieldizer,
 };
 
-use super::{provable::{StepData, LayerOut, NodeId, Op, OpInfo, ProvableOp, ProvableOpError, ProveInfo, VerifiableCtx}, LayerCtx};
+use super::{
+    LayerCtx,
+    provable::{
+        Evaluate, LayerOut, NodeId, Op, OpInfo, ProvableOp, ProvableOpError, ProveInfo, StepData,
+        VerifiableCtx,
+    },
+};
 
 enum RequantResult {
     Ok(Element),
@@ -69,12 +87,12 @@ where
 }
 
 impl OpInfo for Requant {
-    fn input_shapes(&self) -> Vec<Vec<usize>> {
-        vec![] // works with any input shape
-    }
-
-    fn output_shapes(&self) -> Vec<Vec<usize>> {
-        self.input_shapes() // preserve the input shape
+    fn output_shapes(
+        &self,
+        input_shapes: &[Vec<usize>],
+        _padding_mode: PaddingMode,
+    ) -> Vec<Vec<usize>> {
+        input_shapes.to_vec() // preserve the input shape
     }
 
     fn num_outputs(&self, num_inputs: usize) -> usize {
@@ -88,10 +106,18 @@ impl OpInfo for Requant {
             (self.range << 1).ilog2() as usize,
         )
     }
+
+    fn is_provable(&self) -> bool {
+        true
+    }
 }
 
-impl<E: ExtensionField> Op<Element, E> for Requant {
-    fn evaluate(&self, inputs: &[&Tensor<Element>]) -> Result<LayerOut<Element, E>, ProvableOpError> {
+impl Evaluate<Element> for Requant {
+    fn evaluate<E: ExtensionField>(
+        &self,
+        inputs: &[&Tensor<Element>],
+        _unpadded_input_shapes: Vec<Vec<usize>>,
+    ) -> Result<LayerOut<Element, E>, ProvableOpError> {
         if inputs.len() != 1 {
             return Err(ProvableOpError::ParameterError(
                 "Requant layer expects one input".to_string(),
@@ -102,16 +128,12 @@ impl<E: ExtensionField> Op<Element, E> for Requant {
     }
 }
 
-impl<E> ProveInfo<E> for Requant 
+impl<E> ProveInfo<E> for Requant
 where
     E: ExtensionField + DeserializeOwned,
     E::BaseField: Serialize + DeserializeOwned,
 {
-    fn step_info(
-        &self,
-        id: PolyID,
-        mut aux: ContextAux,
-    ) -> (LayerCtx<E>, ContextAux) {
+    fn step_info(&self, id: PolyID, mut aux: ContextAux) -> (LayerCtx<E>, ContextAux) {
         aux.tables.insert(TableType::Range);
         (
             LayerCtx::Requant(RequantCtx {
@@ -130,35 +152,38 @@ where
     }
 }
 
-impl<E, T> ProvableOp<E, T, Element> for Requant 
-where 
+impl<E> ProvableOp<E> for Requant
+where
     E: ExtensionField,
     E::BaseField: Serialize + DeserializeOwned,
     E: Serialize + DeserializeOwned,
-    T: Transcript<E>,
 {
-    fn is_provable(&self) -> bool {
-        true
-    }
-    
-    fn prove(&self, id: NodeId, ctx: &LayerCtx<E>, last_claims: Vec<Claim<E>>, step_data: &super::provable::StepData<E, E>, prover: &mut Prover<E, T>) -> std::result::Result<Vec<Claim<E>>, ProvableOpError> {
-        if let LayerCtx::Requant(info) = ctx {
-            Ok(vec![self.prove_step(
-                prover, 
-                &last_claims[0], 
-                &step_data.outputs.outputs()[0].get_data(), 
-                info,
-                id,
-            )?])
-        } else {
-            Err(ProvableOpError::ParameterError(
-                "Requant layer expects RequantCtx".to_string(),
-            ))
-        }
+    type Ctx = RequantCtx;
+
+    fn prove<T: Transcript<E>>(
+        &self,
+        id: NodeId,
+        ctx: &Self::Ctx,
+        last_claims: Vec<Claim<E>>,
+        step_data: &super::provable::StepData<E, E>,
+        prover: &mut Prover<E, T>,
+    ) -> std::result::Result<Vec<Claim<E>>, ProvableOpError> {
+        Ok(vec![self.prove_step(
+            prover,
+            &last_claims[0],
+            &step_data.outputs.outputs()[0].get_data(),
+            ctx,
+            id,
+        )?])
     }
 
-    fn gen_lookup_witness(&self, id: NodeId, gen: &mut LookupWitnessGen<E>, step_data: &StepData<Element, E>) -> Result<(), ProvableOpError> {
-        if step_data.inputs.len() != 1 { 
+    fn gen_lookup_witness(
+        &self,
+        id: NodeId,
+        gen: &mut LookupWitnessGen<E>,
+        step_data: &StepData<Element, E>,
+    ) -> Result<(), ProvableOpError> {
+        if step_data.inputs.len() != 1 {
             return Err(ProvableOpError::ParameterError(
                 "Requant layer expects exactly one input tensor".to_string(),
             ));
@@ -171,12 +196,13 @@ where
         }
 
         gen.tables.insert(TableType::Range);
-        let table_lookup_map = gen.lookups
+        let table_lookup_map = gen
+            .lookups
             .entry(TableType::Range)
             .or_insert_with(|| HashMap::default());
 
         let (merged_lookups, column_evals) =
-            self.gen_lookup_witness::<E>(step_data.inputs[0].get_data());
+            self.lookup_witness::<E>(step_data.inputs[0].get_data());
         merged_lookups
             .into_iter()
             .for_each(|val| *table_lookup_map.entry(val).or_insert(0u64) += 1);
@@ -190,39 +216,60 @@ where
                 .collect(),
         ));
 
-        gen.lookups_no_challenges.push((column_evals, 1, TableType::Range));
+        gen.lookups_no_challenges
+            .push((column_evals, 1, TableType::Range));
 
         Ok(())
     }
-} 
+}
 
-impl<E, T> VerifiableCtx<E, T> for RequantCtx
-where 
+impl<E> Op<E, Element> for Requant
+where
     E: ExtensionField,
     E::BaseField: Serialize + DeserializeOwned,
     E: Serialize + DeserializeOwned,
-    T: Transcript<E>,
 {
-    fn verify(&self, proof: &LayerProof<E>, last_claims: &[Claim<E>], verifier: &mut Verifier<E, T>) -> std::result::Result<Vec<Claim<E>>, ProvableOpError> {
-        if let LayerProof::Requant(proof) = proof {
-            let (constant_challenge, column_separation_challenge) = verifier.challenge_storage.as_ref().unwrap()
-                .get_challenges_by_name(&TableType::Range.name())
-                .ok_or(anyhow!(
-                    "Couldn't get challenges for LookupType: {}",
-                    TableType::Range.name()
-                ))?;
-            Ok(vec![self.verify_requant(
-                verifier,
-                last_claims[0].clone(),
-                &proof,
-                constant_challenge,
-                column_separation_challenge,
-            )?])
-        } else {
-            Err(ProvableOpError::TypeError(
-            "Expected requant layer proof and context".to_string()
-            ))
-        }
+}
+
+impl<E> VerifiableCtx<E> for RequantCtx
+where
+    E: ExtensionField,
+    E::BaseField: Serialize + DeserializeOwned,
+    E: Serialize + DeserializeOwned,
+{
+    type Proof = RequantProof<E>;
+
+    fn verify<T: Transcript<E>>(
+        &self,
+        proof: &Self::Proof,
+        last_claims: &[Claim<E>],
+        verifier: &mut Verifier<E, T>,
+        _shape_step: &ShapeStep,
+    ) -> std::result::Result<Vec<Claim<E>>, ProvableOpError> {
+        let (constant_challenge, column_separation_challenge) = verifier
+            .challenge_storage
+            .as_ref()
+            .unwrap()
+            .get_challenges_by_name(&TableType::Range.name())
+            .ok_or(anyhow!(
+                "Couldn't get challenges for LookupType: {}",
+                TableType::Range.name()
+            ))?;
+        Ok(vec![self.verify_requant(
+            verifier,
+            last_claims[0].clone(),
+            &proof,
+            constant_challenge,
+            column_separation_challenge,
+        )?])
+    }
+
+    fn output_shapes(
+        &self,
+        input_shapes: &[Vec<usize>],
+        _padding_mode: PaddingMode,
+    ) -> Vec<Vec<usize>> {
+        input_shapes.to_vec()
     }
 }
 
@@ -315,10 +362,8 @@ impl Requant {
         let res = tmp - (max_bit >> self.right_shift);
         if !(res >= *quantization::MIN && res <= *quantization::MAX) {
             warn!("{} is NOT quantized correctly: res {}", e, res);
-            // RequantResult::OutOfRange(res.clamp(*quantization::MIN, *quantization::MAX))
             RequantResult::OutOfRange(res)
         } else {
-            // warn!("{} is OK quantized correctl: res {}", e, res);
             RequantResult::Ok(res)
         }
     }
@@ -404,7 +449,7 @@ impl Requant {
         mle_evals
     }
 
-    pub fn gen_lookup_witness<E: ExtensionField>(
+    pub fn lookup_witness<E: ExtensionField>(
         &self,
         input: &[Element],
     ) -> (Vec<Element>, Vec<Vec<E::BaseField>>) {
@@ -534,11 +579,11 @@ impl Requant {
             point: point.clone(),
             eval: first_claim.eval - E::from((*quantization::RANGE / 2) as u64),
         };
-        println!("correct claim eval: {:?}", corrected_claim.eval);
-        println!(
-            "output eval: {:?}",
-            output.to_vec().into_mle().evaluate(&corrected_claim.point)
-        );
+        // println!("correct claim eval: {:?}", corrected_claim.eval);
+        // println!(
+        //    "output eval: {:?}",
+        //    output.to_vec().into_mle().evaluate(&corrected_claim.point)
+        //);
         // Add the claim used in the activation function
         same_poly_prover.add_claim(corrected_claim)?;
         let claim_acc_proof = same_poly_prover.prove(&same_poly_ctx, prover.transcript)?;
@@ -546,12 +591,14 @@ impl Requant {
         prover
             .witness_prover
             .add_claim(requant_info.poly_id, claim_acc_proof.extract_claim())?;
-        println!("REQUANT: WITNESS Poly ID: {}", requant_info.poly_id);
 
-        prover.push_proof(id, LayerProof::Requant(RequantProof {
-            io_accumulation: claim_acc_proof,
-            lookup: logup_proof,
-        }));
+        prover.push_proof(
+            id,
+            LayerProof::Requant(RequantProof {
+                io_accumulation: claim_acc_proof,
+                lookup: logup_proof,
+            }),
+        );
 
         Ok(Claim {
             point,
@@ -618,123 +665,3 @@ impl RequantCtx {
         Ok(Claim { point, eval })
     }
 }
-
-//#[cfg(test)]
-// mod tests {
-//    use ark_std::rand::rngs::StdRng;
-//
-//    use super::*;
-//    use crate::quantization::range_from_weight;
-//    use crate::tensor::Tensor;
-//    use crate::ScalingFactor;
-//
-//    #[test]
-//    fn test_requant_shift_element() {
-//        let n = 10;
-//        let v1 = Tensor::random_seed(vec![n],Some(15420));
-//        let v2= Tensor::random_seed(vec![n],Some(1567892312));
-//        assert!(v1.get_data().iter().all(|e| *e >= *quantization::MIN && *e <= *quantization::MAX));
-//        assert!(v2.get_data().iter().all(|e| *e >= *quantization::MIN && *e <= *quantization::MAX));
-//        let res = v1.mul(&v2);
-//        let s1 = ScalingFactor::from_tensor(&v1);
-//        let s2 = ScalingFactor::from_tensor(&v2);
-//        let s_res = ScalingFactor::from_tensor(&res);
-//        println!("v1: {:?}", v1.get_data());
-//        println!("v2: {:?}", v2.get_data());
-//        println!("res: {:?}", res.get_data());
-//        println!("s1: {:?}", s1);
-//        println!("s2: {:?}", s2);
-//        println!("s_res: {:?}", s_res);
-//        let shift = s1.shift(s2, s_res);
-//        println!("shift: {:?}", shift);
-//        let res_max = res.get_data().iter().max().unwrap();
-//        let res_min = res.get_data().iter().min().unwrap();
-//        let requant_info = Requant {
-//            right_shift:  shift,
-//            range: (res_max - res_min) as usize,
-//            after_range: 1 << *quantization::BIT_LEN,
-//        };
-//        let res_requant = requant_info.op(&res);
-//        println!("res_requant: {:?}", res_requant.get_data());
-//    }
-//
-//    use ark_std::rand::SeedableRng;
-//    use ark_std::rand::Rng;
-//    #[test]
-//    fn test_requant_shift_model_like() {
-//        let n = 10;
-//        let mut rng = StdRng::seed_from_u64(15420);
-//        let input_min = -1.0;
-//        let input_max = 1.0;
-//        println!("1");
-//        let s_input = ScalingFactor::from_span(input_min, input_max);
-//        let inputf :Vec<f32> = (0..n).map(|_| { rng.gen_range(input_min..=input_max) }).collect_vec();
-//        let input: Vec<Element> = inputf.iter().map(|e| s_input.quantize(&e)).collect_vec();
-//        let min_f32 = -0.2;
-//        let max_f32 = 0.2;
-//        println!("2");
-//        let s_model = ScalingFactor::from_span(min_f32, max_f32);
-//        println!("3");
-//        let s_input = ScalingFactor::from_span(input_min, input_max);
-//        println!("4");
-//        let modelf :Vec<f32> = (0..n).map(|_| { rng.gen_range(min_f32..=max_f32) }).collect_vec();
-//        let model :Vec<Element> = modelf.iter().map(|e| s_model.quantize(&e)).collect_vec();
-//
-//        let inputf = Tensor::new(vec![n], inputf);
-//        let modelf  = Tensor::new(vec![n], modelf);
-//        println!("5");
-//        let resf = inputf.mul(&modelf);
-//        println!("6");
-//        let s_resf = ScalingFactor::from_tensor(&resf);
-//        let s_resft = ScalingFactor::new(resf.get_data().iter().map(|e| e.abs()).fold(0.0f32,|a,b| a.max(b)));
-//        println!("7");
-//        let input = Tensor::new(vec![n], input);
-//        let model= Tensor::new(vec![n], model);
-//        assert!(input.get_data().iter().all(|e| *e >= *quantization::MIN && *e <= *quantization::MAX));
-//        assert!(model.get_data().iter().all(|e| *e >= *quantization::MIN && *e <= *quantization::MAX));
-//        let (mins,maxs) : (Vec<_>,Vec<_>)= model.get_data().iter().map(|e| range_from_weight(e)).unzip();
-//        let res_min = mins.iter().min().unwrap();
-//        let res_max = maxs.iter().max().unwrap();
-//        let s_res = ScalingFactor::from_span(*res_min as f32, *res_max as f32);
-//        let res = input.mul(&model);
-//        println!("input: {:?}", input.get_data());
-//        println!("model: {:?}", model.get_data());
-//        println!("res: {:?}", res.get_data());
-//        println!("s1: {:?}", s_input);
-//        println!("s2: {:?}", s_model);
-//        println!("s_resf: {:?}", s_resf);
-//        println!("s_res: {:?}", s_res);
-//        let shift = s_input.shift(s_model, s_res);
-//        let shiftf= s_input.shift(s_model, s_resf);
-//        let shiftft = s_input.shift(s_model, s_resft);
-//        println!("shift: {:?}", shift);
-//        println!("shiftf: {:?}", shiftf);
-//        println!("shiftft: {:?}", shiftft);
-//        let requant = Requant {
-//            right_shift:  shift,
-//            // theoretical res_max and res_min at this point ! since we dont know the input when we create requant
-//            range: (res_max - res_min) as usize,
-//            after_range: 1 << *quantization::BIT_LEN,
-//        };
-//        let res_requant = requant.op(&res);
-//        let requant = Requant {
-//            right_shift:  shiftf,
-//            // theoretical res_max and res_min at this point ! since we dont know the input when we create requant
-//            range: (res_max - res_min) as usize,
-//            after_range: 1 << *quantization::BIT_LEN,
-//        };
-//        let res_requantf = requant.op(&res);
-//        let requant = Requant {
-//            right_shift:  shiftft,
-//            // theoretical res_max and res_min at this point ! since we dont know the input when we create requant
-//            range: (res_max - res_min) as usize,
-//            after_range: 1 << *quantization::BIT_LEN,
-//        };
-//        let res_requantft= requant.op(&res);
-//        println!("res_requant: {:?}", res_requant.get_data());
-//        println!("res_requantf: {:?}", res_requantf.get_data());
-//        println!("res_requantft: {:?}", res_requantft.get_data());
-//        //assert!(res_requant.get_data().iter().filter(|r| **r == 0 || **r == -1).collect::<Vec<_>>().len() < res_requant.get_data().len());
-//    }
-//
-//}
