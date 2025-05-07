@@ -185,11 +185,11 @@ mod test {
 
     type E = GoldilocksExt2;
 
-    /*#[test]
-    fn test_model_run() -> anyhow::Result<()> {
-        test_model_run_helper()?;
-        Ok(())
-    }*/
+    // #[test]
+    // fn test_model_run() -> anyhow::Result<()> {
+    // test_model_run_helper()?;
+    // Ok(())
+    // }
 
     use std::path::PathBuf;
 
@@ -198,36 +198,36 @@ mod test {
         PathBuf::from(manifest_dir).parent().unwrap().to_path_buf()
     }
 
-    /*fn test_model_run_helper() -> anyhow::Result<()> {
-        let filepath = workspace_root().join("zkml/assets/model.onnx");
-        let (model, _md) = FloatOnnxLoader::new(&filepath.to_string_lossy())
-            .with_model_type(ModelType::MLP)
-            .build()?;
-
-        println!("[+] Loaded onnx file");
-        let ctx = Context::<E>::generate(&model, None).expect("unable to generate context");
-        println!("[+] Setup parameters");
-
-        let shape = model.input_shape();
-        assert_eq!(shape.len(), 1);
-        let input = Tensor::random(&vec![shape[0] - 1]);
-        let input = model.prepare_input(input);
-
-        let trace = model.run(input.clone()).unwrap();
-        let output = trace.final_output().clone();
-        println!("[+] Run inference. Result: {:?}", output);
-
-        let mut prover_transcript = default_transcript();
-        let prover = Prover::<_, _>::new(&ctx, &mut prover_transcript);
-        println!("[+] Run prover");
-        let proof = prover.prove(trace).expect("unable to generate proof");
-
-        let mut verifier_transcript = default_transcript();
-        let io = IO::new(input.to_fields(), output.to_fields());
-        verify::<_, _>(ctx, proof, io, &mut verifier_transcript).expect("invalid proof");
-        println!("[+] Verify proof: valid");
-        Ok(())
-    }*/
+    // fn test_model_run_helper() -> anyhow::Result<()> {
+    // let filepath = workspace_root().join("zkml/assets/model.onnx");
+    // let (model, _md) = FloatOnnxLoader::new(&filepath.to_string_lossy())
+    // .with_model_type(ModelType::MLP)
+    // .build()?;
+    //
+    // println!("[+] Loaded onnx file");
+    // let ctx = Context::<E>::generate(&model, None).expect("unable to generate context");
+    // println!("[+] Setup parameters");
+    //
+    // let shape = model.input_shape();
+    // assert_eq!(shape.len(), 1);
+    // let input = Tensor::random(&vec![shape[0] - 1]);
+    // let input = model.prepare_input(input);
+    //
+    // let trace = model.run(input.clone()).unwrap();
+    // let output = trace.final_output().clone();
+    // println!("[+] Run inference. Result: {:?}", output);
+    //
+    // let mut prover_transcript = default_transcript();
+    // let prover = Prover::<_, _>::new(&ctx, &mut prover_transcript);
+    // println!("[+] Run prover");
+    // let proof = prover.prove(trace).expect("unable to generate proof");
+    //
+    // let mut verifier_transcript = default_transcript();
+    // let io = IO::new(input.to_fields(), output.to_fields());
+    // verify::<_, _>(ctx, proof, io, &mut verifier_transcript).expect("invalid proof");
+    // println!("[+] Verify proof: valid");
+    // Ok(())
+    // }
 
     // TODO: move below code to a vector module
 

@@ -398,9 +398,18 @@ impl Model<f32> {
 #[cfg(test)]
 pub(crate) mod test {
     use crate::{
+        ScalingFactor,
         layers::{
-            activation::{Activation, Relu}, convolution::Convolution, dense::Dense, pooling::{Maxpool2D, Pooling, MAXPOOL2D_KERNEL_SIZE}, provable::evaluate_layer, requant::Requant, Layer
-        }, quantization, testing::{random_bool_vector, random_vector}, ScalingFactor
+            Layer,
+            activation::{Activation, Relu},
+            convolution::{Convolution, SchoolBookConv},
+            dense::Dense,
+            pooling::{MAXPOOL2D_KERNEL_SIZE, Maxpool2D, Pooling},
+            provable::evaluate_layer,
+            requant::Requant,
+        },
+        quantization,
+        testing::{random_bool_vector, random_vector},
     };
     use ark_std::rand::{Rng, RngCore, thread_rng};
     use ff_ext::ExtensionField;
@@ -618,14 +627,14 @@ pub(crate) mod test {
             model.run::<F>(input.clone()).unwrap();
 
         let mut model2 = Model::new(&input_shape);
-        model2.add_layer(Layer::SchoolBookConvolution(Convolution::new(
-            trad_conv1, bias1,
+        model2.add_layer(Layer::SchoolBookConvolution(SchoolBookConv(
+            Convolution::new(trad_conv1, bias1),
         )));
-        model2.add_layer(Layer::SchoolBookConvolution(Convolution::new(
-            trad_conv2, bias2,
+        model2.add_layer(Layer::SchoolBookConvolution(SchoolBookConv(
+            Convolution::new(trad_conv2, bias2),
         )));
-        model2.add_layer(Layer::SchoolBookConvolution(Convolution::new(
-            trad_conv3, bias3,
+        model2.add_layer(Layer::SchoolBookConvolution(SchoolBookConv(
+            Convolution::new(trad_conv3, bias3),
         )));
         let trace2 = model.run::<F>(input.clone()).unwrap();
 
@@ -670,8 +679,14 @@ pub(crate) mod test {
         ]);
         let input_shape = vec![dense1.ncols()];
         let input = Tensor::<Element>::random(&input_shape);
-        let output1 = evaluate_layer::<GoldilocksExt2, _, _>(&dense1, &vec![&input], None).unwrap().outputs()[0].clone();
-        let final_output = evaluate_layer::<GoldilocksExt2, _, _>(&dense2, &vec![&output1], None).unwrap().outputs()[0].clone();
+        let output1 = evaluate_layer::<GoldilocksExt2, _, _>(&dense1, &vec![&input], None)
+            .unwrap()
+            .outputs()[0]
+            .clone();
+        let final_output = evaluate_layer::<GoldilocksExt2, _, _>(&dense2, &vec![&output1], None)
+            .unwrap()
+            .outputs()[0]
+            .clone();
 
         let mut model = Model::<Element>::new(&input_shape);
         model.add_layer(Layer::Dense(dense1.clone()));
@@ -833,112 +848,112 @@ pub(crate) mod test {
     use crate::{Context, IO, Prover, verify};
     use transcript::BasicTranscript;
 
-    /* Temporary comment to disable compilation errors
-    #[test]
-    #[ignore = "This test should be deleted since there is no requant and it is not testing much"]
-    fn test_single_matvec_prover() {
-        let w1 = random_vector_quant(1024 * 1024);
-        let conv1 = Tensor::new(vec![1024, 1024], w1.clone());
-        let w2 = random_vector_quant(1024);
-        let conv2 = Tensor::new(vec![1024], w2.clone());
-        let input_shape = vec![1024];
-        let input = Tensor::random(&input_shape);
-
-        let mut model = Model::new(&input_shape);
-        model.add_layer(Layer::Dense(Dense::new(conv1, conv2)));
-        model.describe();
-        let trace: crate::model::InferenceTrace<'_, _, GoldilocksExt2> =
-            model.run::<F>(input.clone()).unwrap();
-        let mut tr: BasicTranscript<GoldilocksExt2> = BasicTranscript::new(b"m2vec");
-        let ctx =
-            Context::<GoldilocksExt2>::generate(&model, None).expect("Unable to generate context");
-        let output = trace.final_output().clone();
-        let prover: Prover<'_, GoldilocksExt2, BasicTranscript<GoldilocksExt2>> =
-            Prover::new(&ctx, &mut tr);
-        let proof = prover.prove(trace).expect("unable to generate proof");
-        let mut verifier_transcript: BasicTranscript<GoldilocksExt2> =
-            BasicTranscript::new(b"m2vec");
-        let io = IO::new(input.to_fields(), output.to_fields());
-        verify::<_, _>(ctx, proof, io, &mut verifier_transcript).unwrap();
-    }
-
-    #[test]
-    fn test_single_cnn_prover() {
-        let n_w = 1 << 2;
-        let k_w = 1 << 4;
-        let n_x = 1 << 5;
-        let k_x = 1 << 1;
-
-        let in_dimensions: Vec<Vec<usize>> =
-            vec![vec![k_x, n_x, n_x], vec![16, 29, 29], vec![4, 26, 26]];
-
-        let conv1 = Tensor::random(&vec![k_w, k_x, n_w, n_w]);
-        let input_shape = vec![k_x, n_x, n_x];
-        let input = Tensor::random(&input_shape);
-
-        let mut model = Model::new(&input_shape);
-        model.add_layer(Layer::Convolution(
-            Convolution::new(conv1.clone(), Tensor::random(&vec![conv1.kw()]))
-                .into_padded_and_ffted(&in_dimensions[0]),
-        ));
-        model.describe();
-        let trace: crate::model::InferenceTrace<'_, _, GoldilocksExt2> =
-            model.run::<F>(input.clone()).unwrap();
-        let mut tr: BasicTranscript<GoldilocksExt2> = BasicTranscript::new(b"m2vec");
-        let ctx = Context::<GoldilocksExt2>::generate(&model, Some(input.get_shape()))
-            .expect("Unable to generate context");
-        let output = trace.final_output().clone();
-
-        let prover: Prover<'_, GoldilocksExt2, BasicTranscript<GoldilocksExt2>> =
-            Prover::new(&ctx, &mut tr);
-        let proof = prover.prove(trace).expect("unable to generate proof");
-
-        let mut verifier_transcript: BasicTranscript<GoldilocksExt2> =
-            BasicTranscript::new(b"m2vec");
-        let io = IO::new(input.to_fields(), output.to_fields());
-        verify::<_, _>(ctx, proof, io, &mut verifier_transcript).unwrap();
-    }
-
-    #[test]
-    fn test_cnn_prover() {
-        for i in 0..3 {
-            for j in 2..5 {
-                for l in 0..4 {
-                    for n in 1..(j - 1) {
-                        let n_w = 1 << n;
-                        let k_w = 1 << l;
-                        let n_x = 1 << j;
-                        let k_x = 1 << i;
-
-                        let in_dimensions: Vec<Vec<usize>> =
-                            vec![vec![k_x, n_x, n_x], vec![16, 29, 29], vec![4, 26, 26]];
-                        let input_shape = vec![k_x, n_x, n_x];
-                        let conv1 = Tensor::random(&vec![k_w, k_x, n_w, n_w]);
-                        let mut model = Model::<Element>::new(&input_shape);
-                        let input = Tensor::random(&input_shape);
-                        model.add_layer(Layer::Convolution(
-                            Convolution::new(conv1.clone(), Tensor::random(&vec![conv1.kw()]))
-                                .into_padded_and_ffted(&in_dimensions[0]),
-                        ));
-                        model.describe();
-                        let trace: crate::model::InferenceTrace<'_, _, GoldilocksExt2> =
-                            model.run::<F>(input.clone()).unwrap();
-                        let mut tr: BasicTranscript<GoldilocksExt2> =
-                            BasicTranscript::new(b"m2vec");
-                        let ctx =
-                            Context::<GoldilocksExt2>::generate(&model, Some(input.get_shape()))
-                                .expect("Unable to generate context");
-                        let output = trace.final_output().clone();
-                        let prover: Prover<'_, GoldilocksExt2, BasicTranscript<GoldilocksExt2>> =
-                            Prover::new(&ctx, &mut tr);
-                        let proof = prover.prove(trace).expect("unable to generate proof");
-                        let mut verifier_transcript: BasicTranscript<GoldilocksExt2> =
-                            BasicTranscript::new(b"m2vec");
-                        let io = IO::new(input.to_fields(), output.to_fields());
-                        verify::<_, _>(ctx, proof, io, &mut verifier_transcript).unwrap();
-                    }
-                }
-            }
-        }
-    }*/
+    // Temporary comment to disable compilation errors
+    // #[test]
+    // #[ignore = "This test should be deleted since there is no requant and it is not testing much"]
+    // fn test_single_matvec_prover() {
+    // let w1 = random_vector_quant(1024 * 1024);
+    // let conv1 = Tensor::new(vec![1024, 1024], w1.clone());
+    // let w2 = random_vector_quant(1024);
+    // let conv2 = Tensor::new(vec![1024], w2.clone());
+    // let input_shape = vec![1024];
+    // let input = Tensor::random(&input_shape);
+    //
+    // let mut model = Model::new(&input_shape);
+    // model.add_layer(Layer::Dense(Dense::new(conv1, conv2)));
+    // model.describe();
+    // let trace: crate::model::InferenceTrace<'_, _, GoldilocksExt2> =
+    // model.run::<F>(input.clone()).unwrap();
+    // let mut tr: BasicTranscript<GoldilocksExt2> = BasicTranscript::new(b"m2vec");
+    // let ctx =
+    // Context::<GoldilocksExt2>::generate(&model, None).expect("Unable to generate context");
+    // let output = trace.final_output().clone();
+    // let prover: Prover<'_, GoldilocksExt2, BasicTranscript<GoldilocksExt2>> =
+    // Prover::new(&ctx, &mut tr);
+    // let proof = prover.prove(trace).expect("unable to generate proof");
+    // let mut verifier_transcript: BasicTranscript<GoldilocksExt2> =
+    // BasicTranscript::new(b"m2vec");
+    // let io = IO::new(input.to_fields(), output.to_fields());
+    // verify::<_, _>(ctx, proof, io, &mut verifier_transcript).unwrap();
+    // }
+    //
+    // #[test]
+    // fn test_single_cnn_prover() {
+    // let n_w = 1 << 2;
+    // let k_w = 1 << 4;
+    // let n_x = 1 << 5;
+    // let k_x = 1 << 1;
+    //
+    // let in_dimensions: Vec<Vec<usize>> =
+    // vec![vec![k_x, n_x, n_x], vec![16, 29, 29], vec![4, 26, 26]];
+    //
+    // let conv1 = Tensor::random(&vec![k_w, k_x, n_w, n_w]);
+    // let input_shape = vec![k_x, n_x, n_x];
+    // let input = Tensor::random(&input_shape);
+    //
+    // let mut model = Model::new(&input_shape);
+    // model.add_layer(Layer::Convolution(
+    // Convolution::new(conv1.clone(), Tensor::random(&vec![conv1.kw()]))
+    // .into_padded_and_ffted(&in_dimensions[0]),
+    // ));
+    // model.describe();
+    // let trace: crate::model::InferenceTrace<'_, _, GoldilocksExt2> =
+    // model.run::<F>(input.clone()).unwrap();
+    // let mut tr: BasicTranscript<GoldilocksExt2> = BasicTranscript::new(b"m2vec");
+    // let ctx = Context::<GoldilocksExt2>::generate(&model, Some(input.get_shape()))
+    // .expect("Unable to generate context");
+    // let output = trace.final_output().clone();
+    //
+    // let prover: Prover<'_, GoldilocksExt2, BasicTranscript<GoldilocksExt2>> =
+    // Prover::new(&ctx, &mut tr);
+    // let proof = prover.prove(trace).expect("unable to generate proof");
+    //
+    // let mut verifier_transcript: BasicTranscript<GoldilocksExt2> =
+    // BasicTranscript::new(b"m2vec");
+    // let io = IO::new(input.to_fields(), output.to_fields());
+    // verify::<_, _>(ctx, proof, io, &mut verifier_transcript).unwrap();
+    // }
+    //
+    // #[test]
+    // fn test_cnn_prover() {
+    // for i in 0..3 {
+    // for j in 2..5 {
+    // for l in 0..4 {
+    // for n in 1..(j - 1) {
+    // let n_w = 1 << n;
+    // let k_w = 1 << l;
+    // let n_x = 1 << j;
+    // let k_x = 1 << i;
+    //
+    // let in_dimensions: Vec<Vec<usize>> =
+    // vec![vec![k_x, n_x, n_x], vec![16, 29, 29], vec![4, 26, 26]];
+    // let input_shape = vec![k_x, n_x, n_x];
+    // let conv1 = Tensor::random(&vec![k_w, k_x, n_w, n_w]);
+    // let mut model = Model::<Element>::new(&input_shape);
+    // let input = Tensor::random(&input_shape);
+    // model.add_layer(Layer::Convolution(
+    // Convolution::new(conv1.clone(), Tensor::random(&vec![conv1.kw()]))
+    // .into_padded_and_ffted(&in_dimensions[0]),
+    // ));
+    // model.describe();
+    // let trace: crate::model::InferenceTrace<'_, _, GoldilocksExt2> =
+    // model.run::<F>(input.clone()).unwrap();
+    // let mut tr: BasicTranscript<GoldilocksExt2> =
+    // BasicTranscript::new(b"m2vec");
+    // let ctx =
+    // Context::<GoldilocksExt2>::generate(&model, Some(input.get_shape()))
+    // .expect("Unable to generate context");
+    // let output = trace.final_output().clone();
+    // let prover: Prover<'_, GoldilocksExt2, BasicTranscript<GoldilocksExt2>> =
+    // Prover::new(&ctx, &mut tr);
+    // let proof = prover.prove(trace).expect("unable to generate proof");
+    // let mut verifier_transcript: BasicTranscript<GoldilocksExt2> =
+    // BasicTranscript::new(b"m2vec");
+    // let io = IO::new(input.to_fields(), output.to_fields());
+    // verify::<_, _>(ctx, proof, io, &mut verifier_transcript).unwrap();
+    // }
+    // }
+    // }
+    // }
+    // }
 }

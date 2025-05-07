@@ -3,20 +3,27 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use transcript::Transcript;
 
 use crate::{
-    commit::precommit::PolyID, iop::context::ContextAux, layers::LayerCtx, padding::PaddingMode, tensor::Number, Element, NextPowerOfTwo, ScalingFactor, Tensor
+    Element, NextPowerOfTwo, ScalingFactor, Tensor, commit::precommit::PolyID,
+    iop::context::ContextAux, layers::LayerCtx, padding::PaddingMode, tensor::Number,
 };
 
 use super::{
-    provable::{LayerOut, Op, OpInfo, ProvableOp, ProveInfo}, Layer
+    Layer,
+    provable::{Evaluate, LayerOut, Op, OpInfo, ProvableOp, ProveInfo},
 };
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Reshape;
 
 impl OpInfo for Reshape {
-    fn output_shapes(&self, input_shapes: &[Vec<usize>], _padding_mode: PaddingMode) -> Vec<Vec<usize>> {
-        input_shapes.into_iter().map(|s|
-            vec![s.iter().product()]
-        ).collect()
+    fn output_shapes(
+        &self,
+        input_shapes: &[Vec<usize>],
+        _padding_mode: PaddingMode,
+    ) -> Vec<Vec<usize>> {
+        input_shapes
+            .into_iter()
+            .map(|s| vec![s.iter().product()])
+            .collect()
     }
 
     fn num_outputs(&self, num_inputs: usize) -> usize {
@@ -26,10 +33,18 @@ impl OpInfo for Reshape {
     fn describe(&self) -> String {
         "Reshape".to_string()
     }
+
+    fn is_provable(&self) -> bool {
+        false
+    }
 }
 
-impl<N: Number, E: ExtensionField> Op<N, E> for Reshape {
-    fn evaluate(&self, inputs: &[&Tensor<N>], _unpadded_input_shapes: Vec<Vec<usize>>) -> Result<LayerOut<N, E>, super::provable::ProvableOpError> {
+impl<N: Number> Evaluate<N> for Reshape {
+    fn evaluate<E: ExtensionField>(
+        &self,
+        inputs: &[&Tensor<N>],
+        _unpadded_input_shapes: Vec<Vec<usize>>,
+    ) -> Result<LayerOut<N, E>, super::provable::ProvableOpError> {
         if inputs.len() != 1 {
             return Err(super::provable::ProvableOpError::ParameterError(
                 "Reshape expects exactly one input".to_string(),
@@ -40,38 +55,43 @@ impl<N: Number, E: ExtensionField> Op<N, E> for Reshape {
     }
 }
 
-impl<E> ProveInfo<E> for Reshape 
+impl<E> ProveInfo<E> for Reshape
 where
     E: ExtensionField + DeserializeOwned,
     E::BaseField: Serialize + DeserializeOwned,
 {
-    fn step_info(
-        &self,
-        _id: PolyID,
-        mut aux: ContextAux,
-    ) -> (LayerCtx<E>, ContextAux) {
-        aux.last_output_shape.iter_mut().for_each(|s| 
-            *s = s.next_power_of_two()
-        );
+    fn step_info(&self, _id: PolyID, mut aux: ContextAux) -> (LayerCtx<E>, ContextAux) {
+        aux.last_output_shape
+            .iter_mut()
+            .for_each(|s| *s = s.next_power_of_two());
         (LayerCtx::Reshape, aux)
     }
 }
 
-impl<E, T, N> ProvableOp<E, T, N> for Reshape 
-where 
+impl<E> ProvableOp<E> for Reshape
+where
     E: ExtensionField,
     E::BaseField: Serialize + DeserializeOwned,
     E: Serialize + DeserializeOwned,
-    T: Transcript<E>,
+{
+    type Ctx = LayerCtx<E>; // Unused
+}
+
+impl<E, N> Op<E, N> for Reshape
+where
+    E: ExtensionField,
+    E::BaseField: Serialize + DeserializeOwned,
+    E: Serialize + DeserializeOwned,
     N: Number,
 {
-    fn is_provable(&self) -> bool {
-        false
-    }
 }
 
 impl Reshape {
-    pub(crate) fn quantize(&self, _s: &ScalingFactor, _bias_s: Option<&ScalingFactor>) -> Layer<Element> {
+    pub(crate) fn quantize(
+        &self,
+        _s: &ScalingFactor,
+        _bias_s: Option<&ScalingFactor>,
+    ) -> Layer<Element> {
         Layer::Reshape(Reshape)
     }
 }

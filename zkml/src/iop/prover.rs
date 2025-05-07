@@ -2,10 +2,17 @@ use std::collections::HashMap;
 
 use super::{ChallengeStorage, Context, Proof, TableProof};
 use crate::{
-    commit::{compute_betas_eval, precommit}, layers::{provable::{InferenceStep, InferenceTrace, NodeId}, LayerProof}, lookup::{
-        context::{generate_lookup_witnesses, TABLE_POLY_ID_OFFSET},
+    Claim, Element, VectorTranscript,
+    commit::{compute_betas_eval, precommit},
+    layers::{
+        LayerProof,
+        provable::{InferenceStep, InferenceTrace, NodeId, ProvableOp},
+    },
+    lookup::{
+        context::{TABLE_POLY_ID_OFFSET, generate_lookup_witnesses},
         logup_gkr::{prover::batch_prove as logup_batch_prove, structs::LogUpInput},
-    }, tensor::get_root_of_unity, Claim, Element, VectorTranscript
+    },
+    tensor::get_root_of_unity,
 };
 use anyhow::{anyhow, ensure};
 use ff_ext::ExtensionField;
@@ -80,55 +87,55 @@ where
         self.proofs.insert(node_id, proof);
     }
     //#[instrument(name="prove step",skip_all,fields(step = step.layer.describe()),level = "debug")]
-    /*fn prove_step<'b>(
-        &mut self,
-        last_claim: Claim<E>,
-        input: &Tensor<E>,
-        step: &InferenceStep<'b, E, E>,
-        info: &LayerCtx<E>,
-    ) -> anyhow::Result<Claim<E>> {
-        debug!(
-            "PROVER: proving layer {} vs ctx {}",
-            step.layer.to_string(),
-            info.variant_name()
-        );
-        let claim = match (step.layer, info) {
-            (Layer::Dense(dense), LayerCtx::Dense(info)) => {
-                dense.prove_step(self, last_claim, input, &step.output, info)
-            }
-            (Layer::Convolution(filter), LayerCtx::Convolution(info)) => filter
-                .prove_convolution_step(
-                    self,
-                    last_claim,
-                    &step.output,
-                    &step.unpadded_shape,
-                    &step.conv_data,
-                    info,
-                ),
-            (Layer::Activation(activation), LayerCtx::Activation(act_ctx)) => {
-                activation.prove_step(self, &last_claim, &step.output.get_data(), act_ctx)
-            }
-            (Layer::Requant(requant), LayerCtx::Requant(ctx)) => {
-                requant.prove_step(self, &last_claim, &step.output.get_data(), ctx)
-            }
-            (Layer::Pooling(pooling), LayerCtx::Pooling(info)) => {
-                pooling.prove_pooling(self, last_claim, input, &step.output, info)
-            }
-            (Layer::Reshape(_), LayerCtx::Reshape) => {
-                // reshape doesn't change anything apart the shape but we dont "prove" the shape really
-                // we still include a dummy proof tho just for consistency with the context at the verifier side
-                self.push_proof(LayerProof::Reshape);
-                Ok(last_claim)
-            }
-            _ => bail!(
-                "inconsistent proof step {} and info step {} from ctx",
-                step.layer.describe(),
-                info.variant_name()
-            ),
-        };
-
-        claim
-    }*/
+    // fn prove_step<'b>(
+    // &mut self,
+    // last_claim: Claim<E>,
+    // input: &Tensor<E>,
+    // step: &InferenceStep<'b, E, E>,
+    // info: &LayerCtx<E>,
+    // ) -> anyhow::Result<Claim<E>> {
+    // debug!(
+    // "PROVER: proving layer {} vs ctx {}",
+    // step.layer.to_string(),
+    // info.variant_name()
+    // );
+    // let claim = match (step.layer, info) {
+    // (Layer::Dense(dense), LayerCtx::Dense(info)) => {
+    // dense.prove_step(self, last_claim, input, &step.output, info)
+    // }
+    // (Layer::Convolution(filter), LayerCtx::Convolution(info)) => filter
+    // .prove_convolution_step(
+    // self,
+    // last_claim,
+    // &step.output,
+    // &step.unpadded_shape,
+    // &step.conv_data,
+    // info,
+    // ),
+    // (Layer::Activation(activation), LayerCtx::Activation(act_ctx)) => {
+    // activation.prove_step(self, &last_claim, &step.output.get_data(), act_ctx)
+    // }
+    // (Layer::Requant(requant), LayerCtx::Requant(ctx)) => {
+    // requant.prove_step(self, &last_claim, &step.output.get_data(), ctx)
+    // }
+    // (Layer::Pooling(pooling), LayerCtx::Pooling(info)) => {
+    // pooling.prove_pooling(self, last_claim, input, &step.output, info)
+    // }
+    // (Layer::Reshape(_), LayerCtx::Reshape) => {
+    // reshape doesn't change anything apart the shape but we dont "prove" the shape really
+    // we still include a dummy proof tho just for consistency with the context at the verifier side
+    // self.push_proof(LayerProof::Reshape);
+    // Ok(last_claim)
+    // }
+    // _ => bail!(
+    // "inconsistent proof step {} and info step {} from ctx",
+    // step.layer.describe(),
+    // info.variant_name()
+    // ),
+    // };
+    //
+    // claim
+    // }
 
     #[timed::timed_instrument(level = "debug")]
     fn prove_tables(&mut self) -> anyhow::Result<()> {
@@ -418,7 +425,7 @@ where
 
     pub fn prove<'b>(
         mut self,
-        full_trace: InferenceTrace<'b, E, T, Element>,
+        full_trace: InferenceTrace<'b, E, Element>,
     ) -> anyhow::Result<Proof<E>> {
         // write commitments and polynomials info to transcript
         self.ctx.write_to_transcript(self.transcript)?;
@@ -452,13 +459,16 @@ where
             let InferenceStep {
                 op: node_operation,
                 step_data,
-            } = trace.get_step(&node_id).ok_or(
-                anyhow!("Step in trace not found for node {}", node_id)
-            )?;
-            println!("Proving node with id {node_id}: {:?}", node_operation.describe());
+            } = trace
+                .get_step(&node_id)
+                .ok_or(anyhow!("Step in trace not found for node {}", node_id))?;
+            println!(
+                "Proving node with id {node_id}: {:?}",
+                node_operation.describe()
+            );
             let claims_for_prove = ctx.get_claims_for_node(&claims_by_layer, &last_claim)?;
             let claims = if node_operation.is_provable() {
-                node_operation.prove( node_id, &ctx.ctx, claims_for_prove, step_data, &mut self)?
+                node_operation.prove(node_id, &ctx.ctx, claims_for_prove, step_data, &mut self)?
             } else {
                 // we only propagate the claims, without changing them, as a non-provable layer
                 // shouldn't change the input values
@@ -468,7 +478,7 @@ where
         }
 
         // let trace_size = trace.last_step().id;
-        
+
         // Now we have to make the table proofs
         self.prove_tables()?;
 
@@ -493,13 +503,13 @@ where
     #[timed_instrument(level = "debug")]
     fn instantiate_witness_ctx<'b>(
         &mut self,
-        trace: &InferenceTrace<'b, E, T, Element>,
+        trace: &InferenceTrace<'b, E, Element>,
     ) -> anyhow::Result<()> {
         let (witness_ctx, challenge_storage, lookup_witnesses, table_witnesses) =
             generate_lookup_witnesses::<E, T>(trace, &self.ctx.steps_info, self.transcript)?;
         // let (lookup_witness, polys) =
         //     lookup::WitnessContext::<E>::initialise_witness_ctx(&self.ctx.lookup, trace)?;
-        
+
         self.witness_ctx = witness_ctx;
         self.challenge_storage = challenge_storage;
         self.lookup_witness = lookup_witnesses;

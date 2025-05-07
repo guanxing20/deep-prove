@@ -6,7 +6,9 @@
 use std::collections::HashMap;
 
 use crate::{
-    commit::{aggregated_rlc, compute_beta_eval_poly, compute_betas_eval}, layers::{convolution, dense, provable::ProvableModel, Layer}, model::Model, Claim, Element, VectorTranscript
+    Claim, Element, VectorTranscript,
+    commit::{aggregated_rlc, compute_beta_eval_poly, compute_betas_eval},
+    layers::provable::{ProvableModel, ProveInfo},
 };
 use anyhow::{Context as CC, ensure};
 use ff_ext::ExtensionField;
@@ -79,14 +81,10 @@ where
     E: Serialize + DeserializeOwned,
 {
     /// NOTE: it assumes the model's layers are already padded to power of two
-    pub fn generate_from_model<T>(m: &ProvableModel<E, T, Element>) -> anyhow::Result<Self> 
-    where T: Transcript<E>
-    {
+    pub fn generate_from_model(m: &ProvableModel<Element>) -> anyhow::Result<Self> {
         Self::generate(
             m.provable_nodes()
-                .flat_map(|(id, l)| 
-                    l.operation.commit_info(*id)
-                )
+                .flat_map(|(id, l)| l.operation.commit_info(*id))
                 .flatten()
                 .collect_vec(),
         )

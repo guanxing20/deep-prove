@@ -1,20 +1,33 @@
 mod error;
 mod model;
 
+use anyhow::{Result, anyhow, ensure};
 use ff_ext::ExtensionField;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use std::{collections::{BTreeMap, HashMap}, fmt::{format, Debug}};
-use anyhow::{Result, ensure, anyhow};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use std::{
+    collections::{BTreeMap, HashMap},
+    fmt::{Debug, format},
+};
 use transcript::Transcript;
 
-use crate::{commit::precommit::PolyID, iop::{context::{ContextAux, ShapeStep}, verifier::Verifier}, lookup::context::LookupWitnessGen, padding::PaddingMode, tensor::{ConvData, Number}, Claim, Element, Prover, Tensor};
+use crate::{
+    Claim, Element, Prover, Tensor,
+    commit::precommit::PolyID,
+    iop::{
+        context::{ContextAux, ShapeStep},
+        verifier::Verifier,
+    },
+    lookup::context::LookupWitnessGen,
+    padding::PaddingMode,
+    tensor::{ConvData, Number},
+};
 
-use super::{activation::ActivationCtx, reshape::Reshape, LayerCtx, LayerProof};
+use super::{Layer, LayerCtx, LayerProof, reshape::Reshape};
 
 pub(crate) type NodeId = u64;
 
 pub use error::ProvableOpError;
-pub use model::{ProvableModel, InferenceTrace, ModelCtx};
+pub use model::{InferenceTrace, ModelCtx, ProvableModel};
 
 /// Represents a link between an input/output wire of a node with an input/output wire of
 /// another node.
@@ -35,10 +48,10 @@ pub struct OutputWire {
 }
 
 #[derive(Clone, Debug)]
-pub struct Node<Op> {
+pub struct ProvableNode<N> {
     pub(crate) inputs: Vec<Edge>,
     pub(crate) outputs: Vec<OutputWire>,
-    pub(crate) operation: Op,
+    pub(crate) operation: Layer<N>,
 }
 
 pub(crate) trait NodeEgdes {
@@ -46,7 +59,7 @@ pub(crate) trait NodeEgdes {
     fn outputs(&self) -> &[OutputWire];
 }
 
-impl<Op> NodeEgdes for Node<Op> {
+impl<N> NodeEgdes for ProvableNode<N> {
     fn inputs(&self) -> &[Edge] {
         &self.inputs
     }
@@ -56,7 +69,7 @@ impl<Op> NodeEgdes for Node<Op> {
     }
 }
 
-impl<E: ExtensionField + DeserializeOwned> NodeEgdes for NodeCtx<E> 
+impl<E: ExtensionField + DeserializeOwned> NodeEgdes for NodeCtx<E>
 where
     E::BaseField: Serialize + DeserializeOwned,
 {
@@ -69,13 +82,8 @@ where
     }
 }
 
-pub type ProvableNode<E, T, D> = Node<Box<dyn ProvableOp<E, T, D>>>;
-
-impl<E, T, D> ProvableNode<E, T, D> {
-    pub(crate) fn new(
-        inputs: Vec<Edge>,
-        operation: Box<dyn ProvableOp<E, T, D>>,
-    ) -> Self {
+impl<N: Number> ProvableNode<N> {
+    pub(crate) fn new(inputs: Vec<Edge>, operation: Layer<N>) -> Self {
         let num_inputs = inputs.len();
         Self {
             inputs,
@@ -85,13 +93,13 @@ impl<E, T, D> ProvableNode<E, T, D> {
     }
 }
 
-/*pub struct ProvableNode<E, T, D> {
-    inputs: Vec<Edge>,
-    input_shape: Vec<usize>,
-    outputs: Vec<OutputWire>,
-    output_shape: Vec<usize>,
-    pub(crate) operation: Box<dyn ProvableOp<E, T, D>>,
-}*/
+// pub struct ProvableNode<E, T, D> {
+// inputs: Vec<Edge>,
+// input_shape: Vec<usize>,
+// outputs: Vec<OutputWire>,
+// output_shape: Vec<usize>,
+// pub(crate) operation: Box<dyn ProvableOp<E, T, D>>,
+// }
 
 pub struct LayerOut<T, E: ExtensionField> {
     pub(crate) outputs: Vec<Tensor<T>>,
@@ -112,25 +120,25 @@ impl<T, E: ExtensionField> LayerOut<T, E> {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(bound(serialize = "E: Serialize", deserialize = "E: DeserializeOwned"))]
-pub struct NodeCtx<E> 
+pub struct NodeCtx<E>
 where
-    E: ExtensionField + DeserializeOwned, 
-    E::BaseField: Serialize + DeserializeOwned
+    E: ExtensionField + DeserializeOwned,
+    E::BaseField: Serialize + DeserializeOwned,
 {
     pub(crate) inputs: Vec<Edge>,
     pub(crate) outputs: Vec<OutputWire>,
     pub(crate) ctx: LayerCtx<E>,
 }
 
-impl<E> NodeCtx<E> 
+impl<E> NodeCtx<E>
 where
-    E: ExtensionField + DeserializeOwned, 
-    E::BaseField: Serialize + DeserializeOwned
+    E: ExtensionField + DeserializeOwned,
+    E::BaseField: Serialize + DeserializeOwned,
 {
     pub(crate) fn get_claims_for_node(
-        &self, 
-        claims_by_node: &HashMap<NodeId, Vec<Claim<E>>>, 
-        output_claim: &Claim<E>
+        &self,
+        claims_by_node: &HashMap<NodeId, Vec<Claim<E>>>,
+        output_claim: &Claim<E>,
     ) -> Result<Vec<Claim<E>>> {
         self.outputs.iter().map(|out| {
             // For now, we support in proving only one edge per output wire,
@@ -142,7 +150,7 @@ where
                 let claims_for_node = claims_by_node.get(id).ok_or(
                     anyhow!("No claims found for layer {}", id)
                 )?;
-                ensure!(edge.index < claims_for_node.len(), 
+                ensure!(edge.index < claims_for_node.len(),
                     "Not enough claims found for node {}: required claim for input {}, but {} claims found",
                     id,
                     edge.index,
@@ -158,24 +166,29 @@ where
 
     pub(crate) fn input_claims<'a, I: Iterator<Item = (&'a NodeId, &'a Self)>>(
         nodes: I,
-        claims_by_node: &HashMap<NodeId, Vec<Claim<E>>>
+        claims_by_node: &HashMap<NodeId, Vec<Claim<E>>>,
     ) -> Result<Vec<&Claim<E>>> {
         let mut claims = BTreeMap::new();
         for (node_id, ctx) in nodes {
             for (i, edge) in ctx.inputs.iter().enumerate() {
                 if edge.node.is_none() {
-                    let claims_for_node = claims_by_node.get(node_id).ok_or(
-                        anyhow!("Claim not found for node {}", node_id)
-                    )?;
+                    let claims_for_node = claims_by_node
+                        .get(node_id)
+                        .ok_or(anyhow!("Claim not found for node {}", node_id))?;
                     claims.insert(edge.index, &claims_for_node[i]);
                 }
             }
         }
-        ensure!(claims.len() >= 1, "No input claims found for the set of nodes provided");
+        ensure!(
+            claims.len() >= 1,
+            "No input claims found for the set of nodes provided"
+        );
         let min_index = claims.first_key_value().unwrap().0;
         let max_index = claims.last_key_value().unwrap().0;
-        ensure!(*min_index == 0 && *max_index == claims.len() - 1, 
-            "Not all input claims were found"); 
+        ensure!(
+            *min_index == 0 && *max_index == claims.len() - 1,
+            "Not all input claims were found"
+        );
 
         Ok(claims.into_iter().map(|(_, claim)| claim).collect())
     }
@@ -183,130 +196,229 @@ where
 
 pub trait OpInfo {
     /// Returns the shapes of the outputs (in the same order)
-    fn output_shapes(&self, input_shapes: &[Vec<usize>], padding_mode: PaddingMode) -> Vec<Vec<usize>>;
+    fn output_shapes(
+        &self,
+        input_shapes: &[Vec<usize>],
+        padding_mode: PaddingMode,
+    ) -> Vec<Vec<usize>>;
 
     fn num_outputs(&self, num_inputs: usize) -> usize;
 
     fn describe(&self) -> String;
+
+    fn is_provable(&self) -> bool;
 }
 
-pub trait Op<T: Number, E: ExtensionField>: OpInfo {
+pub trait Evaluate<T: Number> {
     /// Evaluates the operation given any inputs tensors and constant inputs.
-    fn evaluate(&self, inputs: &[&Tensor<T>], unpadded_input_shapes: Vec<Vec<usize>>) -> Result<LayerOut<T, E>, ProvableOpError>;
+    fn evaluate<E: ExtensionField>(
+        &self,
+        inputs: &[&Tensor<T>],
+        unpadded_input_shapes: Vec<Vec<usize>>,
+    ) -> Result<LayerOut<T, E>, ProvableOpError>;
 }
 
+pub(crate) fn evaluate_layer<E: ExtensionField, T: Number, O: Evaluate<T>>(
+    layer: &O,
+    inputs: &[&Tensor<T>],
+    unpadded_input_shapes: Option<Vec<Vec<usize>>>,
+) -> Result<LayerOut<T, E>, ProvableOpError> {
+    layer.evaluate(inputs, unpadded_input_shapes.unwrap_or_default())
+}
 
-pub(crate) fn evaluate_layer<E: ExtensionField, T: Number, O: Op<T, E>>(
-        layer: &O, 
-        inputs: &[&Tensor<T>],
-        unpadded_input_shapes: Option<Vec<Vec<usize>>>
-    ) -> Result<LayerOut<T, E>, ProvableOpError> {
-        layer.evaluate(inputs, unpadded_input_shapes.unwrap_or_default()) 
-    }
-
-pub trait ProveInfo<E: ExtensionField> 
+pub trait ProveInfo<E: ExtensionField>
 where
     E: ExtensionField + DeserializeOwned,
     E::BaseField: Serialize + DeserializeOwned,
 {
-    fn step_info(
-        &self,
-        id: PolyID,
-        aux: ContextAux,
-    ) -> (LayerCtx<E>, ContextAux);
+    fn step_info(&self, id: PolyID, aux: ContextAux) -> (LayerCtx<E>, ContextAux);
 
     fn commit_info(&self, _id: NodeId) -> Vec<Option<(PolyID, Vec<E>)>> {
         vec![None]
     }
 }
 
-pub trait ProvableOp<E, T, N>: Op<N, E> + ProveInfo<E> + Debug
-where 
-            E: ExtensionField,
-            E::BaseField: Serialize + DeserializeOwned,
-            E: Serialize + DeserializeOwned,
-            T: Transcript<E>,
-            N: Number,
+pub trait ProvableOp<E>: OpInfo
+where
+    E: ExtensionField,
+    E::BaseField: Serialize + DeserializeOwned,
+    E: Serialize + DeserializeOwned,
 {
-    fn is_provable(&self) -> bool;
-    
+    type Ctx: VerifiableCtx<E>;
+
     /// Produces a proof of correct execution for this operation.
-    fn prove(&self, node_id: NodeId, ctx: &LayerCtx<E>, last_claims: Vec<Claim<E>>, step_data: &StepData<E, E>, prover: &mut Prover<E, T>) -> Result<Vec<Claim<E>>, ProvableOpError> {
+    fn prove<T: Transcript<E>>(
+        &self,
+        node_id: NodeId,
+        ctx: &Self::Ctx,
+        last_claims: Vec<Claim<E>>,
+        step_data: &StepData<E, E>,
+        prover: &mut Prover<E, T>,
+    ) -> Result<Vec<Claim<E>>, ProvableOpError> {
         // Default implementation, to avoid having to implement this method in case `is_provable` is false
-        assert!(!self.is_provable(), "Running default prove implementation for a provable operation! Implement prove method");
+        assert!(
+            !self.is_provable(),
+            "Running default prove implementation for a provable operation! Implement prove method"
+        );
         Ok(vec![Claim::default()])
     }
 
-    fn gen_lookup_witness(&self, id: NodeId, gen: &mut LookupWitnessGen<E>, step_data: &StepData<Element, E>) -> Result<(), ProvableOpError> {
+    fn gen_lookup_witness(
+        &self,
+        id: NodeId,
+        gen: &mut LookupWitnessGen<E>,
+        step_data: &StepData<Element, E>,
+    ) -> Result<(), ProvableOpError> {
         Ok(())
     }
 }
 
-pub trait VerifiableCtx<E>: Debug
-where 
+pub trait Op<E, N>: Evaluate<N> + ProveInfo<E> + Debug + ProvableOp<E>
+where
     E: ExtensionField,
     E::BaseField: Serialize + DeserializeOwned,
     E: Serialize + DeserializeOwned,
-{   
-    fn verify<T: Transcript<E>>(&self, proof: &LayerProof<E>, last_claims: &[Claim<E>], verifier: &mut Verifier<E, T>, shape_step: &ShapeStep) -> Result<Vec<Claim<E>>, ProvableOpError>;
+    N: Number,
+{
+}
 
-    fn output_shapes(&self, input_shapes: &[Vec<usize>], padding_mode: PaddingMode) -> Vec<Vec<usize>>;
+pub trait VerifiableCtx<E>: Debug
+where
+    E: ExtensionField,
+    E::BaseField: Serialize + DeserializeOwned,
+    E: Serialize + DeserializeOwned,
+{
+    type Proof: Sized;
+
+    fn verify<T: Transcript<E>>(
+        &self,
+        proof: &Self::Proof,
+        last_claims: &[Claim<E>],
+        verifier: &mut Verifier<E, T>,
+        shape_step: &ShapeStep,
+    ) -> Result<Vec<Claim<E>>, ProvableOpError>;
+
+    fn output_shapes(
+        &self,
+        input_shapes: &[Vec<usize>],
+        padding_mode: PaddingMode,
+    ) -> Vec<Vec<usize>>;
 }
 
 pub(crate) fn output_shapes<E: ExtensionField, C: VerifiableCtx<E>>(
-    ctx: &C, 
-    input_shapes: &[Vec<usize>], 
-    padding_mode: PaddingMode
-) -> Vec<Vec<usize>> 
-where 
+    ctx: &C,
+    input_shapes: &[Vec<usize>],
+    padding_mode: PaddingMode,
+) -> Vec<Vec<usize>>
+where
     E::BaseField: Serialize + DeserializeOwned,
     E: Serialize + DeserializeOwned,
 {
     ctx.output_shapes(input_shapes, padding_mode)
 }
 
-impl<E: ExtensionField> VerifiableCtx<E> for LayerCtx<E> 
-where 
+impl<E: ExtensionField> VerifiableCtx<E> for LayerCtx<E>
+where
     E::BaseField: Serialize + DeserializeOwned,
     E: Serialize + DeserializeOwned,
-{   
-    fn verify<T: Transcript<E>>(&self, proof: &LayerProof<E>, last_claims: &[Claim<E>], verifier: &mut Verifier<E, T>, shape_step: &ShapeStep) -> Result<Vec<Claim<E>>, ProvableOpError> {
+{
+    type Proof = LayerProof<E>;
+
+    fn verify<T: Transcript<E>>(
+        &self,
+        proof: &LayerProof<E>,
+        last_claims: &[Claim<E>],
+        verifier: &mut Verifier<E, T>,
+        shape_step: &ShapeStep,
+    ) -> Result<Vec<Claim<E>>, ProvableOpError> {
         match self {
-            LayerCtx::Dense(dense_ctx) => dense_ctx.verify(proof, last_claims, verifier, shape_step),
-            LayerCtx::Convolution(conv_ctx) => conv_ctx.verify(proof, last_claims, verifier, shape_step),
-            LayerCtx::Activation(activation_ctx) => activation_ctx.verify(proof, last_claims, verifier, shape_step),
-            LayerCtx::Requant(requant_ctx) => requant_ctx.verify(proof, last_claims, verifier, shape_step),
-            LayerCtx::Pooling(pooling_ctx) => pooling_ctx.verify(proof, last_claims, verifier, shape_step),
+            LayerCtx::Dense(dense_ctx) => {
+                if let LayerProof::Dense(proof) = proof {
+                    dense_ctx.verify(proof, last_claims, verifier, shape_step)
+                } else {
+                    Err(ProvableOpError::ParameterError(
+                        "dense proof not found for dense layer".to_string(),
+                    ))
+                }
+            }
+            LayerCtx::Convolution(conv_ctx) => {
+                if let LayerProof::Convolution(proof) = proof {
+                    conv_ctx.verify(proof, last_claims, verifier, shape_step)
+                } else {
+                    Err(ProvableOpError::ParameterError(
+                        "conv proof not found for convolution layer".to_string(),
+                    ))
+                }
+            }
+            LayerCtx::Activation(activation_ctx) => {
+                if let LayerProof::Activation(proof) = proof {
+                    activation_ctx.verify(proof, last_claims, verifier, shape_step)
+                } else {
+                    Err(ProvableOpError::ParameterError(
+                        "activation proof not found for activation layer".to_string(),
+                    ))
+                }
+            }
+            LayerCtx::Requant(requant_ctx) => {
+                if let LayerProof::Requant(proof) = proof {
+                    requant_ctx.verify(proof, last_claims, verifier, shape_step)
+                } else {
+                    Err(ProvableOpError::ParameterError(
+                        "requant proof not found for requant layer".to_string(),
+                    ))
+                }
+            }
+            LayerCtx::Pooling(pooling_ctx) => {
+                if let LayerProof::Pooling(proof) = proof {
+                    pooling_ctx.verify(proof, last_claims, verifier, shape_step)
+                } else {
+                    Err(ProvableOpError::ParameterError(
+                        "pooling proof not found for pooling layer".to_string(),
+                    ))
+                }
+            }
             _ => Err(ProvableOpError::NotProvableLayer(format!("{:?}", self))),
         }
     }
-    
-    fn output_shapes(&self, input_shapes: &[Vec<usize>], padding_mode: PaddingMode) -> Vec<Vec<usize>> {
+
+    fn output_shapes(
+        &self,
+        input_shapes: &[Vec<usize>],
+        padding_mode: PaddingMode,
+    ) -> Vec<Vec<usize>> {
         match self {
             LayerCtx::Dense(dense_ctx) => dense_ctx.output_shapes(input_shapes, padding_mode),
             LayerCtx::Convolution(conv_ctx) => conv_ctx.output_shapes(input_shapes, padding_mode),
-            LayerCtx::Activation(activation_ctx) => output_shapes::<E, _>(activation_ctx, input_shapes, padding_mode),
-            LayerCtx::Requant(requant_ctx) => output_shapes::<E, _>(requant_ctx, input_shapes, padding_mode),
-            LayerCtx::Pooling(pooling_ctx) => output_shapes::<E, _>(pooling_ctx, input_shapes, padding_mode),
-            LayerCtx::Reshape => <Reshape as OpInfo>::output_shapes(&Reshape, input_shapes, padding_mode),
-            _ => unreachable!()
+            LayerCtx::Activation(activation_ctx) => {
+                output_shapes::<E, _>(activation_ctx, input_shapes, padding_mode)
+            }
+            LayerCtx::Requant(requant_ctx) => {
+                output_shapes::<E, _>(requant_ctx, input_shapes, padding_mode)
+            }
+            LayerCtx::Pooling(pooling_ctx) => {
+                output_shapes::<E, _>(pooling_ctx, input_shapes, padding_mode)
+            }
+            LayerCtx::Reshape => {
+                <Reshape as OpInfo>::output_shapes(&Reshape, input_shapes, padding_mode)
+            }
+            _ => unreachable!(),
         }
     }
 }
 
-pub struct InferenceStep<'a, E: ExtensionField, T, N, D> {
-    pub(crate) op: &'a Box<dyn ProvableOp<E, T, N>>,
+pub struct InferenceStep<'a, E: ExtensionField, N, D> {
+    pub(crate) op: &'a Layer<N>,
     pub(crate) step_data: StepData<D, E>,
 }
 
-impl<'a, E: ExtensionField, T, N, D> InferenceStep<'a, E, T, N, D> {
+impl<'a, E: ExtensionField, N, D> InferenceStep<'a, E, N, D> {
     pub fn outputs(&self) -> Vec<&Tensor<D>> {
         self.step_data.outputs.outputs()
     }
 }
 
-pub struct StepData<N, E: ExtensionField> {
-    pub(crate) inputs: Vec<Tensor<N>>,
-    pub(crate) outputs: LayerOut<N, E>,
+pub struct StepData<D, E: ExtensionField> {
+    pub(crate) inputs: Vec<Tensor<D>>,
+    pub(crate) outputs: LayerOut<D, E>,
     pub(crate) unpadded_output_shapes: Vec<Vec<usize>>,
 }

@@ -9,7 +9,15 @@ use tracing::{debug, warn};
 use transcript::Transcript;
 
 use crate::{
-    commit::precommit::Context, iop::ChallengeStorage, layers::{activation::Relu, provable::{InferenceTrace, ModelCtx, ProvableModel}}, lookup::logup_gkr::structs::LogUpInput, quantization::{self, Fieldizer}, Element
+    Element,
+    commit::precommit::Context,
+    iop::ChallengeStorage,
+    layers::{
+        activation::Relu,
+        provable::{InferenceTrace, ModelCtx, ProvableOp},
+    },
+    lookup::logup_gkr::structs::LogUpInput,
+    quantization::{self, Fieldizer},
 };
 
 use super::logup_gkr::error::LogUpError;
@@ -161,7 +169,7 @@ impl<E: ExtensionField> LookupWitnessGen<E> {
 pub(crate) const COLUMN_SEPARATOR: Element = 1i128 << 32;
 
 pub fn generate_lookup_witnesses<'a, E: ExtensionField, T: Transcript<E>>(
-    trace: &InferenceTrace<'a, E, T, Element>,
+    trace: &InferenceTrace<'a, E, Element>,
     ctx: &ModelCtx<E>,
     transcript: &mut T,
 ) -> Result<
@@ -178,16 +186,23 @@ where
     E: Serialize + DeserializeOwned,
 {
     let mut witness_gen = LookupWitnessGen::<E>::new();
-    
+
     debug!("Lookup witness generation: generating poly fields...");
     for (node_id, _) in ctx.to_forward_iterator() {
-        let step = trace.get_step(&node_id).ok_or(
-            LogUpError::ProvingError(format!("Node {node_id} not found in trace"))
-        )?;
-        step.op.gen_lookup_witness(node_id, &mut witness_gen, &step.step_data).map_err(|e|
-            LogUpError::ParamterError(format!("Error generating lookup witness for node {} with error: {}", node_id, e.to_string()
-            ))
-        )?;   
+        let step = trace
+            .get_step(&node_id)
+            .ok_or(LogUpError::ProvingError(format!(
+                "Node {node_id} not found in trace"
+            )))?;
+        step.op
+            .gen_lookup_witness(node_id, &mut witness_gen, &step.step_data)
+            .map_err(|e| {
+                LogUpError::ParamterError(format!(
+                    "Error generating lookup witness for node {} with error: {}",
+                    node_id,
+                    e.to_string()
+                ))
+            })?;
     }
 
     if witness_gen.tables.is_empty() {
@@ -240,7 +255,8 @@ where
     debug!("Lookup witness generation: challenge storage...");
     let challenge_storage = initialise_from_table_set::<E, T>(&witness_gen.tables, transcript);
 
-    let lookup_inputs = witness_gen.lookups_no_challenges
+    let lookup_inputs = witness_gen
+        .lookups_no_challenges
         .into_iter()
         .map(|(column_evals, columns_per_instance, table_type)| {
             let (constant_challenge, column_challenge) = challenge_storage

@@ -1,5 +1,14 @@
 use crate::{
-    commit::same_poly, iop::{context::ShapeStep, verifier::Verifier}, layers::LayerProof, lookup::{context::LookupWitnessGen, logup_gkr::{prover::batch_prove as logup_batch_prove, verifier::verify_logup_proof}}, padding::PaddingMode, quantization, Claim, Prover, Tensor
+    Claim, Prover, Tensor,
+    commit::same_poly,
+    iop::{context::ShapeStep, verifier::Verifier},
+    layers::LayerProof,
+    lookup::{
+        context::LookupWitnessGen,
+        logup_gkr::{prover::batch_prove as logup_batch_prove, verifier::verify_logup_proof},
+    },
+    padding::PaddingMode,
+    quantization,
 };
 use anyhow::{Result, anyhow};
 use ff::Field;
@@ -9,7 +18,10 @@ use itertools::Itertools;
 use multilinear_extensions::mle::IntoMLE;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use statrs::statistics::{Data, Distribution};
-use std::{collections::HashMap, ops::{Add, Mul, Sub}};
+use std::{
+    collections::HashMap,
+    ops::{Add, Mul, Sub},
+};
 use tracing::{debug, warn};
 use transcript::Transcript;
 
@@ -21,7 +33,13 @@ use crate::{
     quantization::Fieldizer,
 };
 
-use super::{provable::{StepData, LayerOut, NodeId, Op, OpInfo, ProvableOp, ProvableOpError, ProveInfo, VerifiableCtx}, LayerCtx};
+use super::{
+    LayerCtx,
+    provable::{
+        Evaluate, LayerOut, NodeId, Op, OpInfo, ProvableOp, ProvableOpError, ProveInfo, StepData,
+        VerifiableCtx,
+    },
+};
 
 enum RequantResult {
     Ok(Element),
@@ -69,7 +87,11 @@ where
 }
 
 impl OpInfo for Requant {
-    fn output_shapes(&self, input_shapes: &[Vec<usize>], _padding_mode: PaddingMode) -> Vec<Vec<usize>> {
+    fn output_shapes(
+        &self,
+        input_shapes: &[Vec<usize>],
+        _padding_mode: PaddingMode,
+    ) -> Vec<Vec<usize>> {
         input_shapes.to_vec() // preserve the input shape
     }
 
@@ -84,10 +106,18 @@ impl OpInfo for Requant {
             (self.range << 1).ilog2() as usize,
         )
     }
+
+    fn is_provable(&self) -> bool {
+        true
+    }
 }
 
-impl<E: ExtensionField> Op<Element, E> for Requant {
-    fn evaluate(&self, inputs: &[&Tensor<Element>], _unpadded_input_shapes: Vec<Vec<usize>>) -> Result<LayerOut<Element, E>, ProvableOpError> {
+impl Evaluate<Element> for Requant {
+    fn evaluate<E: ExtensionField>(
+        &self,
+        inputs: &[&Tensor<Element>],
+        _unpadded_input_shapes: Vec<Vec<usize>>,
+    ) -> Result<LayerOut<Element, E>, ProvableOpError> {
         if inputs.len() != 1 {
             return Err(ProvableOpError::ParameterError(
                 "Requant layer expects one input".to_string(),
@@ -98,16 +128,12 @@ impl<E: ExtensionField> Op<Element, E> for Requant {
     }
 }
 
-impl<E> ProveInfo<E> for Requant 
+impl<E> ProveInfo<E> for Requant
 where
     E: ExtensionField + DeserializeOwned,
     E::BaseField: Serialize + DeserializeOwned,
 {
-    fn step_info(
-        &self,
-        id: PolyID,
-        mut aux: ContextAux,
-    ) -> (LayerCtx<E>, ContextAux) {
+    fn step_info(&self, id: PolyID, mut aux: ContextAux) -> (LayerCtx<E>, ContextAux) {
         aux.tables.insert(TableType::Range);
         (
             LayerCtx::Requant(RequantCtx {
@@ -126,35 +152,38 @@ where
     }
 }
 
-impl<E, T> ProvableOp<E, T, Element> for Requant 
-where 
+impl<E> ProvableOp<E> for Requant
+where
     E: ExtensionField,
     E::BaseField: Serialize + DeserializeOwned,
     E: Serialize + DeserializeOwned,
-    T: Transcript<E>,
 {
-    fn is_provable(&self) -> bool {
-        true
-    }
-    
-    fn prove(&self, id: NodeId, ctx: &LayerCtx<E>, last_claims: Vec<Claim<E>>, step_data: &super::provable::StepData<E, E>, prover: &mut Prover<E, T>) -> std::result::Result<Vec<Claim<E>>, ProvableOpError> {
-        if let LayerCtx::Requant(info) = ctx {
-            Ok(vec![self.prove_step(
-                prover, 
-                &last_claims[0], 
-                &step_data.outputs.outputs()[0].get_data(), 
-                info,
-                id,
-            )?])
-        } else {
-            Err(ProvableOpError::ParameterError(
-                "Requant layer expects RequantCtx".to_string(),
-            ))
-        }
+    type Ctx = RequantCtx;
+
+    fn prove<T: Transcript<E>>(
+        &self,
+        id: NodeId,
+        ctx: &Self::Ctx,
+        last_claims: Vec<Claim<E>>,
+        step_data: &super::provable::StepData<E, E>,
+        prover: &mut Prover<E, T>,
+    ) -> std::result::Result<Vec<Claim<E>>, ProvableOpError> {
+        Ok(vec![self.prove_step(
+            prover,
+            &last_claims[0],
+            &step_data.outputs.outputs()[0].get_data(),
+            ctx,
+            id,
+        )?])
     }
 
-    fn gen_lookup_witness(&self, id: NodeId, gen: &mut LookupWitnessGen<E>, step_data: &StepData<Element, E>) -> Result<(), ProvableOpError> {
-        if step_data.inputs.len() != 1 { 
+    fn gen_lookup_witness(
+        &self,
+        id: NodeId,
+        gen: &mut LookupWitnessGen<E>,
+        step_data: &StepData<Element, E>,
+    ) -> Result<(), ProvableOpError> {
+        if step_data.inputs.len() != 1 {
             return Err(ProvableOpError::ParameterError(
                 "Requant layer expects exactly one input tensor".to_string(),
             ));
@@ -167,12 +196,13 @@ where
         }
 
         gen.tables.insert(TableType::Range);
-        let table_lookup_map = gen.lookups
+        let table_lookup_map = gen
+            .lookups
             .entry(TableType::Range)
             .or_insert_with(|| HashMap::default());
 
         let (merged_lookups, column_evals) =
-            self.gen_lookup_witness::<E>(step_data.inputs[0].get_data());
+            self.lookup_witness::<E>(step_data.inputs[0].get_data());
         merged_lookups
             .into_iter()
             .for_each(|val| *table_lookup_map.entry(val).or_insert(0u64) += 1);
@@ -186,41 +216,59 @@ where
                 .collect(),
         ));
 
-        gen.lookups_no_challenges.push((column_evals, 1, TableType::Range));
+        gen.lookups_no_challenges
+            .push((column_evals, 1, TableType::Range));
 
         Ok(())
     }
-} 
+}
 
-impl<E> VerifiableCtx<E> for RequantCtx
-where 
+impl<E> Op<E, Element> for Requant
+where
     E: ExtensionField,
     E::BaseField: Serialize + DeserializeOwned,
     E: Serialize + DeserializeOwned,
 {
-    fn verify<T: Transcript<E>>(&self, proof: &LayerProof<E>, last_claims: &[Claim<E>], verifier: &mut Verifier<E, T>, _shape_step: &ShapeStep) -> std::result::Result<Vec<Claim<E>>, ProvableOpError> {
-        if let LayerProof::Requant(proof) = proof {
-            let (constant_challenge, column_separation_challenge) = verifier.challenge_storage.as_ref().unwrap()
-                .get_challenges_by_name(&TableType::Range.name())
-                .ok_or(anyhow!(
-                    "Couldn't get challenges for LookupType: {}",
-                    TableType::Range.name()
-                ))?;
-            Ok(vec![self.verify_requant(
-                verifier,
-                last_claims[0].clone(),
-                &proof,
-                constant_challenge,
-                column_separation_challenge,
-            )?])
-        } else {
-            Err(ProvableOpError::TypeError(
-            "Expected requant layer proof and context".to_string()
-            ))
-        }
+}
+
+impl<E> VerifiableCtx<E> for RequantCtx
+where
+    E: ExtensionField,
+    E::BaseField: Serialize + DeserializeOwned,
+    E: Serialize + DeserializeOwned,
+{
+    type Proof = RequantProof<E>;
+
+    fn verify<T: Transcript<E>>(
+        &self,
+        proof: &Self::Proof,
+        last_claims: &[Claim<E>],
+        verifier: &mut Verifier<E, T>,
+        _shape_step: &ShapeStep,
+    ) -> std::result::Result<Vec<Claim<E>>, ProvableOpError> {
+        let (constant_challenge, column_separation_challenge) = verifier
+            .challenge_storage
+            .as_ref()
+            .unwrap()
+            .get_challenges_by_name(&TableType::Range.name())
+            .ok_or(anyhow!(
+                "Couldn't get challenges for LookupType: {}",
+                TableType::Range.name()
+            ))?;
+        Ok(vec![self.verify_requant(
+            verifier,
+            last_claims[0].clone(),
+            &proof,
+            constant_challenge,
+            column_separation_challenge,
+        )?])
     }
-    
-    fn output_shapes(&self, input_shapes: &[Vec<usize>], _padding_mode: PaddingMode) -> Vec<Vec<usize>> {
+
+    fn output_shapes(
+        &self,
+        input_shapes: &[Vec<usize>],
+        _padding_mode: PaddingMode,
+    ) -> Vec<Vec<usize>> {
         input_shapes.to_vec()
     }
 }
@@ -401,7 +449,7 @@ impl Requant {
         mle_evals
     }
 
-    pub fn gen_lookup_witness<E: ExtensionField>(
+    pub fn lookup_witness<E: ExtensionField>(
         &self,
         input: &[Element],
     ) -> (Vec<Element>, Vec<Vec<E::BaseField>>) {
@@ -544,10 +592,13 @@ impl Requant {
             .witness_prover
             .add_claim(requant_info.poly_id, claim_acc_proof.extract_claim())?;
 
-        prover.push_proof(id, LayerProof::Requant(RequantProof {
-            io_accumulation: claim_acc_proof,
-            lookup: logup_proof,
-        }));
+        prover.push_proof(
+            id,
+            LayerProof::Requant(RequantProof {
+                io_accumulation: claim_acc_proof,
+                lookup: logup_proof,
+            }),
+        );
 
         Ok(Claim {
             point,

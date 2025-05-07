@@ -1,12 +1,18 @@
 use crate::{
-    iop::precommit::{self, PolyID}, layers::{provable::{ModelCtx, NodeCtx, ProvableModel}, LayerCtx}, lookup::context::{LookupContext, TableType}, Element
+    Element,
+    iop::precommit::{self, PolyID},
+    layers::{
+        LayerCtx,
+        provable::{ModelCtx, NodeCtx, ProvableModel},
+    },
+    lookup::context::{LookupContext, TableType},
 };
-use anyhow::{anyhow, ensure, Context as CC};
+use anyhow::{Context as CC, anyhow, ensure};
 use ff_ext::ExtensionField;
 use mpcs::BasefoldCommitment;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::collections::{BTreeSet, HashMap};
-use tracing::{debug, info, trace};
+use tracing::{debug, trace};
 use transcript::Transcript;
 
 /// Info related to the lookup protocol tables.
@@ -98,56 +104,53 @@ where
     /// Generates a context to give to the verifier that contains informations about the polynomials
     /// to prove at each step.
     /// INFO: it _assumes_ the model is already well padded to power of twos.
-    /*pub fn generate(
-        model: &Model<Element>,
-        input_shape: Option<Vec<usize>>,
-    ) -> anyhow::Result<Self> {
-        let tables = BTreeSet::new();
-        let last_output_shape = if let Some(shape) = input_shape {
-            shape
-        } else {
-            model.input_shape()
-        };
-        let mut ctx_aux = ContextAux {
-            tables,
-            last_output_shape: vec![last_output_shape],
-        };
-        let mut step_infos = Vec::with_capacity(model.layer_count());
-        debug!("Context : layer info generation ...");
-        for (id, layer) in model.layers() {
-            trace!(
-                "Context : {}-th layer {}info generation ...",
-                id,
-                layer.describe()
-            );
-            let (info, new_aux) = layer.step_info(id, ctx_aux);
-            step_infos.push(info);
-            ctx_aux = new_aux;
-        }
-        info!(
-            "step_infos: {:?}",
-            step_infos.iter().map(|x| x.variant_name()).join(", ")
-        );
-        debug!("Context : commitment generating ...");
-        let commit_ctx = precommit::Context::generate_from_model(model)
-            .context("can't generate context for commitment part")?;
-        debug!("Context : lookup generation ...");
-        let lookup_ctx = LookupContext::new(&ctx_aux.tables);
-        Ok(Self {
-            steps_info: step_infos.into_iter().rev().collect_vec(),
-            weights: commit_ctx,
-            lookup: lookup_ctx,
-            unpadded_input_shape: model.unpadded_input_shape(),
-        })
-    }*/
+    // pub fn generate(
+    // model: &Model<Element>,
+    // input_shape: Option<Vec<usize>>,
+    // ) -> anyhow::Result<Self> {
+    // let tables = BTreeSet::new();
+    // let last_output_shape = if let Some(shape) = input_shape {
+    // shape
+    // } else {
+    // model.input_shape()
+    // };
+    // let mut ctx_aux = ContextAux {
+    // tables,
+    // last_output_shape: vec![last_output_shape],
+    // };
+    // let mut step_infos = Vec::with_capacity(model.layer_count());
+    // debug!("Context : layer info generation ...");
+    // for (id, layer) in model.layers() {
+    // trace!(
+    // "Context : {}-th layer {}info generation ...",
+    // id,
+    // layer.describe()
+    // );
+    // let (info, new_aux) = layer.step_info(id, ctx_aux);
+    // step_infos.push(info);
+    // ctx_aux = new_aux;
+    // }
+    // info!(
+    // "step_infos: {:?}",
+    // step_infos.iter().map(|x| x.variant_name()).join(", ")
+    // );
+    // debug!("Context : commitment generating ...");
+    // let commit_ctx = precommit::Context::generate_from_model(model)
+    // .context("can't generate context for commitment part")?;
+    // debug!("Context : lookup generation ...");
+    // let lookup_ctx = LookupContext::new(&ctx_aux.tables);
+    // Ok(Self {
+    // steps_info: step_infos.into_iter().rev().collect_vec(),
+    // weights: commit_ctx,
+    // lookup: lookup_ctx,
+    // unpadded_input_shape: model.unpadded_input_shape(),
+    // })
+    // }
 
-    pub fn generate<T>(
-        model: &ProvableModel<E, T, Element>,
+    pub fn generate(
+        model: &ProvableModel<Element>,
         input_shapes: Option<Vec<Vec<usize>>>,
-    ) -> anyhow::Result<Self> 
-    where 
-        T: Transcript<E>,
-    {
+    ) -> anyhow::Result<Self> {
         let tables = BTreeSet::new();
         let input_shapes = if let Some(shape) = input_shapes {
             shape
@@ -165,22 +168,42 @@ where
             trace!(
                 "Context : {}-th layer {}info generation ...",
                 id,
-                node.describe()
+                node.operation.describe()
             );
             // compute input shapes for this node
-            let node_input_shapes = node.inputs.iter().map(|edge| {
-                Ok(if let Some(node_id) = &edge.node {
-                    let node_shapes = shapes.get(node_id).ok_or(anyhow!("Node {} not found in set of previous shapes", node_id))?;
-                    ensure!(edge.index < node_shapes.len(), "Input for node {} is coming from output {} of node {}, 
-                        but this node has only {} outputs", id, edge.index, node_id, node_shapes.len());
-                    node_shapes[edge.index].clone()
-                } else {
-                    // input node
-                    ensure!(edge.index < input_shapes.len(), "Input for node {} is the input {} of the model, 
-                        but the model has only {} inputs", id, edge.index, input_shapes.len());
-                    input_shapes[edge.index].clone()
+            let node_input_shapes = node
+                .inputs
+                .iter()
+                .map(|edge| {
+                    Ok(if let Some(node_id) = &edge.node {
+                        let node_shapes = shapes.get(node_id).ok_or(anyhow!(
+                            "Node {} not found in set of previous shapes",
+                            node_id
+                        ))?;
+                        ensure!(
+                            edge.index < node_shapes.len(),
+                            "Input for node {} is coming from output {} of node {}, 
+                        but this node has only {} outputs",
+                            id,
+                            edge.index,
+                            node_id,
+                            node_shapes.len()
+                        );
+                        node_shapes[edge.index].clone()
+                    } else {
+                        // input node
+                        ensure!(
+                            edge.index < input_shapes.len(),
+                            "Input for node {} is the input {} of the model, 
+                        but the model has only {} inputs",
+                            id,
+                            edge.index,
+                            input_shapes.len()
+                        );
+                        input_shapes[edge.index].clone()
+                    })
                 })
-            }).collect::<anyhow::Result<Vec<_>>>()?;
+                .collect::<anyhow::Result<Vec<_>>>()?;
             ctx_aux.last_output_shape = node_input_shapes;
             let (info, new_aux) = node.step_info(id as PolyID, ctx_aux);
             step_infos.insert(id, NodeCtx {
@@ -188,7 +211,7 @@ where
                 outputs: node.outputs.clone(),
                 ctx: info,
             });
-            ctx_aux =  new_aux;
+            ctx_aux = new_aux;
             shapes.insert(id, ctx_aux.last_output_shape.clone());
         }
 
@@ -203,11 +226,10 @@ where
             lookup: lookup_ctx,
             unpadded_input_shapes: model.unpadded_input_shapes(),
         })
-
     }
 
     pub fn write_to_transcript<T: Transcript<E>>(&self, t: &mut T) -> anyhow::Result<()> {
-        for (_ , step_ctx) in self.steps_info.to_backward_iterator() {
+        for (_, step_ctx) in self.steps_info.to_backward_iterator() {
             match &step_ctx.ctx {
                 LayerCtx::Dense(info) => {
                     t.append_field_element(&E::BaseField::from(info.matrix_poly_id as u64));
