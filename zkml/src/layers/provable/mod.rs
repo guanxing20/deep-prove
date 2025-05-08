@@ -22,7 +22,7 @@ use crate::{
     tensor::{ConvData, Number},
 };
 
-use super::{Layer, LayerCtx, LayerProof, reshape::Reshape};
+use super::{Layer, LayerCtx, LayerProof, flatten::Flatten};
 
 pub(crate) type NodeId = usize;
 
@@ -42,7 +42,10 @@ pub struct Edge {
 
 impl Edge {
     pub fn new(node: NodeId, index: usize) -> Self {
-        Self { node: Some(node), index }
+        Self {
+            node: Some(node),
+            index,
+        }
     }
 
     /// Edge when the node is an input or an output of the model
@@ -409,8 +412,8 @@ where
             LayerCtx::Pooling(pooling_ctx) => {
                 output_shapes::<E, _>(pooling_ctx, input_shapes, padding_mode)
             }
-            LayerCtx::Reshape => {
-                <Reshape as OpInfo>::output_shapes(&Reshape, input_shapes, padding_mode)
+            LayerCtx::Flatten => {
+                <Flatten as OpInfo>::output_shapes(&Flatten, input_shapes, padding_mode)
             }
             _ => unreachable!(),
         }

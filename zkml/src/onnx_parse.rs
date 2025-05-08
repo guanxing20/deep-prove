@@ -5,8 +5,8 @@ use crate::{
         activation::{Activation, Relu},
         convolution::{Convolution, conv2d_shape},
         dense::Dense,
+        flatten::Flatten,
         pooling::{MAXPOOL2D_KERNEL_SIZE, Maxpool2D, Pooling, maxpool2d_shape},
-        reshape::Reshape,
     },
     padding::pad_model,
     quantization::{AbsoluteMax, ModelMetadata, ScalingStrategy},
@@ -386,7 +386,7 @@ pub fn load_float_model(filepath: &str) -> Result<Model<f32>> {
                 layers.push(layer);
             }
             op if RESHAPE.contains(&op) => {
-                layers.push(Layer::Reshape(Reshape));
+                layers.push(Layer::Flatten(Flatten));
                 input_shape_og = vec![input_shape_og.iter().product()];
             }
             _ => bail!("Unsupported operation"),
@@ -725,7 +725,7 @@ mod tests {
     // BasicTranscript::new(b"m2vec");
     // let io = IO::new(input.to_fields(), output.to_fields());
     // verify::<_, _>(ctx, proof, io, &mut verifier_transcript).unwrap();
-    
+
     #[test]
     fn test_tract() {
         let filepath = "bench-cnn/model.onnx";
@@ -766,7 +766,8 @@ mod tests {
 
             for (i, output) in outputs.iter().enumerate() {
                 println!(
-                    "Node: {},  Output {} shape: {:?}",
+                    "Node {}: {},  Output {} shape: {:?}",
+                    id,
                     node,
                     i,
                     output.fact.shape.dims()
@@ -803,7 +804,13 @@ mod tests {
 
         for node_id in plan.order_without_consts() {
             let node = plan.model().node(*node_id);
-            println!("planned node: {}: input {:?} -> op{:?}", node.name,node.inputs,node.op());
+            println!(
+                "planned node {}:{}: input {:?} -> op{:?}",
+                node_id,
+                node.name,
+                node.inputs,
+                node.op()
+            );
         }
     }
 }

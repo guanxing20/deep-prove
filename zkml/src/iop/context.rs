@@ -1,7 +1,11 @@
 use crate::{
-    iop::precommit::{self, PolyID}, layers::{
-        provable::{ModelCtx, NodeCtx, NodeId, ProvableModel}, LayerCtx
-    }, lookup::context::{LookupContext, TableType}, Element
+    Element,
+    iop::precommit::{self, PolyID},
+    layers::{
+        LayerCtx,
+        provable::{ModelCtx, NodeCtx, NodeId, ProvableModel},
+    },
+    lookup::context::{LookupContext, TableType},
 };
 use anyhow::{Context as CC, anyhow, ensure};
 use ff_ext::ExtensionField;
@@ -263,7 +267,7 @@ where
                     info.hadamard.write_to_transcript(t);
                 }
                 LayerCtx::SchoolBookConvolution(_info) => {}
-                LayerCtx::Reshape => {
+                LayerCtx::Flatten => {
                     t.append_field_element(&E::BaseField::from(RESHAPE_FS_ID as u64));
                 }
             }
