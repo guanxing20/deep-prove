@@ -15,6 +15,7 @@ use anyhow::{Context, bail, ensure};
 use ff_ext::ExtensionField;
 use goldilocks::GoldilocksExt2;
 use once_cell::sync::Lazy;
+use tracing::debug;
 use std::{collections::HashMap, sync::Mutex};
 use tract_onnx::{
     prelude::*,
@@ -54,13 +55,24 @@ macro_rules! ensure_onnx {
     }
 
 pub fn from_path(path: &str) -> Result<ProvableModel<f32>, ProvableOpError> {
-    let model = tract_onnx::onnx().model_for_path(path)?.into_typed()?.into_decluttered()?;
+    let pmodel = tract_onnx::onnx()
+        .model_for_path(path)?
+        .into_typed()?
+        .into_decluttered()?;
+    // so far we dont support batching
+    let mut values = SymbolValues::default();
+    let symbol = pmodel.sym("batch_size");
+    values.set(&symbol, 1);
+    let model = pmodel.concretize_dims(&values)?;
+    drop(pmodel);
+    
+
     let plan = SimplePlan::new(model)?;
     let onnx_model = plan.model();
     let inference_order = plan.order_without_consts();
     let input_node = onnx_model.node(inference_order[0]);
     let input_source = downcast_to::<TypedSource>(input_node)?;
-    println!("input_source: {:?}", input_source.fact.shape.to_tvec());
+        debug!("onnx input_source: {:?}", input_source.fact.shape.to_tvec());
     let input_shape = input_source
         .fact
         .shape
@@ -68,8 +80,7 @@ pub fn from_path(path: &str) -> Result<ProvableModel<f32>, ProvableOpError> {
         .into_iter()
         .map(|x| match x {
             TDim::Val(v) => Ok(v as usize),
-            TDim::Sym(_) => Ok(1),
-            _ => err(format!("Input {} has unknown input shape", input_node.name)),
+            _ => err(format!("Input {} has unknown input shape: {:?}", input_node.name, x)),
         })
         .collect::<Result<Vec<_>, _>>()?;
     let mut model = ProvableModel::new_from_input_shapes(vec![input_shape.to_vec()]);
@@ -77,21 +88,14 @@ pub fn from_path(path: &str) -> Result<ProvableModel<f32>, ProvableOpError> {
     let mut first_node = true;
     let mut last_node_id = 0;
     while !it.is_empty() {
-        let (id, zkml_node) = parse_node(onnx_model, &mut it, first_node).map_err(|e| 
-            ProvableOpError::OnnxParsingError(
-                format!(
-                    "Error parsing node: {:?}",
-                    e.to_string())))?;
-        //let (id, zkml_node) = parse_node(onnx_model, &mut it, first_node)?;
+        let (id, zkml_node) = parse_node(onnx_model, &mut it, first_node).map_err(|e| {
+            ProvableOpError::OnnxParsingError(format!("Error parsing node: {:?}", e.to_string()))
+        })?;
+        // let (id, zkml_node) = parse_node(onnx_model, &mut it, first_node)?;
         let desc = zkml_node.operation.describe();
         model.add_node_with_id(id, zkml_node).map_err(|e| {
             ProvableOpError::OnnxParsingError(
-                format!(
-                    "adding node {} -> {:?}",
-                    desc,
-                    e.to_string()
-                )
-                .into(),
+                format!("adding node {} -> {:?}", desc, e.to_string()).into(),
             )
         })?;
         first_node = false;
@@ -114,7 +118,7 @@ static PARSER_FACTORY: Lazy<HashMap<&'static str, LoadFn>> = Lazy::new(|| {
     m.insert("Gemm.ab", load_gemm as LoadFn);
     m.insert("Relu", load_relu as LoadFn);
     m.insert("Flatten", load_flatten as LoadFn);
-    m.insert("Pool",load_maxpool as LoadFn);
+    m.insert("Pool", load_maxpool as LoadFn);
     m
 });
 
@@ -125,23 +129,37 @@ fn parse_node(
 ) -> Result<(NodeId, CustomNode), ProvableOpError> {
     let curr_node_id = iter.next().ok_or(anyhow::anyhow!("No nodes left"))?;
     let curr_node = model.node(*curr_node_id);
-    println!("curr_node id {}: {:?} : {:?} <- inputs: {:?}", curr_node_id,curr_node.name, curr_node.name, curr_node.inputs);
+    debug!(
+        "curr_node id {}: {:?} : {:?} <- inputs: {:?}",
+        curr_node_id, curr_node.name, curr_node.name, curr_node.inputs
+    );
     #[allow(unused_variables)]
     let op_name = &curr_node.name;
-    if let Some(layer_name) = PARSER_FACTORY.keys().find(|&&layer_name| op_name.contains(layer_name)) {
+    if let Some(layer_name) = PARSER_FACTORY
+        .keys()
+        .find(|&&layer_name| op_name.contains(layer_name))
+    {
         let parser = PARSER_FACTORY.get(layer_name).unwrap();
-        let (node_id,mut node ) = parser(model, *curr_node_id, curr_node, iter)?;
+        let (node_id, mut node) = parser(model, *curr_node_id, curr_node, iter)?;
         if first_node {
             // if the node is the first one, we need to add the input edge as an input to the node
-            node.inputs = node.inputs.into_iter().map(|x| Edge::new_at_edge(x.index)).collect();
+            node.inputs = node
+                .inputs
+                .into_iter()
+                .map(|x| Edge::new_at_edge(x.index))
+                .collect();
         }
-        println!("parsed node id: {:?} : {:?} <- inputs: {:?}", curr_node_id, node.operation.describe(), node.inputs);
+        debug!(
+            "parsed node id: {:?} : {:?} <- inputs: {:?}",
+            curr_node_id,
+            node.operation.describe(),
+            node.inputs
+        );
         Ok((node_id, node))
     } else {
         err(format!("Unknown node type: {}", op_name))
     }
 }
-
 
 fn load_flatten(
     model: &OnnxModel,
@@ -149,7 +167,6 @@ fn load_flatten(
     node: &OnnxNode,
     iter: &mut dyn Iterator<Item = &usize>,
 ) -> Result<(NodeId, CustomNode), ProvableOpError> {
-    println!("Flatten DEBUG HERE");
     ensure_onnx!(
         node.inputs.len() == 1,
         "Flatten {} must have 1 input",
@@ -189,7 +206,7 @@ fn load_maxpool(
                 "Padding must be 0s"
             );
         }
-        PaddingSpec::ExplicitOnnxPool(ref pad0, ref pad1,_) => {
+        PaddingSpec::ExplicitOnnxPool(ref pad0, ref pad1, _) => {
             ensure_onnx!(
                 pad0.iter().all(|&x| x == 0) && pad1.iter().all(|&x| x == 0),
                 "Padding must be 0s"
@@ -229,7 +246,6 @@ fn load_relu(
     node: &OnnxNode,
     iter: &mut dyn Iterator<Item = &usize>,
 ) -> Result<(NodeId, CustomNode), ProvableOpError> {
-    println!("Relu DEBUG HERE");
     let relu = crate::layers::activation::Relu::new();
     // find the input node that corresponds to the const input of Relu - since tract_onnx transforms
     // a relu operation into Max(input, Const(0))
@@ -241,17 +257,14 @@ fn load_relu(
     );
     let real_input_id = match model.node(node.inputs[1].node).op_as::<Const>() {
         Some(_) => {
-            println!("RELU DEBUG HERE");
             node.inputs[0]
         }
         None => {
-            println!("RELU DEBUG HERE 2");
             ensure_onnx!(
                 model.node(node.inputs[0].node).op_as::<Const>().is_some(),
                 "Relu {} has no constant input",
                 node.name
             );
-            println!("RELU DEBUG HERE 3");
             node.inputs[1]
         }
     };
@@ -294,7 +307,9 @@ fn load_gemm(
     // must make sure one of the inputs is the current matrix node. Otherwise that's just a normal add that we don't support.
     // TODO: support general case with Add layer.
     let mut piter = iter.peekable();
-    let next_node_id = **piter.peek().ok_or(ProvableOpError::OnnxParsingError(format!(
+    let next_node_id = **piter
+        .peek()
+        .ok_or(ProvableOpError::OnnxParsingError(format!(
             "Gemm {} has no next node",
             node.name
         )))?;
@@ -321,7 +336,7 @@ fn load_gemm(
                     // and we can extract it as a constant tensor afterwards
                     // since only two elements, we can just do 1 - idx
                     let bias_input = next_node.inputs[1 - idx];
-                    //let bias_node = model.node(bias_input.node);
+                    // let bias_node = model.node(bias_input.node);
                     // in that case, we move on the iterator, since we already saw the bias node and the Add is part of the dense layer
                     // unwrap is safe here since we peeked already
                     piter.next().unwrap();
@@ -345,9 +360,17 @@ fn load_gemm(
         }
         None => crate::Tensor::zeros(vec![weight.shape[0]]),
     };
-    ensure_onnx!(bias_tensor.shape.len() == 1 || bias_tensor.shape.len() == 2, "Bias tensor must be 1D or 2D with batch: {:?}", bias_tensor.shape);
+    ensure_onnx!(
+        bias_tensor.shape.len() == 1 || bias_tensor.shape.len() == 2,
+        "Bias tensor must be 1D or 2D with batch: {:?}",
+        bias_tensor.shape
+    );
     if bias_tensor.shape.len() == 2 {
-        ensure_onnx!(bias_tensor.shape[0] == 1, "Bias tensor must be 1D with batch: {:?}", bias_tensor.shape);
+        ensure_onnx!(
+            bias_tensor.shape[0] == 1,
+            "Bias tensor must be 1D with batch: {:?}",
+            bias_tensor.shape
+        );
         bias_tensor.shape = bias_tensor.shape[1..].to_vec();
     }
     ensure_onnx!(
@@ -361,13 +384,12 @@ fn load_gemm(
     );
     // here since the bias addition is the _last_ operation, the next layers are gonna refer
     // to the id of the add node and not the gemm node.
-    let provable_id = if bias_node_id.is_some(){
-        println!("GEMM DEBUG HERE: setting provable id to ADD nodeid: {}", next_node_id);
+    let provable_id = if bias_node_id.is_some() {
         next_node_id
     } else {
         node_id
     };
-    Ok((provable_id,provable_node))
+    Ok((provable_id, provable_node))
 }
 
 fn load_conv(
