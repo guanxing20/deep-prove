@@ -75,6 +75,7 @@ pub fn from_path(path: &str) -> Result<ProvableModel<f32>, ProvableOpError> {
     let mut model = ProvableModel::new_from_input_shapes(vec![input_shape.to_vec()]);
     let mut it = inference_order[1..].iter();
     let mut first_node = true;
+    let mut last_node_id = 0;
     while !it.is_empty() {
         let (id, zkml_node) = parse_node(onnx_model, &mut it, first_node).map_err(|e| 
             ProvableOpError::OnnxParsingError(
@@ -94,7 +95,9 @@ pub fn from_path(path: &str) -> Result<ProvableModel<f32>, ProvableOpError> {
             )
         })?;
         first_node = false;
+        last_node_id = id;
     }
+    model.route_output(vec![Edge::new(last_node_id, 0)])?;
     Ok(model)
 }
 
@@ -489,10 +492,17 @@ fn downcast_to<T: Op>(node: &OnnxNode) -> Result<&T, ProvableOpError> {
 
 #[cfg(test)]
 mod tests {
+    use crate::padding::PaddingMode;
+
     use super::*;
 
     #[test]
     fn test_parser_load_conv() {
         let model = from_path("bench-cnn/model.onnx").unwrap();
+        let input_shape = model.input_shapes(PaddingMode::NoPadding)[0].clone();
+
+        let input_tensor = crate::tensor::Tensor::random(&input_shape);
+        let trace = model.run::<GoldilocksExt2>(&[input_tensor]).unwrap();
+        assert!(trace.steps.len() >= 1);
     }
 }
