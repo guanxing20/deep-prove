@@ -1,16 +1,16 @@
 use crate::{
-    layers::{convolution::Convolution, provable::{Edge, Op as DOP, ProvableModel, ProvableNode, ProvableOp, ProvableOpError}},
+    layers::{activation::Activation, convolution::Convolution, provable::{Edge, NodeId, Op as DOP, ProvableModel, ProvableNode, ProvableOp, ProvableOpError}, Layer},
     quantization::Fieldizer,
 };
-use anyhow::{bail, ensure};
+use anyhow::{bail, ensure, Context};
 use ff_ext::ExtensionField;
 use goldilocks::GoldilocksExt2;
 use once_cell::sync::Lazy;
 use std::{collections::HashMap, sync::Mutex};
 use tract_onnx::{
     prelude::*,
-    tract_core::ops::{cnn::Conv, einsum::EinSum},
-    tract_hir::{internal::Expansion, ops::{cnn::PaddingSpec, konst::Const}},
+    tract_core::{self, ops::{binary::TypedBinOp, cnn::Conv, einsum::EinSum}},
+    tract_hir::{internal::Expansion, ops::{cnn::PaddingSpec, konst::Const, math::Add}},
 };
 use transcript::Transcript;
 
@@ -53,11 +53,13 @@ fn parse_node<'a, I: Iterator<Item = &'a usize>>(
 ) -> Result<(),ProvableOpError> {
     let curr_node_id = iter.next().ok_or(anyhow::anyhow!("No nodes left"))?;
     let curr_node = model.node(*curr_node_id);
-    let op_name = curr_node.op().name();
+    #[allow(unused_variables)]
+    let op_name = &curr_node.name;
     if let Some(node_type) = ALL_NODES_NAMES.iter().find(|&&x| op_name.contains(x)) {
         match *node_type {
-            "Conv" => load_conv(model, curr_node_id, curr_node, iter)?,
-            //"MatMul" => load_gemm(model, curr_node, iter)?,
+            "Conv" => load_conv(model, *curr_node_id, curr_node, iter)?,
+            "Gemm.ab" => load_gemm(model, *curr_node_id, curr_node, iter)?,
+            "Relu" => load_relu(model, *curr_node_id, curr_node, iter)?,
             _ => panic!("Unknown node type: {}", op_name),
         }
     } else {
@@ -66,7 +68,34 @@ fn parse_node<'a, I: Iterator<Item = &'a usize>>(
     Ok(())
 }
 
-type CustomNode = crate::layers::provable::Node<Box<dyn DOP<f32, GoldilocksExt2>>>;
+type CustomNode = crate::layers::provable::ProvableNode<f32>;
+
+fn load_relu<'a, I: Iterator<Item = &'a usize>>(
+    model: &OnnxModel,
+    node_id: NodeId,
+    node: &OnnxNode,
+    iter: &mut I,
+) -> Result<CustomNode,ProvableOpError> {
+    let relu = crate::layers::activation::Relu::new();
+    // find the input node that corresponds to the const input of Relu - since tract_onnx transforms
+    // a relu operation into Max(input, Const(0))
+    // the input node would be the other one.
+    ensure_onnx!(node.inputs.len() == 2, "Relu {} must have 2 inputs", node.name);
+    let real_input_id= match model.node(node.inputs[1].node).op_as::<Const>() {
+        Some(_) => {
+            node.inputs[0] 
+        }
+        None => {
+            ensure_onnx!(model.node(node.inputs[0].node).op_as::<Const>().is_some(), "Relu {} has no constant input", node.name);
+            node.inputs[1]
+        }
+    };
+    let provable_node = crate::layers::provable::ProvableNode::new(
+        vec![Edge::new(real_input_id.node, real_input_id.slot)], 
+        Layer::Activation(Activation::Relu(relu)),
+    );
+    Ok(provable_node)
+}
 
 fn load_gemm<'a, I: Iterator<Item = &'a usize>>(
     model: &OnnxModel,
@@ -74,34 +103,62 @@ fn load_gemm<'a, I: Iterator<Item = &'a usize>>(
     node: &OnnxNode,
     iter: &mut I,
 ) -> Result<CustomNode,ProvableOpError> {
-    let matrix = downcast_to::<EinSum>(node)?;
+    let _matrix = downcast_to::<EinSum>(node)?;
+    // TODO: we only support matvec for now for onnx models
+    // Fetch the input which is constant (e.g. the weights) 
+    ensure_onnx!(node.inputs.len() == 2, "Gemm {} must have 2 inputs", node.name);
+    let Some(weight_link) = node.inputs.iter().rev().find(|&x|  is_const(model.node(x.node))) else {
+        return err(format!("Gemm {} has no constant input", node.name));
+    };
+    let weight = extract_const_tensor(model.node(weight_link.node))?;
+    // find the input node
+    let Some(input_link) = node.inputs.iter().find(|&x| x.node != weight_link.node) else {
+        return err(format!("Gemm {} has no input", node.name));
+    };
+
     // also extract the bias if any. If there is one, that means the next node is a Add node and we
     // must make sure one of the inputs is the current matrix node. Otherwise that's just a normal add that we don't support.
     // TODO: support general case with Add layer.
-    let next_node_id = iter.peekable().peek().ok_or(ProvableOpError::OnnxParsingError(format!("Gemm {} has no next node", node.name)))?;
+    let mut pit = iter.peekable();
+    let next_node_id = pit.peek().ok_or(ProvableOpError::OnnxParsingError(format!("Gemm {} has no next node", node.name)))?;
     let next_node = model.node(**next_node_id);
-    let bias = match downcast_to::<Add>(&next_node) {
-        Ok(add_node) => {
-            assert!(add_node.inputs.len() == 2, "Add node must have 2 inputs");
-            match add_node.inputs.iter().enumerate().find(|(i,&x)| x.node == node_id) {
+    let bias_node = match downcast_to::<TypedBinOp>(next_node) {
+        _ if next_node.inputs.len() != 2 => {
+            // no bias, just return the matrix node
+            None
+        }
+        Ok(binop) if binop.0.is::<tract_core::ops::math::Add>() => {
+            match next_node.inputs.iter().enumerate().find(|(_i,&x)| x.node == node_id) {
                 Some((idx, ..)) => {
-                    let bias_input = add_node.inputs[1 - idx];
-                    
-                }
-
-                Some((1, ..)) => {
-                    // bias is the current node
+                    // since only two elements, we can just do 1 - idx
+                    let bias_input = next_node.inputs[1 - idx];
+                    let bias_node = model.node(bias_input.node);
+                    // in that case, we move on the iterator, since we already saw the bias node and the Add is part of the dense layer
+                    iter.next()
                 }
                 None => {
                     // no bias, just return the matrix node
+                    None
                 }
             }
         }
-        Err(_) => {
+        _ => {
             // no bias, just return the matrix node
+            None
         }
     };
-    unimplemented!()
+    let bias_tensor = match bias_node {
+        Some(node_id) => extract_const_tensor(model.node(*node_id))?,
+        None => crate::Tensor::zeros(vec![weight.shape[0]]),
+    };
+    ensure_onnx!(bias_tensor.shape.len() == 1, "Bias tensor must be 1D");
+    ensure_onnx!(bias_tensor.shape[0] == weight.shape[0], "Bias tensor must have same size as filter's rows");
+    let dense = crate::layers::dense::Dense::new(weight, bias_tensor);
+    let provable_node = crate::layers::provable::ProvableNode::new(
+        vec![Edge::new(input_link.node, input_link.slot)], 
+        Layer::Dense(dense),
+    );
+    Ok(provable_node)
 }
 
 fn load_conv<'a, I: Iterator<Item = &'a usize>>(
@@ -118,14 +175,20 @@ fn load_conv<'a, I: Iterator<Item = &'a usize>>(
     let input_link = node.inputs[0];
     let filter_link = node.inputs[1];
     let bias_link = node.inputs[2];
-    let input_node = model.node(input_link.node);
     let filter_node = model.node(filter_link.node);
     let bias_node = model.node(bias_link.node);
     let filter_const = extract_const_tensor(filter_node)?;
     let bias_const = extract_const_tensor(bias_node)?;
-    let conv = Convolution::new_raw(filter_const, bias_const);
-    let provable_node = crate::layers::provable::Node::new_raw(vec![Edge::new(input_link.node, 0)], Box::new(conv));
+    let conv = Convolution::new(filter_const, bias_const);
+    let provable_node = crate::layers::provable::ProvableNode::new(
+        vec![Edge::new(input_link.node, input_link.slot)], 
+        Layer::Convolution(conv),
+    );
     Ok(provable_node)
+}
+
+fn is_const(node: &OnnxNode) -> bool {
+    downcast_to::<Const>(node).is_ok()
 }
 
 fn extract_const_tensor(node: &OnnxNode) -> Result<crate::Tensor<f32>, ProvableOpError> {
@@ -185,12 +248,40 @@ fn check_conv2d_attributes(node: &Conv) -> Result<(), ProvableOpError> {
     Ok(())
 }
 
+enum LinearOp {
+    MatVec,
+}
+
+impl LinearOp {
+    fn from_einsum(einsum: &EinSum) -> Result<Self, ProvableOpError> {
+        let str_eq = einsum.axes.to_string();
+        let io = str_eq.split("->").collect::<Vec<_>>();
+        ensure_onnx!(io.len() == 2, "Einsum {:?} must have only 1 operation", einsum);
+        // mk,nk
+        let inputs= io[0].split(',').collect::<Vec<_>>();
+        ensure_onnx!(inputs.len() == 2, "Einsum {:?} must have 2 inputs", einsum);
+        // mk,nk
+        if inputs[0].len() != 2  || inputs[1].len() != 2 {
+            return err(format!("Einsum {:?} must have 2D inputs", einsum));
+        }
+        
+        let first_dim = inputs[0].chars().nth(0).ok_or(ProvableOpError::OnnxParsingError(format!("Einsum {:?} must have 2D inputs", einsum)))?;
+        let last_dim = inputs[1].chars().nth(1).ok_or(ProvableOpError::OnnxParsingError(format!("Einsum {:?} must have 2D inputs", einsum)))?;
+        ensure_onnx!(io[1].len() == 2, "Einsum {:?} must have 2 outputs dimensions", einsum);
+        let mut outputs = io[1].chars();;
+        let first_output_dim = outputs.nth(0).ok_or(ProvableOpError::OnnxParsingError(format!("Einsum {:?} must have 2D inputs", einsum)))?;
+        let last_output_dim = outputs.nth(1).ok_or(ProvableOpError::OnnxParsingError(format!("Einsum: {:?} must have 2D inputs", einsum)))?;
+        ensure_onnx!(first_dim == first_output_dim && last_dim == last_output_dim, "Einsum {:?} must have matching dimensions", einsum);
+        Ok(Self::MatVec)
+    }
+}
+
 fn err<T>(msg: String) -> Result<T, ProvableOpError> {
     Err(ProvableOpError::OnnxParsingError(msg).into())
 }
 
-fn downcast_to<T>(node: &OnnxNode) -> Result<&T, ProvableOpError> {
-    match node.op().downcast_ref::<T>() {
+fn downcast_to<T: Op>(node: &OnnxNode) -> Result<&T, ProvableOpError> {
+    match node.op_as::<T>() {
         Some(b) => Ok(b),
         None => {
             return Err(ProvableOpError::OnnxParsingError(format!(

@@ -1,11 +1,7 @@
 use crate::{
-    Element,
-    iop::precommit::{self, PolyID},
-    layers::{
-        LayerCtx,
-        provable::{ModelCtx, NodeCtx, ProvableModel},
-    },
-    lookup::context::{LookupContext, TableType},
+    iop::precommit::{self, PolyID}, layers::{
+        provable::{ModelCtx, NodeCtx, NodeId, ProvableModel}, LayerCtx
+    }, lookup::context::{LookupContext, TableType}, Element
 };
 use anyhow::{Context as CC, anyhow, ensure};
 use ff_ext::ExtensionField;
@@ -162,7 +158,7 @@ where
             last_output_shape: input_shapes.clone(),
         };
         let mut step_infos = HashMap::new();
-        let mut shapes: HashMap<u64, Vec<Vec<usize>>> = HashMap::new();
+        let mut shapes: HashMap<NodeId, Vec<Vec<usize>>> = HashMap::new();
         debug!("Context : layer info generation ...");
         for (id, node) in model.to_forward_iterator() {
             trace!(

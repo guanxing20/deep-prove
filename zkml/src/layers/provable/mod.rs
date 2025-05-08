@@ -24,7 +24,7 @@ use crate::{
 
 use super::{Layer, LayerCtx, LayerProof, reshape::Reshape};
 
-pub(crate) type NodeId = u64;
+pub(crate) type NodeId = usize;
 
 pub use error::ProvableOpError;
 pub use model::{InferenceTrace, ModelCtx, ProvableModel};
@@ -38,6 +38,17 @@ pub struct Edge {
     pub(crate) node: Option<NodeId>,
     // The index of the wire of `node` which is linked to this wire
     pub(crate) index: usize,
+}
+
+impl Edge {
+    pub fn new(node: NodeId, index: usize) -> Self {
+        Self { node: Some(node), index }
+    }
+
+    /// Edge when the node is an input or an output of the model
+    pub fn new_at_edge(index: usize) -> Self {
+        Self { node: None, index }
+    }
 }
 
 /// Represents all the edges that are connected to a node's output wire

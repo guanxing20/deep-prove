@@ -1,4 +1,5 @@
 #![feature(iter_next_chunk)]
+#![feature(exact_size_is_empty)]
 
 use ff_ext::ExtensionField;
 use gkr::structs::PointAndEval;
@@ -18,6 +19,7 @@ pub mod layers;
 pub mod lookup;
 pub mod model;
 mod onnx_parse;
+mod parser;
 pub mod padding;
 pub use onnx_parse::{FloatOnnxLoader, ModelType};
 pub mod tensor;
