@@ -127,6 +127,8 @@ impl<T: Number> Model<T> {
     /// Prints to stdout
     pub fn describe(&self) {
         info!("Model description:");
+        info!("Unpadded input shape: {:?}", self.unpadded_input);
+        info!("Padded input shape: {:?}", self.padded_input);
         for (idx, layer) in self.layers() {
             info!("\t- {}: {}", idx, layer.describe());
         }

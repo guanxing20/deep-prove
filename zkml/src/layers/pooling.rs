@@ -126,7 +126,7 @@ impl Pooling {
             }
         }
     }
-    #[timed::timed_instrument(level = "debug")]
+    #[timed::timed_instrument(name = "Prover::prove_pooling_step")]
     pub fn prove_pooling<E: ExtensionField, T: Transcript<E>>(
         &self,
         prover: &mut Prover<E, T>,

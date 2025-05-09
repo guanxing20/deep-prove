@@ -17,7 +17,7 @@ use anyhow::{Result, ensure};
 use ark_std::rand;
 use itertools::Itertools;
 use statrs::statistics::{Data, Max, Min, OrderStatistics};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use super::ScalingFactor;
 
@@ -57,6 +57,7 @@ impl ScalingStrategy for InferenceObserver {
         let input_not_padded_shape = model.unpadded_input_shape();
         let inputs = if self.inputs.is_empty() {
             let size = input_not_padded_shape.iter().product();
+            warn!("No representative inputs provided, generating random ones");
             (0..10)
                 .map(|_| {
                     (0..size)
@@ -65,6 +66,7 @@ impl ScalingStrategy for InferenceObserver {
                 })
                 .collect_vec()
         } else {
+            debug!("Using provided representative inputs");
             self.inputs.clone()
         };
         // 1. Run the inference multiple times with different inputs

@@ -2464,7 +2464,7 @@ dependencies = [
 [[package]]
 name = "timed"
 version = "0.1.0"
-source = "git+https://github.com/nikkolasg/timed-rs#243cb82bd259b36fff96d7963675eb25c4d7d3ba"
+source = "git+https://github.com/nikkolasg/timed-rs#4b8c2bd9f6fdf4efaccc5221125b56963c61e363"
 dependencies = [
  "csv",
  "once_cell",
@@ -2479,7 +2479,7 @@ dependencies = [
 [[package]]
 name = "timed-core"
 version = "0.1.0"
-source = "git+https://github.com/nikkolasg/timed-rs#243cb82bd259b36fff96d7963675eb25c4d7d3ba"
+source = "git+https://github.com/nikkolasg/timed-rs#4b8c2bd9f6fdf4efaccc5221125b56963c61e363"
 dependencies = [
  "csv",
  "once_cell",
