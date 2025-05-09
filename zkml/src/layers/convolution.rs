@@ -1,5 +1,9 @@
 use crate::{
-    iop::context::ShapeStep, layers::hadamard, padding::{pad_conv, PaddingMode, ShapeInfo}, quantization::TensorFielder, VectorTranscript
+    VectorTranscript,
+    iop::context::ShapeStep,
+    layers::{hadamard, requant::Requant},
+    padding::{PaddingMode, ShapeInfo, pad_conv},
+    quantization::{BIT_LEN, InferenceObserver, InferenceTracker, TensorFielder},
 };
 use core::f32;
 
@@ -31,9 +35,11 @@ use tracing::{debug, instrument, warn};
 use transcript::Transcript;
 
 use super::{
+    LayerCtx,
     provable::{
-        Evaluate, LayerOut, NodeId, Op, OpInfo, PadOp, ProvableOp, ProvableOpError, ProveInfo, VerifiableCtx
-    }, LayerCtx
+        Evaluate, LayerOut, NodeId, Op, OpInfo, PadOp, ProvableOp, ProvableOpError, ProveInfo,
+        QuantizeOp, QuantizeOutput, VerifiableCtx,
+    },
 };
 
 pub(crate) const BIAS_POLY_ID: PolyID = 200_000;
@@ -527,9 +533,50 @@ where
     }
 }
 
+impl QuantizeOp<InferenceObserver> for Convolution<f32> {
+    type QuantizedOp = Convolution<Element>;
+
+    fn quantize_op(
+        self,
+        tracker: &InferenceTracker,
+        node_id: NodeId,
+        input_scaling: &[ScalingFactor],
+    ) -> anyhow::Result<QuantizeOutput<Self::QuantizedOp>> {
+        let model_scaling = ScalingFactor::from_absolute_max(self.max_abs_weight(), None);
+        let num_inputs = input_scaling.len();
+        ensure!(
+            num_inputs == 1,
+            "Number of input scaling factor for convolution layer different from 1"
+        );
+        let input_scaling = &input_scaling[0];
+        let (min, max) = tracker.distribution_info(node_id, 0);
+        let output_scaling = ScalingFactor::from_absolute_max(min.abs().max(max.abs()), None);
+        let bias_scaling = {
+            // bias has to be quantized over integers with double bit length
+            let min_quantized = -(1 << (2 * (*BIT_LEN) - 1)) + 1;
+            let max_quantized = (1 << (2 * (*BIT_LEN) - 1)) - 1;
+            ScalingFactor::from_scale(
+                input_scaling.scale() * model_scaling.scale(),
+                Some((min_quantized, max_quantized)),
+            )
+        };
+        let quantized_conv = self.quantize(&model_scaling, &bias_scaling);
+        let shift = input_scaling.shift(&model_scaling, &output_scaling);
+        let (quantized_min, _quantized_max) =
+            quantized_conv.output_range(*quantization::MIN, *quantization::MAX);
+        let requant = Requant::new(quantized_min.abs() as usize, shift);
+        Ok(QuantizeOutput {
+            quanzited_op: quantized_conv,
+            output_scalings: vec![output_scaling],
+            requant_layer: Some(requant),
+        })
+    }
+}
+
 impl PadOp for Convolution<Element> {
-    fn pad_node(self, si: &mut ShapeInfo) -> Result<Self, ProvableOpError> 
-    where Self: Sized 
+    fn pad_node(self, si: &mut ShapeInfo) -> Result<Self, ProvableOpError>
+    where
+        Self: Sized,
     {
         pad_conv(self, si).map_err(|e| ProvableOpError::GenericError(e))
     }

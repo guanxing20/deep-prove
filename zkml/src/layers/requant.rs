@@ -34,9 +34,11 @@ use crate::{
 };
 
 use super::{
+    LayerCtx,
     provable::{
-        Evaluate, LayerOut, NodeId, Op, OpInfo, PadOp, ProvableOp, ProvableOpError, ProveInfo, StepData, VerifiableCtx
-    }, LayerCtx
+        Evaluate, LayerOut, NodeId, Op, OpInfo, PadOp, ProvableOp, ProvableOpError, ProveInfo,
+        StepData, VerifiableCtx,
+    },
 };
 
 enum RequantResult {
@@ -116,6 +118,7 @@ impl Evaluate<Element> for Requant {
         inputs: &[&Tensor<Element>],
         _unpadded_input_shapes: Vec<Vec<usize>>,
     ) -> Result<LayerOut<Element, E>, ProvableOpError> {
+        println!("Evaluating Requant");
         if inputs.len() != 1 {
             return Err(ProvableOpError::ParameterError(
                 "Requant layer expects one input".to_string(),

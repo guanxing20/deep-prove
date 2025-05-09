@@ -1,10 +1,15 @@
 use std::cmp::Ordering;
 
 use crate::{
+    Claim, NextPowerOfTwo, Prover,
     iop::{
         context::{ContextAux, ShapeStep},
         verifier::Verifier,
-    }, layers::{LayerCtx, LayerProof, PolyID}, padding::{pad_dense, PaddingMode, ShapeInfo}, quantization::{self, ScalingFactor}, tensor::Number, Claim, NextPowerOfTwo, Prover
+    },
+    layers::{LayerCtx, LayerProof, PolyID, requant::Requant},
+    padding::{PaddingMode, ShapeInfo, pad_dense},
+    quantization::{self, BIT_LEN, InferenceObserver, InferenceTracker, ScalingFactor},
+    tensor::Number,
 };
 use anyhow::{Context, ensure};
 use ff_ext::ExtensionField;
@@ -21,7 +26,8 @@ use transcript::Transcript;
 use crate::{Element, tensor::Tensor};
 
 use super::provable::{
-    Evaluate, LayerOut, NodeId, Op, OpInfo, PadOp, ProvableOp, ProvableOpError, ProveInfo, VerifiableCtx
+    Evaluate, LayerOut, NodeId, Op, OpInfo, PadOp, ProvableOp, ProvableOpError, ProveInfo,
+    QuantizeOp, QuantizeOutput, VerifiableCtx,
 };
 
 /// Bias to compute the bias ID polynomials. Since originally we take the index of each
@@ -222,10 +228,52 @@ where
 }
 
 impl PadOp for Dense<Element> {
-    fn pad_node(self, si: &mut ShapeInfo) -> Result<Self, ProvableOpError> 
-    where Self: Sized 
+    fn pad_node(self, si: &mut ShapeInfo) -> Result<Self, ProvableOpError>
+    where
+        Self: Sized,
     {
         pad_dense(self, si).map_err(|e| ProvableOpError::GenericError(e))
+    }
+}
+
+impl QuantizeOp<InferenceObserver> for Dense<f32> {
+    type QuantizedOp = Dense<Element>;
+
+    fn quantize_op(
+        self,
+        tracker: &InferenceTracker,
+        node_id: NodeId,
+        input_scaling: &[ScalingFactor],
+    ) -> anyhow::Result<QuantizeOutput<Self::QuantizedOp>> {
+        let model_scaling = ScalingFactor::from_absolute_max(self.max_abs_weight(), None);
+        let num_inputs = input_scaling.len();
+        ensure!(
+            num_inputs == 1,
+            "Number of input scaling factor for dense layer different from 1"
+        );
+        let input_scaling = &input_scaling[0];
+        let (min, max) = tracker.distribution_info(node_id, 0);
+        let output_scaling = ScalingFactor::from_absolute_max(min.abs().max(max.abs()), None);
+        let bias_scaling = {
+            // bias has to be quantized over integers with double bit length
+            let min_quantized = -(1 << (2 * (*BIT_LEN) - 1)) + 1;
+            let max_quantized = (1 << (2 * (*BIT_LEN) - 1)) - 1;
+            ScalingFactor::from_scale(
+                input_scaling.scale() * model_scaling.scale(),
+                Some((min_quantized, max_quantized)),
+            )
+        };
+        let shift = input_scaling.shift(&model_scaling, &output_scaling);
+        let quantized_dense = self.quantize(&model_scaling, &bias_scaling);
+        let (quantized_min, _quantized_max) =
+            quantized_dense.output_range(*quantization::MIN, *quantization::MAX);
+        let requant = Requant::new(quantized_min.abs() as usize, shift);
+
+        Ok(QuantizeOutput {
+            quanzited_op: quantized_dense,
+            output_scalings: vec![output_scaling],
+            requant_layer: Some(requant),
+        })
     }
 }
 

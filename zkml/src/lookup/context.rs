@@ -9,10 +9,15 @@ use tracing::{debug, warn};
 use transcript::Transcript;
 
 use crate::{
-    commit::precommit::Context, iop::ChallengeStorage, layers::{
+    Element,
+    commit::precommit::Context,
+    iop::ChallengeStorage,
+    layers::{
         activation::Relu,
         provable::{InferenceTrace, ModelCtx, ProvableOp, ToIterator},
-    }, lookup::logup_gkr::structs::LogUpInput, quantization::{self, Fieldizer}, Element
+    },
+    lookup::logup_gkr::structs::LogUpInput,
+    quantization::{self, Fieldizer},
 };
 
 use super::logup_gkr::error::LogUpError;

@@ -213,36 +213,7 @@ impl<'a, F: ExtensionField> InferenceTrace<'a, Element, F> {
             unpadded_shape: self.unpadded_shape.clone(),
         }
     }
-    pub fn dequantized(&self, md: &ModelMetadata) -> InferenceTrace<'a, f32, F> {
-        let input = self.input.dequantize(&md.input);
-        let mut last_layer_output_scaling = None;
-        let steps = self
-            .steps
-            .iter()
-            .map(|step| {
-                if step.layer.needs_requant() {
-                    last_layer_output_scaling = Some(md.layer_output_scaling_factor(step.id));
-                }
-                let output = step.output.dequantize(
-                    last_layer_output_scaling
-                        .as_ref()
-                        .expect("Model must start with a 'need-requant' layer"),
-                );
-                InferenceStep {
-                    id: step.id,
-                    layer: step.layer,
-                    output,
-                    conv_data: step.conv_data.clone(),
-                    unpadded_shape: step.unpadded_shape.clone(),
-                }
-            })
-            .collect();
-        InferenceTrace {
-            steps,
-            input,
-            unpadded_shape: self.unpadded_shape.clone(),
-        }
-    }
+
     pub fn to_field(self) -> InferenceTrace<'a, F, F> {
         let input = self.input.to_fields();
         let field_steps = self

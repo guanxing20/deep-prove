@@ -1,9 +1,17 @@
 use std::collections::HashMap;
 
-use anyhow::{anyhow, ensure, Context, Result};
+use anyhow::{Context, Result, anyhow, ensure};
 
 use crate::{
-    layers::{convolution::Convolution, dense::Dense, pooling::Pooling, provable::{NodeId, ProvableModel, ProvableNode, ToIterator}, reshape::Reshape}, onnx_parse::{check_filter, safe_conv2d_shape, safe_maxpool2d_shape}, Element
+    Element,
+    layers::{
+        convolution::Convolution,
+        dense::Dense,
+        pooling::Pooling,
+        provable::{NodeId, ProvableModel, ProvableNode, ToIterator},
+        reshape::Reshape,
+    },
+    onnx_parse::{check_filter, safe_conv2d_shape, safe_maxpool2d_shape},
 };
 type GarbagePad = Option<(Vec<usize>, Vec<usize>)>;
 type Shape = Vec<usize>;
@@ -16,7 +24,7 @@ pub enum PaddingMode {
 
 #[derive(Clone, Debug)]
 pub struct ShapeInfo {
-    shapes: Vec<ShapeData>
+    shapes: Vec<ShapeData>,
 }
 
 #[derive(Clone, Debug)]
@@ -28,75 +36,89 @@ pub struct ShapeData {
 
 pub fn pad_model(mut model: ProvableModel<Element>) -> Result<ProvableModel<Element>> {
     let input_si = ShapeInfo {
-        shapes: model.unpadded_input_shapes().into_iter().zip(model.padded_input_shapes())
-        .map(|(unpadded_shape, padded_shape)|
-            ShapeData {
+        shapes: model
+            .unpadded_input_shapes()
+            .into_iter()
+            .zip(model.padded_input_shapes())
+            .map(|(unpadded_shape, padded_shape)| ShapeData {
                 input_shape_padded: padded_shape,
                 ignore_garbage_pad: None,
                 input_shape_og: unpadded_shape,
-            }
-        ).collect(),
+            })
+            .collect(),
     };
     let mut shape_infos: HashMap<NodeId, ShapeInfo> = HashMap::new();
     let unpadded_input_shapes = model.unpadded_input_shapes();
     let mut catch_err = Ok(());
-    let nodes = model.to_forward_iterator_mut().map(
-        |(node_id, node)| -> Result<(NodeId, ProvableNode<Element>)> {
-        let shapes = node.inputs.iter().map(|edge| {
-            if let Some(n) = edge.node {
-                let si = shape_infos.get(&n).ok_or(
-                    anyhow!("Shapes for node {n} not found")
-                )?;
-                ensure!(edge.index < si.shapes.len(),
-                "Shape for input {} requested, but node {n} has only {} inputs",
-                    edge.index, si.shapes.len(),
-                );
-                Ok(si.shapes[edge.index].clone())
+    let nodes = model
+        .intoto_forward_iterator_mut()
+        .map(
+            |(node_id, node)| -> Result<(NodeId, ProvableNode<Element>)> {
+                let shapes = node
+                    .inputs
+                    .iter()
+                    .map(|edge| {
+                        if let Some(n) = edge.node {
+                            let si = shape_infos
+                                .get(&n)
+                                .ok_or(anyhow!("Shapes for node {n} not found"))?;
+                            ensure!(
+                                edge.index < si.shapes.len(),
+                                "Shape for input {} requested, but node {n} has only {} inputs",
+                                edge.index,
+                                si.shapes.len(),
+                            );
+                            Ok(si.shapes[edge.index].clone())
+                        } else {
+                            ensure!(
+                                edge.index < input_si.shapes.len(),
+                                "Shape for input {} requested, but model has only {} inputs",
+                                edge.index,
+                                input_si.shapes.len(),
+                            );
+                            Ok(input_si.shapes[edge.index].clone())
+                        }
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let mut si = ShapeInfo { shapes };
+                let node = node.pad_node(&mut si)?;
+                shape_infos.insert(node_id, si);
+                Ok((node_id, node))
+            },
+        )
+        .map_while(|n| {
+            if n.is_err() {
+                catch_err = Err(n.unwrap_err());
+                None
             } else {
-                ensure!(edge.index < input_si.shapes.len(),
-                "Shape for input {} requested, but model has only {} inputs",
-                    edge.index, input_si.shapes.len(),   
-                );
-                Ok(input_si.shapes[edge.index].clone())
+                Some(n.unwrap())
             }
-        }).collect::<Result<Vec<_>>>()?;
-        let mut si = ShapeInfo { shapes, }; 
-        let node = node.pad_node(&mut si)?;
-        shape_infos.insert(node_id, si);
-        Ok((node_id, node))
-    }).map_while(|n| 
-        if n.is_err() {
-            catch_err = Err(n.unwrap_err());
-            None
-        } else {
-            Some(n.unwrap())
-        }
-    );
+        });
     model = ProvableModel::<Element>::new(unpadded_input_shapes, PaddingMode::Padding, nodes);
     catch_err?;
-    /*model.layers = model
-        .layers
-        .into_iter()
-        .enumerate()
-        .map(|(_i, layer)| {
-            match layer {
-                Layer::Dense(d) => Ok(Layer::Dense(pad_dense(d, &mut si)?)),
-                Layer::Convolution(c) => Ok(Layer::Convolution(pad_conv(c, &mut si)?)),
-                Layer::Pooling(m) => {
-                    Ok(Layer::Pooling(pooling(m, &mut si)?))
-                }
-                Layer::Reshape(_) => Ok(Layer::<Element>::Reshape(reshape(&mut si)?)),
-                e => Ok(e),
-            }
-        })
-        .collect::<Result<Vec<_>>>()?;*/
+    // model.layers = model
+    // .layers
+    // .into_iter()
+    // .enumerate()
+    // .map(|(_i, layer)| {
+    // match layer {
+    // Layer::Dense(d) => Ok(Layer::Dense(pad_dense(d, &mut si)?)),
+    // Layer::Convolution(c) => Ok(Layer::Convolution(pad_conv(c, &mut si)?)),
+    // Layer::Pooling(m) => {
+    // Ok(Layer::Pooling(pooling(m, &mut si)?))
+    // }
+    // Layer::Reshape(_) => Ok(Layer::<Element>::Reshape(reshape(&mut si)?)),
+    // e => Ok(e),
+    // }
+    // })
+    // .collect::<Result<Vec<_>>>()?;
     Ok(model)
 }
 
 pub(crate) fn reshape(si: &mut ShapeInfo) -> Result<Reshape> {
-    si.shapes.iter_mut().for_each(|sd| 
+    si.shapes.iter_mut().for_each(|sd| {
         sd.ignore_garbage_pad = Some((sd.input_shape_og.clone(), sd.input_shape_padded.clone()))
-    );
+    });
     Ok(Reshape)
 }
 
@@ -110,9 +132,15 @@ pub(crate) fn pooling(p: Pooling, si: &mut ShapeInfo) -> Result<Pooling> {
     Ok(p)
 }
 
-pub(crate) fn pad_conv(mut c: Convolution<Element>, si: &mut ShapeInfo) -> Result<Convolution<Element>> {
+pub(crate) fn pad_conv(
+    mut c: Convolution<Element>,
+    si: &mut ShapeInfo,
+) -> Result<Convolution<Element>> {
     // convolution layer currently expects 1 input, so we check there is only 1 input shape
-    ensure!(si.shapes.len() == 1, "More than 1 input shape found for convolution layer");
+    ensure!(
+        si.shapes.len() == 1,
+        "More than 1 input shape found for convolution layer"
+    );
     let sd = si.shapes.first_mut().unwrap();
     sd.input_shape_og = safe_conv2d_shape(&sd.input_shape_og, &c.filter.get_shape())?;
     let weight_shape = c.filter.get_shape();
@@ -148,7 +176,10 @@ pub(crate) fn pad_conv(mut c: Convolution<Element>, si: &mut ShapeInfo) -> Resul
 
 pub(crate) fn pad_dense(mut d: Dense<Element>, si: &mut ShapeInfo) -> Result<Dense<Element>> {
     // dense layer currently expects 1 input, so we check there is only 1 input shape
-    ensure!(si.shapes.len() == 1, "More than 1 input shape found for dense layer");
+    ensure!(
+        si.shapes.len() == 1,
+        "More than 1 input shape found for dense layer"
+    );
     let sd = si.shapes.first_mut().unwrap();
     let nrows = d.matrix.get_shape()[0];
     sd.input_shape_og = vec![nrows];

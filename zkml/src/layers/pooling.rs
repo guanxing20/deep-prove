@@ -1,13 +1,20 @@
 use std::collections::HashMap;
 
 use crate::{
-    commit::{compute_betas_eval, identity_eval, precommit::PolyID, same_poly}, iop::{context::ShapeStep, verifier::Verifier}, layers::{ContextAux, LayerProof}, lookup::{
+    Claim, Element, Prover,
+    commit::{compute_betas_eval, identity_eval, precommit::PolyID, same_poly},
+    iop::{context::ShapeStep, verifier::Verifier},
+    layers::{ContextAux, LayerProof},
+    lookup::{
         context::{LookupWitnessGen, TableType},
         logup_gkr::{
             prover::batch_prove as logup_batch_prove, structs::LogUpProof,
             verifier::verify_logup_proof,
         },
-    }, padding::{pooling, PaddingMode, ShapeInfo}, quantization::{Fieldizer, IntoElement}, tensor::{Number, Tensor}, Claim, Element, Prover
+    },
+    padding::{PaddingMode, ShapeInfo, pooling},
+    quantization::{Fieldizer, IntoElement},
+    tensor::{Number, Tensor},
 };
 use anyhow::{Context, anyhow, ensure};
 use ff_ext::ExtensionField;
@@ -27,9 +34,11 @@ use serde::{Deserialize, Serialize};
 use sumcheck::structs::IOPProverState;
 
 use super::{
+    LayerCtx,
     provable::{
-        Evaluate, LayerOut, NodeId, Op, OpInfo, PadOp, ProvableOp, ProvableOpError, ProveInfo, StepData, VerifiableCtx
-    }, LayerCtx
+        Evaluate, LayerOut, NodeId, Op, OpInfo, PadOp, ProvableOp, ProvableOpError, ProveInfo,
+        StepData, VerifiableCtx,
+    },
 };
 
 pub const MAXPOOL2D_KERNEL_SIZE: usize = 2;
@@ -153,8 +162,9 @@ where
 }
 
 impl PadOp for Pooling {
-    fn pad_node(self, si: &mut ShapeInfo) -> Result<Self, ProvableOpError> 
-    where Self: Sized 
+    fn pad_node(self, si: &mut ShapeInfo) -> Result<Self, ProvableOpError>
+    where
+        Self: Sized,
     {
         pooling(self, si).map_err(|e| ProvableOpError::GenericError(e))
     }

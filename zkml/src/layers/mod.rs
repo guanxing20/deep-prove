@@ -17,7 +17,8 @@ use goldilocks::GoldilocksExt2;
 use itertools::Itertools;
 use pooling::{PoolingCtx, PoolingProof};
 use provable::{
-    evaluate_layer, Evaluate, LayerOut, Op, OpInfo, PadOp, ProvableNode, ProvableOp, ProvableOpError, ProveInfo, StepData
+    Evaluate, LayerOut, Op, OpInfo, PadOp, ProvableNode, ProvableOp, ProvableOpError, ProveInfo,
+    QuantizeOp, QuantizeOutput, StepData, evaluate_layer,
 };
 use requant::RequantCtx;
 use reshape::Reshape;
@@ -26,13 +27,20 @@ use tracing::debug;
 use transcript::Transcript;
 
 use crate::{
-    commit::precommit::PolyID, iop::context::{ContextAux, ShapeStep, TableCtx}, layers::{
+    Element,
+    commit::precommit::PolyID,
+    iop::context::{ContextAux, ShapeStep, TableCtx},
+    layers::{
         activation::{Activation, ActivationProof, Relu},
         convolution::Convolution,
         dense::Dense,
         pooling::Pooling,
         requant::{Requant, RequantProof},
-    }, lookup::context::LookupWitnessGen, padding::{PaddingMode, ShapeInfo}, quantization::ScalingFactor, tensor::{ConvData, Number, Tensor}, Element
+    },
+    lookup::context::LookupWitnessGen,
+    padding::{PaddingMode, ShapeInfo},
+    quantization::{InferenceObserver, InferenceTracker, ScalingFactor},
+    tensor::{ConvData, Number, Tensor},
 };
 use activation::ActivationCtx;
 use convolution::{ConvCtx, ConvProof, SchoolBookConv, SchoolBookConvCtx};
@@ -351,13 +359,16 @@ where
 }
 
 impl PadOp for Layer<Element> {
-    fn pad_node(self, si: &mut ShapeInfo) -> Result<Self, ProvableOpError> 
-    where Self: Sized 
+    fn pad_node(self, si: &mut ShapeInfo) -> Result<Self, ProvableOpError>
+    where
+        Self: Sized,
     {
         Ok(match self {
             Layer::Dense(dense) => Layer::Dense(dense.pad_node(si)?),
             Layer::Convolution(convolution) => Layer::Convolution(convolution.pad_node(si)?),
-            Layer::SchoolBookConvolution(school_book_conv) => Layer::SchoolBookConvolution(school_book_conv.pad_node(si)?),
+            Layer::SchoolBookConvolution(school_book_conv) => {
+                Layer::SchoolBookConvolution(school_book_conv.pad_node(si)?)
+            }
             Layer::Activation(activation) => Layer::Activation(activation.pad_node(si)?),
             Layer::Requant(requant) => Layer::Requant(requant.pad_node(si)?),
             Layer::Pooling(pooling) => Layer::Pooling(pooling.pad_node(si)?),
@@ -459,6 +470,67 @@ where
     E::BaseField: Serialize + DeserializeOwned,
     E: Serialize + DeserializeOwned,
 {
+}
+
+impl QuantizeOp<InferenceObserver> for Layer<f32> {
+    type QuantizedOp = Layer<Element>;
+
+    fn quantize_op(
+        self,
+        tracker: &InferenceTracker,
+        node_id: provable::NodeId,
+        input_scaling: &[ScalingFactor],
+    ) -> anyhow::Result<QuantizeOutput<Self::QuantizedOp>> {
+        Ok(match self {
+            Layer::Dense(dense) => {
+                let output = dense.quantize_op(tracker, node_id, input_scaling)?;
+                QuantizeOutput {
+                    quanzited_op: Layer::Dense(output.quanzited_op),
+                    output_scalings: output.output_scalings,
+                    requant_layer: output.requant_layer,
+                }
+            }
+            Layer::Convolution(convolution) => {
+                let output = convolution.quantize_op(tracker, node_id, input_scaling)?;
+                QuantizeOutput {
+                    quanzited_op: Layer::Convolution(output.quanzited_op),
+                    output_scalings: output.output_scalings,
+                    requant_layer: output.requant_layer,
+                }
+            }
+            Layer::SchoolBookConvolution(school_book_conv) => QuantizeOutput {
+                quanzited_op: Layer::SchoolBookConvolution(SchoolBookConv(
+                    school_book_conv.0.quantize(
+                        // we don't care about accurate quantization for schoolbook conv
+                        &input_scaling[0],
+                        &input_scaling[0],
+                    ),
+                )),
+                output_scalings: input_scaling.to_vec(),
+                requant_layer: None,
+            },
+            Layer::Activation(activation) => QuantizeOutput {
+                quanzited_op: Layer::Activation(activation),
+                output_scalings: input_scaling.to_vec(),
+                requant_layer: None,
+            },
+            Layer::Requant(requant) => QuantizeOutput {
+                quanzited_op: Layer::Requant(requant),
+                output_scalings: input_scaling.to_vec(),
+                requant_layer: None,
+            },
+            Layer::Pooling(pooling) => QuantizeOutput {
+                quanzited_op: Layer::Pooling(pooling),
+                output_scalings: input_scaling.to_vec(),
+                requant_layer: None,
+            },
+            Layer::Reshape(reshape) => QuantizeOutput {
+                quanzited_op: Layer::Reshape(reshape),
+                output_scalings: input_scaling.to_vec(),
+                requant_layer: None,
+            },
+        })
+    }
 }
 
 impl<T: Number> Layer<T> {

@@ -11,13 +11,18 @@ use std::{
 use transcript::Transcript;
 
 use crate::{
-    commit::precommit::PolyID, iop::{
+    Claim, Element, Prover, ScalingFactor, Tensor,
+    commit::precommit::PolyID,
+    iop::{
         context::{ContextAux, ShapeStep},
         verifier::Verifier,
-    }, lookup::context::LookupWitnessGen, padding::{PaddingMode, ShapeInfo}, tensor::{ConvData, Number}, Claim, Element, Prover, Tensor
+    },
+    lookup::context::LookupWitnessGen,
+    padding::{PaddingMode, ShapeInfo},
+    tensor::{ConvData, Number},
 };
 
-use super::{Layer, LayerCtx, LayerProof, reshape::Reshape};
+use super::{Layer, LayerCtx, LayerProof, requant::Requant, reshape::Reshape};
 
 pub(crate) type NodeId = u64;
 
@@ -79,10 +84,18 @@ where
 
 impl<N: Number> ProvableNode<N> {
     pub(crate) fn new(inputs: Vec<Edge>, operation: Layer<N>) -> Self {
-        let num_inputs = inputs.len();
+        let num_outputs = operation.num_outputs(inputs.len());
+        Self::new_with_outputs(inputs, operation, vec![Default::default(); num_outputs])
+    }
+
+    pub(crate) fn new_with_outputs(
+        inputs: Vec<Edge>,
+        operation: Layer<N>,
+        outputs: Vec<OutputWire>,
+    ) -> Self {
         Self {
             inputs,
-            outputs: vec![Default::default(); operation.num_outputs(num_inputs)],
+            outputs,
             operation,
         }
     }
@@ -233,9 +246,35 @@ where
     }
 }
 
+pub trait QuantizationStrategy {
+    type AuxData: Sized;
+}
+
+/// Output of `QuantizeOp` method over a layer
+pub struct QuantizeOutput<Op> {
+    /// The actual layer after quantization
+    pub(crate) quanzited_op: Op,
+    /// The scaling factor of the output wires of the operation
+    pub(crate) output_scalings: Vec<ScalingFactor>,
+    /// The requant layer to be added to the model, if any
+    pub(crate) requant_layer: Option<Requant>,
+}
+
+pub trait QuantizeOp<Q: QuantizationStrategy> {
+    type QuantizedOp: Sized;
+
+    fn quantize_op(
+        self,
+        data: &Q::AuxData,
+        node_id: NodeId,
+        input_scaling: &[ScalingFactor],
+    ) -> anyhow::Result<QuantizeOutput<Self::QuantizedOp>>;
+}
+
 pub trait PadOp {
-    fn pad_node(self, _si: &mut ShapeInfo) -> Result<Self, ProvableOpError> 
-    where Self: Sized
+    fn pad_node(self, _si: &mut ShapeInfo) -> Result<Self, ProvableOpError>
+    where
+        Self: Sized,
     {
         Ok(self)
     }
