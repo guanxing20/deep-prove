@@ -15,8 +15,8 @@ use anyhow::{Context, bail, ensure};
 use ff_ext::ExtensionField;
 use goldilocks::GoldilocksExt2;
 use once_cell::sync::Lazy;
-use tracing::debug;
 use std::{collections::HashMap, sync::Mutex};
+use tracing::debug;
 use tract_onnx::{
     prelude::*,
     tract_core::{
@@ -55,24 +55,24 @@ macro_rules! ensure_onnx {
     }
 
 pub fn from_path(path: &str) -> Result<ProvableModel<f32>, ProvableOpError> {
-    let pmodel = tract_onnx::onnx()
-        .model_for_path(path)?
-        .into_typed()?
-        .into_decluttered()?;
-    // so far we dont support batching
-    let mut values = SymbolValues::default();
-    let symbol = pmodel.sym("batch_size");
-    values.set(&symbol, 1);
-    let model = pmodel.concretize_dims(&values)?;
-    drop(pmodel);
-    
+    let model = {
+        let pmodel = tract_onnx::onnx()
+            .model_for_path(path)?
+            .into_typed()?
+            .into_decluttered()?;
+        // so far we dont support batching
+        let mut values = SymbolValues::default();
+        let symbol = pmodel.sym("batch_size");
+        values.set(&symbol, 1);
+        pmodel.concretize_dims(&values)?
+    };
 
     let plan = SimplePlan::new(model)?;
     let onnx_model = plan.model();
     let inference_order = plan.order_without_consts();
     let input_node = onnx_model.node(inference_order[0]);
     let input_source = downcast_to::<TypedSource>(input_node)?;
-        debug!("onnx input_source: {:?}", input_source.fact.shape.to_tvec());
+    debug!("onnx input_source: {:?}", input_source.fact.shape.to_tvec());
     let input_shape = input_source
         .fact
         .shape
@@ -80,7 +80,10 @@ pub fn from_path(path: &str) -> Result<ProvableModel<f32>, ProvableOpError> {
         .into_iter()
         .map(|x| match x {
             TDim::Val(v) => Ok(v as usize),
-            _ => err(format!("Input {} has unknown input shape: {:?}", input_node.name, x)),
+            _ => err(format!(
+                "Input {} has unknown input shape: {:?}",
+                input_node.name, x
+            )),
         })
         .collect::<Result<Vec<_>, _>>()?;
     let mut model = ProvableModel::new_from_input_shapes(vec![input_shape.to_vec()]);
@@ -162,10 +165,10 @@ fn parse_node(
 }
 
 fn load_flatten(
-    model: &OnnxModel,
+    _model: &OnnxModel,
     node_id: NodeId,
     node: &OnnxNode,
-    iter: &mut dyn Iterator<Item = &usize>,
+    _iter: &mut dyn Iterator<Item = &usize>,
 ) -> Result<(NodeId, CustomNode), ProvableOpError> {
     ensure_onnx!(
         node.inputs.len() == 1,
@@ -180,10 +183,10 @@ fn load_flatten(
 }
 
 fn load_maxpool(
-    model: &OnnxModel,
+    _model: &OnnxModel,
     node_id: NodeId,
     node: &OnnxNode,
-    iter: &mut dyn Iterator<Item = &usize>,
+    _iter: &mut dyn Iterator<Item = &usize>,
 ) -> Result<(NodeId, CustomNode), ProvableOpError> {
     ensure_onnx!(
         node.inputs.len() == 1,
@@ -226,7 +229,7 @@ fn load_maxpool(
             .kernel_shape
             .iter()
             .all(|&x| x == expected_value),
-        "Kernel shape must be {}",
+        "Kernel shape must be square with size {}",
         expected_value
     );
     if let Some(ref dil) = max_node.pool_spec.dilations {
@@ -244,7 +247,7 @@ fn load_relu(
     model: &OnnxModel,
     node_id: NodeId,
     node: &OnnxNode,
-    iter: &mut dyn Iterator<Item = &usize>,
+    _iter: &mut dyn Iterator<Item = &usize>,
 ) -> Result<(NodeId, CustomNode), ProvableOpError> {
     let relu = crate::layers::activation::Relu::new();
     // find the input node that corresponds to the const input of Relu - since tract_onnx transforms
@@ -256,9 +259,7 @@ fn load_relu(
         node.name
     );
     let real_input_id = match model.node(node.inputs[1].node).op_as::<Const>() {
-        Some(_) => {
-            node.inputs[0]
-        }
+        Some(_) => node.inputs[0],
         None => {
             ensure_onnx!(
                 model.node(node.inputs[0].node).op_as::<Const>().is_some(),
@@ -358,6 +359,7 @@ fn load_gemm(
             let bias_node = model.node(bias);
             extract_const_tensor(bias_node)?
         }
+        // we always require a bias tensor in current proving logic
         None => crate::Tensor::zeros(vec![weight.shape[0]]),
     };
     ensure_onnx!(
@@ -396,7 +398,7 @@ fn load_conv(
     model: &OnnxModel,
     node_id: NodeId,
     node: &OnnxNode,
-    iter: &mut dyn Iterator<Item = &usize>,
+    _iter: &mut dyn Iterator<Item = &usize>,
 ) -> Result<(NodeId, CustomNode), ProvableOpError> {
     let conv_node = downcast_to::<Conv>(node)?;
     // TODO: once we support different padding and strides, extract the data in this function
