@@ -118,7 +118,6 @@ impl Evaluate<Element> for Requant {
         inputs: &[&Tensor<Element>],
         _unpadded_input_shapes: Vec<Vec<usize>>,
     ) -> Result<LayerOut<Element, E>, ProvableOpError> {
-        println!("Evaluating Requant");
         if inputs.len() != 1 {
             return Err(ProvableOpError::ParameterError(
                 "Requant layer expects one input".to_string(),

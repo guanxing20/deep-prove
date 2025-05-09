@@ -88,7 +88,6 @@ impl<N: Number> Evaluate<N> for Activation {
         inputs: &[&Tensor<N>],
         _unpadded_input_shapes: Vec<Vec<usize>>,
     ) -> Result<LayerOut<N, E>, super::provable::ProvableOpError> {
-        println!("Evaluating Activation");
         if inputs.len() != 1 {
             return Err(ProvableOpError::ParameterError(
                 "Activation layer expects one input".to_string(),
