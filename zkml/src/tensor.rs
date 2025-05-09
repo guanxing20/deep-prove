@@ -316,6 +316,7 @@ impl Tensor<Element> {
             .collect::<Vec<_>>();
         Tensor::new(self.shape.clone(), data)
     }
+    
     pub fn into_fft_conv(self, input_shape: &[usize]) -> Self {
         let shape = self.shape;
         let data = self.data;

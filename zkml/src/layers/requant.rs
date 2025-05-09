@@ -34,11 +34,9 @@ use crate::{
 };
 
 use super::{
-    LayerCtx,
     provable::{
-        Evaluate, LayerOut, NodeId, Op, OpInfo, ProvableOp, ProvableOpError, ProveInfo, StepData,
-        VerifiableCtx,
-    },
+        Evaluate, LayerOut, NodeId, Op, OpInfo, PadOp, ProvableOp, ProvableOpError, ProveInfo, StepData, VerifiableCtx
+    }, LayerCtx
 };
 
 enum RequantResult {
@@ -151,6 +149,8 @@ where
         )
     }
 }
+
+impl PadOp for Requant {}
 
 impl<E> ProvableOp<E> for Requant
 where

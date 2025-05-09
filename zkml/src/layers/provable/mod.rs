@@ -11,15 +11,10 @@ use std::{
 use transcript::Transcript;
 
 use crate::{
-    Claim, Element, Prover, Tensor,
-    commit::precommit::PolyID,
-    iop::{
+    commit::precommit::PolyID, iop::{
         context::{ContextAux, ShapeStep},
         verifier::Verifier,
-    },
-    lookup::context::LookupWitnessGen,
-    padding::PaddingMode,
-    tensor::{ConvData, Number},
+    }, lookup::context::LookupWitnessGen, padding::{PaddingMode, ShapeInfo}, tensor::{ConvData, Number}, Claim, Element, Prover, Tensor
 };
 
 use super::{Layer, LayerCtx, LayerProof, reshape::Reshape};
@@ -27,7 +22,7 @@ use super::{Layer, LayerCtx, LayerProof, reshape::Reshape};
 pub(crate) type NodeId = u64;
 
 pub use error::ProvableOpError;
-pub use model::{InferenceTrace, ModelCtx, ProvableModel};
+pub use model::{InferenceTrace, ModelCtx, ProvableModel, ToIterator};
 
 /// Represents a link between an input/output wire of a node with an input/output wire of
 /// another node.
@@ -238,7 +233,15 @@ where
     }
 }
 
-pub trait ProvableOp<E>: OpInfo
+pub trait PadOp {
+    fn pad_node(self, _si: &mut ShapeInfo) -> Result<Self, ProvableOpError> 
+    where Self: Sized
+    {
+        Ok(self)
+    }
+}
+
+pub trait ProvableOp<E>: OpInfo + PadOp
 where
     E: ExtensionField,
     E::BaseField: Serialize + DeserializeOwned,

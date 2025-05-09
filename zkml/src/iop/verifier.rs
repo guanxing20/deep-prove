@@ -1,13 +1,7 @@
 use std::collections::HashMap;
 
 use crate::{
-    Claim, VectorTranscript,
-    commit::{self, precommit},
-    iop::{ChallengeStorage, context::ShapeStep},
-    layers::provable::{NodeCtx, NodeId, ProvableOpError, VerifiableCtx},
-    lookup::{context::TableType, logup_gkr::verifier::verify_logup_proof},
-    tensor::Tensor,
-    try_unzip,
+    commit::{self, precommit}, iop::{context::ShapeStep, ChallengeStorage}, layers::provable::{NodeCtx, NodeId, ProvableOpError, ToIterator, VerifiableCtx}, lookup::{context::TableType, logup_gkr::verifier::verify_logup_proof}, tensor::Tensor, try_unzip, Claim, VectorTranscript
 };
 use anyhow::{anyhow, ensure};
 use ff_ext::ExtensionField;

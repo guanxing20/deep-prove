@@ -1,15 +1,10 @@
 use std::cmp::Ordering;
 
 use crate::{
-    Claim, NextPowerOfTwo, Prover,
     iop::{
         context::{ContextAux, ShapeStep},
         verifier::Verifier,
-    },
-    layers::{LayerCtx, LayerProof, PolyID},
-    padding::PaddingMode,
-    quantization::{self, ScalingFactor},
-    tensor::Number,
+    }, layers::{LayerCtx, LayerProof, PolyID}, padding::{pad_dense, PaddingMode, ShapeInfo}, quantization::{self, ScalingFactor}, tensor::Number, Claim, NextPowerOfTwo, Prover
 };
 use anyhow::{Context, ensure};
 use ff_ext::ExtensionField;
@@ -26,7 +21,7 @@ use transcript::Transcript;
 use crate::{Element, tensor::Tensor};
 
 use super::provable::{
-    Evaluate, LayerOut, NodeId, Op, OpInfo, ProvableOp, ProvableOpError, ProveInfo, VerifiableCtx,
+    Evaluate, LayerOut, NodeId, Op, OpInfo, PadOp, ProvableOp, ProvableOpError, ProveInfo, VerifiableCtx
 };
 
 /// Bias to compute the bias ID polynomials. Since originally we take the index of each
@@ -223,6 +218,14 @@ where
             bias_evals.len().ilog2()
         );
         vec![Some((id, evals)), Some((BIAS_POLY_ID + id, bias_evals))]
+    }
+}
+
+impl PadOp for Dense<Element> {
+    fn pad_node(self, si: &mut ShapeInfo) -> Result<Self, ProvableOpError> 
+    where Self: Sized 
+    {
+        pad_dense(self, si).map_err(|e| ProvableOpError::GenericError(e))
     }
 }
 

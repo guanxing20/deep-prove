@@ -1,9 +1,7 @@
 use crate::{
-    quantization::{
-        BIT_LEN,
-        metadata::{MetadataBuilder, ModelMetadata},
-    },
-    tensor::Number,
+    layers::provable::ProvableModel, padding::PaddingMode, quantization::{
+        metadata::{MetadataBuilder, ModelMetadata}, BIT_LEN
+    }, tensor::Number
 };
 use std::collections::HashMap;
 
@@ -25,7 +23,14 @@ use super::ScalingFactor;
 /// simply looks at the absolute maximum value of the model and uses that as the scaling factor
 /// to quantize the model, one scaling factor per layer.
 pub trait ScalingStrategy: std::fmt::Debug {
-    fn quantize(&self, model: Model<f32>) -> Result<(Model<Element>, ModelMetadata)>;
+    fn quantize(&self, model: Model<f32>) -> Result<(ProvableModel<Element>, ModelMetadata)> {
+        //ToDo: replace this implementation with an actual one
+        let input_not_padded_shape = model.unpadded_input_shape();
+        let model = ProvableModel::new_from_input_shapes(vec![input_not_padded_shape], PaddingMode::NoPadding);
+        let md = MetadataBuilder::new(ScalingFactor::default());
+        Ok((model, md.build()))
+    }
+
     fn name(&self) -> String;
 }
 
@@ -51,7 +56,9 @@ impl ScalingStrategy for InferenceObserver {
     fn name(&self) -> String {
         format!("inference [{},{}]", *quantization::MIN, *quantization::MAX)
     }
-    fn quantize(&self, model: Model<f32>) -> Result<(Model<Element>, ModelMetadata)> {
+
+    
+    /*fn quantize(&self, model: Model<f32>) -> Result<(Model<Element>, ModelMetadata)> {
         let mut tracker = InferenceTracker::new();
         let input_shape = model.input_shape();
         let input_not_padded_shape = model.unpadded_input_shape();
@@ -172,7 +179,7 @@ impl ScalingStrategy for InferenceObserver {
             Model::<Element>::new_from(quantized_layers, input_not_padded_shape, input_shape),
             md.build(),
         ))
-    }
+    }*/
 }
 
 struct InferenceTracker {
@@ -229,7 +236,8 @@ impl ScalingStrategy for AbsoluteMax {
     fn name(&self) -> String {
         "absolute_max".to_string()
     }
-    fn quantize(&self, model: Model<f32>) -> Result<(Model<Element>, ModelMetadata)> {
+    
+    /*fn quantize(&self, model: Model<f32>) -> Result<(Model<Element>, ModelMetadata)> {
         let mut last_input_scaling_factor = if let Some(ref input) = self.0 {
             let input_tensor = model.load_input_flat(input.clone());
             ensure!(
@@ -315,5 +323,5 @@ impl ScalingStrategy for AbsoluteMax {
             Model::<Element>::new_from(quantized_layers, input_not_padded_shape, input_shape),
             md.build(),
         ))
-    }
+    }*/
 }

@@ -29,8 +29,7 @@ use transcript::Transcript;
 use crate::{quantization::BIT_LEN, tensor::Tensor};
 
 use super::provable::{
-    Evaluate, LayerOut, NodeId, Op, OpInfo, ProvableOp, ProvableOpError, ProveInfo, StepData,
-    VerifiableCtx,
+    Evaluate, LayerOut, NodeId, Op, OpInfo, PadOp, ProvableOp, ProvableOpError, ProveInfo, StepData, VerifiableCtx
 };
 
 use anyhow::anyhow;
@@ -124,6 +123,8 @@ where
         (info, aux)
     }
 }
+
+impl PadOp for Activation {}
 
 impl<E> ProvableOp<E> for Activation
 where

@@ -3,6 +3,7 @@ use std::collections::{HashMap, HashSet};
 use anyhow::{Result, anyhow, ensure};
 use ff_ext::ExtensionField;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use tracing::info;
 use transcript::Transcript;
 
 use crate::{
@@ -36,21 +37,9 @@ pub type InferenceTrace<'a, E: ExtensionField, N> = Trace<'a, E, N, N>;
 // The trace used to prove the model
 pub type ProvingTrace<'a, E: ExtensionField, N> = Trace<'a, E, N, E>;
 
-impl<N> ProvableModel<N> {
-    pub fn to_forward_iterator(&self) -> ModelForwardIterator<N> {
-        NodeIterator {
-            unvisited_nodes: self.nodes.keys().cloned().collect(),
-            nodes: &self.nodes,
-        }
-    }
-
-    pub fn to_backward_iterator(&self) -> ModelBackwardIterator<N> {
-        NodeIterator {
-            unvisited_nodes: self.nodes.keys().cloned().collect(),
-            nodes: &self.nodes,
-        }
-    }
-
+impl<N> ProvableModel<N> 
+where N: Number,
+{
     /// Returns an iterator over the nodes in the model, in arbitrary order.
     /// It is more efficient then `ForwardIterator` and `BackwardIterator`, so it
     /// can be used to iterate over the nodes when the order does not matter
@@ -58,16 +47,23 @@ impl<N> ProvableModel<N> {
         self.nodes.iter()
     }
 
-    pub(crate) fn new_from_input_shapes(unpadded_input_shapes: Vec<Vec<usize>>) -> Self {
-        let input_shapes = unpadded_input_shapes
-            .iter()
-            .map(|shape| {
-                shape
-                    .into_iter()
-                    .map(|dim| dim.next_power_of_two())
-                    .collect()
-            })
-            .collect();
+    fn compute_padded_input_shapes(unpadded_input_shapes: &[Vec<usize>]) -> Vec<Vec<usize>> {
+        unpadded_input_shapes
+        .into_iter()
+        .map(|shape| {
+            shape
+                .into_iter()
+                .map(|dim| dim.next_power_of_two())
+                .collect()
+        })
+        .collect()
+    }
+
+    pub(crate) fn new_from_input_shapes(unpadded_input_shapes: Vec<Vec<usize>>, padding: PaddingMode) -> Self {
+        let input_shapes = match padding {
+            PaddingMode::NoPadding => unpadded_input_shapes.clone(),
+            PaddingMode::Padding => Self::compute_padded_input_shapes(&unpadded_input_shapes),
+        };
         Self {
             nodes: HashMap::new(),
             input_shapes,
@@ -75,14 +71,52 @@ impl<N> ProvableModel<N> {
         }
     }
 
+    pub(crate) fn new<I: Iterator<Item = (NodeId, ProvableNode<N>)>>(
+        unpadded_input_shapes: Vec<Vec<usize>>,
+        padding: PaddingMode, 
+        nodes: I
+    ) -> Self {
+        let mut model = Self::new_from_input_shapes(unpadded_input_shapes, padding);
+        model.nodes = nodes.collect();
+
+        model
+    } 
+
     pub(crate) fn unpadded_input_shapes(&self) -> Vec<Vec<usize>> {
         self.unpadded_input_shapes.clone()
     }
 
-    pub(crate) fn input_shapes(&self, padding: PaddingMode) -> Vec<Vec<usize>> {
-        match padding {
-            PaddingMode::NoPadding => self.unpadded_input_shapes.clone(),
-            PaddingMode::Padding => self.input_shapes.clone(),
+    /// Get the actual input shapes
+    pub fn input_shapes(&self) -> Vec<Vec<usize>> {
+        self.input_shapes.clone()
+    }
+
+    pub fn prepare_inputs(&self, inputs: Vec<Tensor<N>>) -> Result<Vec<Tensor<N>>> 
+    {
+        let input_shapes = self.input_shapes.clone();
+        ensure!(input_shapes.len() == inputs.len(), 
+        "Unexpected number of inputs tensors: expected {}, found {}", input_shapes.len(), inputs.len());
+        Ok(inputs.into_iter().zip(input_shapes).map(|(mut input, shape)|
+            if input.get_shape().clone() == shape {
+                // no need to pad, simply return the input
+                input
+            } else {
+                input.pad_to_shape(shape);
+                input
+            }
+        ).collect())
+    }
+
+
+    pub(crate) fn padded_input_shapes(&self) -> Vec<Vec<usize>> {
+        Self::compute_padded_input_shapes(&self.unpadded_input_shapes)
+    }
+
+    pub fn describe(&self) {
+        info!("Model description:");
+        for (idx, layer) in self.to_forward_iterator() {
+            info!("\t - {}: {:?}", idx, layer.inputs);
+            info!("\t- {}: {}", idx, layer.operation.describe());
         }
     }
 
@@ -185,22 +219,53 @@ impl<E: ExtensionField + DeserializeOwned> ModelCtx<E>
 where
     E::BaseField: Serialize + DeserializeOwned,
 {
-    pub(crate) fn to_forward_iterator(&self) -> ModelCtxForwardIterator<E> {
-        NodeIterator {
-            unvisited_nodes: self.nodes.keys().cloned().collect(),
-            nodes: &self.nodes,
-        }
-    }
-
-    pub(crate) fn to_backward_iterator(&self) -> ModelCtxBackwardIterator<E> {
-        NodeIterator {
-            unvisited_nodes: self.nodes.keys().cloned().collect(),
-            nodes: &self.nodes,
-        }
-    }
-
     pub(crate) fn contexts(&self) -> impl Iterator<Item = &LayerCtx<E>> {
         self.nodes.iter().map(|(_, nodes)| &nodes.ctx)
+    }
+}
+
+impl<E: ExtensionField + DeserializeOwned> ToIterator<NodeCtx<E>> for ModelCtx<E> 
+where
+    E::BaseField: Serialize + DeserializeOwned,
+{
+    fn to_forward_iterator<'a>(&'a self) -> ModelCtxForwardIterator<'a, E> {
+        NodeIterator {
+            unvisited_nodes: self.nodes.keys().cloned().collect(),
+            nodes: &self.nodes,
+        }
+    }
+
+    fn to_backward_iterator<'a>(&'a self) -> ModelCtxBackwardIterator<'a, E> {
+        NodeIterator {
+            unvisited_nodes: self.nodes.keys().cloned().collect(),
+            nodes: &self.nodes,
+        }
+    }
+}
+
+impl<N> ToIterator<ProvableNode<N>> for ProvableModel<N> {
+    fn to_forward_iterator<'a>(&'a self) -> ModelForwardIterator<'a, N> {
+        NodeIterator {
+            unvisited_nodes: self.nodes.keys().cloned().collect(),
+            nodes: &self.nodes,
+        }
+    }
+
+    fn to_backward_iterator<'a>(&'a self) -> ModelBackwardIterator<'a, N> {
+        NodeIterator {
+            unvisited_nodes: self.nodes.keys().cloned().collect(),
+            nodes: &self.nodes,
+        }
+    }
+}
+
+pub trait NodeCollection<E: NodeEgdes> {
+    fn nodes(self) -> HashMap<NodeId, E>;
+}
+
+impl<N> NodeCollection<ProvableNode<N>> for ProvableModel<N> {
+    fn nodes(self) -> HashMap<NodeId, ProvableNode<N>> {
+        self.nodes
     }
 }
 
@@ -210,6 +275,54 @@ pub type ModelCtxBackwardIterator<'a, E> = NodeIterator<'a, NodeCtx<E>, false>;
 pub struct NodeIterator<'a, E: NodeEgdes, const FORWARD: bool> {
     pub(crate) unvisited_nodes: HashSet<NodeId>,
     pub(crate) nodes: &'a HashMap<NodeId, E>,
+}
+
+pub trait ToIterator<E: NodeEgdes> {
+
+    fn to_forward_iterator<'a>(&'a self) -> NodeIterator<'a, E, true>;
+
+    fn to_backward_iterator<'a>(&'a self) -> NodeIterator<'a, E, false>;
+
+    fn to_forward_iterator_mut(self) -> NodeIteratorMut<E, true> 
+    where 
+        Self: Sized + NodeCollection<E>,
+    {
+        NodeIteratorMut::new(self)
+    }
+
+    fn to_backward_iterator_mut(self) -> NodeIteratorMut<E, false> 
+    where 
+        Self: Sized + NodeCollection<E>,
+    {
+        NodeIteratorMut::new(self)
+    }
+
+}
+
+pub struct NodeIteratorMut<E: NodeEgdes, const FORWARD: bool> {
+    pub(crate) node_ids: Vec<NodeId>,
+    pub(crate) nodes: HashMap<NodeId, E>,
+}
+
+impl<E: NodeEgdes, const FORWARD: bool> NodeIteratorMut<E, FORWARD> {
+    fn new<I: ToIterator<E> + NodeCollection<E>>(iter: I) -> Self
+    {
+        let mut node_ids: Vec<_> = if FORWARD {
+            iter.to_forward_iterator().map(|(node_id, _)|
+                node_id
+            ).collect()
+        } else {
+            iter.to_backward_iterator().map(|(node_id, _)|
+                node_id
+            ).collect()
+        };
+        node_ids.reverse(); // reverse since we will pop elements from the end in implementation
+            // of Iterator
+        Self {
+            node_ids,
+            nodes: iter.nodes(),
+        }
+    }
 }
 
 impl<'a, E: NodeEgdes, const FORWARD: bool> Iterator for NodeIterator<'a, E, FORWARD> {
@@ -243,6 +356,23 @@ impl<'a, E: NodeEgdes, const FORWARD: bool> Iterator for NodeIterator<'a, E, FOR
             self.unvisited_nodes.remove(node_id);
         }
         node
+    }
+}
+
+impl<E: NodeEgdes, const FORWARD: bool> Iterator for NodeIteratorMut<E, FORWARD> {
+    type Item = (NodeId, E);
+
+    fn next(&mut self) -> Option<Self::Item>  
+    {
+        if self.node_ids.is_empty() {
+            None
+        } else {
+            let node_id = self.node_ids.pop().unwrap();
+            let node = self.nodes.remove(&node_id)
+                .expect(format!("Node {node_id} not found").as_str());
+            Some((node_id, node))
+        }
+        
     }
 }
 
@@ -426,14 +556,19 @@ mod tests {
     fn build_test_model<N: Number, const INPUT_SIZE: usize, const PADDED: bool>() -> ProvableModel<N>
     {
         let input_shape = vec![INPUT_SIZE];
-        let mut model = ProvableModel::<N>::new_from_input_shapes(vec![input_shape.clone()]);
+        let padding = if PADDED {
+            PaddingMode::Padding
+        } else {
+            PaddingMode::NoPadding
+        };
+        let mut model = ProvableModel::<N>::new_from_input_shapes(vec![input_shape.clone()], padding);
         // add input dense layer
         // generate random dense matrix
         let ncols = input_shape[0];
         let nrows = 42;
         let dense = Dense::random(vec![nrows, ncols]);
         let dense_out_shape = &dense.output_shapes(
-            &model.input_shapes(PaddingMode::NoPadding),
+            &model.unpadded_input_shapes(),
             PaddingMode::NoPadding,
         )[0];
         let dense = if PADDED {
@@ -495,7 +630,7 @@ mod tests {
     fn test_model_inference() {
         const INPUT_SIZE: usize = 45;
         let model = build_test_model::<N, INPUT_SIZE, false>();
-        let input_shape = model.input_shapes(PaddingMode::NoPadding)[0].clone();
+        let input_shape = model.input_shapes()[0].clone();
 
         let input = random_vector(input_shape.iter().product());
         let input_tensor = Tensor::new(input_shape, input);
@@ -507,7 +642,7 @@ mod tests {
     fn test_model_float_inference() {
         const INPUT_SIZE: usize = 45;
         let model = build_test_model::<f32, INPUT_SIZE, false>();
-        let input_shape = model.input_shapes(PaddingMode::NoPadding)[0].clone();
+        let input_shape = model.input_shapes()[0].clone();
 
         let input_tensor = Tensor::random(&input_shape);
         let trace = model.run::<E>(&[input_tensor]).unwrap();
@@ -518,7 +653,7 @@ mod tests {
     fn test_model_proving() {
         const INPUT_SIZE: usize = 57;
         let model = build_test_model::<N, INPUT_SIZE, true>();
-        let input_shape = model.input_shapes(PaddingMode::Padding)[0].clone();
+        let input_shape = model.input_shapes()[0].clone();
 
         let input_tensor = Tensor::random(&input_shape);
         let trace = model.run(&[input_tensor]).unwrap();

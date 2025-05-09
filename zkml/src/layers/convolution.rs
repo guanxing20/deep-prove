@@ -1,6 +1,5 @@
 use crate::{
-    VectorTranscript, iop::context::ShapeStep, layers::hadamard, padding::PaddingMode,
-    quantization::TensorFielder,
+    iop::context::ShapeStep, layers::hadamard, padding::{pad_conv, PaddingMode, ShapeInfo}, quantization::TensorFielder, VectorTranscript
 };
 use core::f32;
 
@@ -32,11 +31,9 @@ use tracing::{debug, instrument, warn};
 use transcript::Transcript;
 
 use super::{
-    LayerCtx,
     provable::{
-        Evaluate, LayerOut, NodeId, Op, OpInfo, ProvableOp, ProvableOpError, ProveInfo,
-        VerifiableCtx,
-    },
+        Evaluate, LayerOut, NodeId, Op, OpInfo, PadOp, ProvableOp, ProvableOpError, ProveInfo, VerifiableCtx
+    }, LayerCtx
 };
 
 pub(crate) const BIAS_POLY_ID: PolyID = 200_000;
@@ -527,6 +524,14 @@ where
             Some((id, filter_evals)),
             Some((BIAS_POLY_ID + id, bias_evals)),
         ]
+    }
+}
+
+impl PadOp for Convolution<Element> {
+    fn pad_node(self, si: &mut ShapeInfo) -> Result<Self, ProvableOpError> 
+    where Self: Sized 
+    {
+        pad_conv(self, si).map_err(|e| ProvableOpError::GenericError(e))
     }
 }
 
@@ -1315,6 +1320,8 @@ impl<T: Number> Evaluate<T> for SchoolBookConv<T> {
         )]))
     }
 }
+
+impl PadOp for SchoolBookConv<Element> {}
 
 impl<E: ExtensionField> ProvableOp<E> for SchoolBookConv<Element>
 where

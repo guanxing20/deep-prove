@@ -1,15 +1,7 @@
 use crate::{
-    Element,
     layers::{
-        Layer,
-        activation::{Activation, Relu},
-        convolution::{Convolution, conv2d_shape},
-        dense::Dense,
-        pooling::{MAXPOOL2D_KERNEL_SIZE, Maxpool2D, Pooling, maxpool2d_shape},
-        reshape::Reshape,
-    },
-    padding::pad_model,
-    quantization::{AbsoluteMax, ModelMetadata, ScalingStrategy},
+        activation::{Activation, Relu}, convolution::{conv2d_shape, Convolution}, dense::Dense, pooling::{maxpool2d_shape, Maxpool2D, Pooling, MAXPOOL2D_KERNEL_SIZE}, provable::ProvableModel, reshape::Reshape, Layer
+    }, padding::pad_model, quantization::{AbsoluteMax, ModelMetadata, ScalingStrategy}, Element
 };
 use anyhow::{Context, Error, Result, bail, ensure};
 use itertools::Itertools;
@@ -58,7 +50,7 @@ impl FloatOnnxLoader {
         self.keep_float = keep_float;
         self
     }
-    pub fn build(self) -> Result<(Model<Element>, ModelMetadata)> {
+    pub fn build(self) -> Result<(ProvableModel<Element>, ModelMetadata)> {
         if let Some(model_type) = self.model_type {
             model_type.validate(&self.model_path)?;
         }
@@ -628,10 +620,10 @@ mod tests {
             .build()
             .unwrap();
         let input =
-            crate::tensor::Tensor::<f32>::random(&vec![model.input_shape()[0]]).quantize(&md.input);
-        let input = model.prepare_input(input);
-        let trace = model.run::<F>(input.clone()).unwrap();
-        println!("Result: {:?}", trace.final_output());
+            crate::tensor::Tensor::<f32>::random(&model.input_shapes()[0]).quantize(&md.input);
+        let input = model.prepare_inputs(vec![input]).unwrap();
+        let trace = model.run::<F>(&input).unwrap();
+        println!("Result: {:?}", trace.output());
     }
 
     #[test]
