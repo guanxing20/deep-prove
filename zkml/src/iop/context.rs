@@ -1,11 +1,7 @@
 use crate::{
-    Element,
-    iop::precommit::{self, PolyID},
-    layers::{
-        LayerCtx,
-        provable::{ModelCtx, NodeCtx, ProvableModel, ToIterator},
-    },
-    lookup::context::{LookupContext, TableType},
+    iop::precommit::{self, PolyID}, layers::{
+        provable::{ModelCtx, NodeCtx, OpInfo, ProvableModel, ToIterator}, LayerCtx
+    }, lookup::context::{LookupContext, TableType}, Element
 };
 use anyhow::{Context as CC, anyhow, ensure};
 use ff_ext::ExtensionField;
@@ -205,7 +201,7 @@ where
                 })
                 .collect::<anyhow::Result<Vec<_>>>()?;
             ctx_aux.last_output_shape = node_input_shapes;
-            let (info, new_aux) = node.step_info(id as PolyID, ctx_aux);
+            let (info, new_aux) = node.step_info(id as PolyID, ctx_aux)?;
             step_infos.insert(id, NodeCtx {
                 inputs: node.inputs.clone(),
                 outputs: node.outputs.clone(),

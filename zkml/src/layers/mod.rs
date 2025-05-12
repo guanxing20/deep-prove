@@ -210,7 +210,7 @@ where
         self.operation.evaluate(inputs, unpadded_input_shapes)
     }
 
-    pub(crate) fn step_info<E>(&self, id: PolyID, aux: ContextAux) -> (LayerCtx<E>, ContextAux)
+    pub(crate) fn step_info<E>(&self, id: PolyID, aux: ContextAux) -> Result<(LayerCtx<E>, ContextAux), ProvableOpError>
     where
         E: ExtensionField + DeserializeOwned,
         E::BaseField: Serialize + DeserializeOwned,
@@ -333,7 +333,7 @@ where
     E: ExtensionField + DeserializeOwned,
     E::BaseField: Serialize + DeserializeOwned,
 {
-    fn step_info(&self, id: PolyID, aux: ContextAux) -> (LayerCtx<E>, ContextAux) {
+    fn step_info(&self, id: PolyID, aux: ContextAux) -> Result<(LayerCtx<E>, ContextAux), ProvableOpError> {
         match self {
             Layer::Dense(dense) => dense.step_info(id, aux),
             Layer::Convolution(convolution) => convolution.step_info(id, aux),
@@ -549,94 +549,17 @@ impl<T: Number> Layer<T> {
             }
         }
     }
-    /// Returns the shape of the layer as used in the model. If the layer do NOT have a shape per se,
-    /// e.g. RELU for example, it returns None.
-    pub fn model_shape(&self) -> Option<Vec<usize>> {
-        match &self {
-            Layer::Dense(ref dense) => Some(dense.matrix.get_shape()),
 
-            Layer::Convolution(ref filter) => Some(filter.get_shape()),
-            Layer::SchoolBookConvolution(ref filter) => Some(filter.0.get_shape()),
-
-            Layer::Activation(Activation::Relu(_)) => None,
-            Layer::Requant(_) => None,
-            Layer::Pooling(Pooling::Maxpool2D(info)) => {
-                Some(vec![info.kernel_size, info.kernel_size])
-            }
-            Layer::Reshape(ref _reshape) => None,
-        }
-    }
-
-    pub fn describe(&self) -> String {
-        match &self {
-            Layer::Dense(ref dense) => dense.describe(),
-            Layer::Convolution(ref filter) => {
-                format!(
-                    "Conv: ({},{},{},{})",
-                    filter.kw(),
-                    filter.kx(),
-                    filter.nw(),
-                    filter.nw()
-                )
-            }
-            Layer::SchoolBookConvolution(ref _filter) => {
-                format!(
-                    "Conv: Traditional convolution for debug purposes" /* matrix.fmt_integer() */
-                )
-            }
-            Layer::Activation(Activation::Relu(_)) => {
-                format!("RELU: {}", 1 << Relu::num_vars())
-            }
-            Layer::Requant(info) => {
-                format!(
-                    "Requant: shift: {}, offset: 2^{}",
-                    info.right_shift,
-                    (info.range << 1).ilog2() as usize,
-                )
-            }
-            Layer::Pooling(Pooling::Maxpool2D(info)) => format!(
-                "MaxPool2D{{ kernel size: {}, stride: {} }}",
-                info.kernel_size, info.stride
-            ),
-            Layer::Reshape(ref reshape) => reshape.describe(),
-        }
-    }
+    
     pub fn needs_requant(&self) -> bool {
         match self {
             Layer::Dense(..) | Layer::Convolution(..) => true,
             _ => false,
         }
     }
-    pub fn is_provable(&self) -> bool {
-        match self {
-            Layer::Reshape(..) => false,
-            _ => true,
-        }
-    }
 }
 
 impl Layer<f32> {
-    pub fn quantize(self, s: &ScalingFactor, bias_s: Option<&ScalingFactor>) -> Layer<Element> {
-        match self {
-            Layer::Dense(dense) => {
-                Layer::Dense(dense.quantize(s, bias_s.expect("bias_s is required for dense layer")))
-            }
-            Layer::Convolution(conv) => Layer::Convolution(conv.quantize(
-                &s,
-                bias_s.expect("bias_s is required for convolution layer"),
-            )),
-            Layer::SchoolBookConvolution(conv) => {
-                Layer::SchoolBookConvolution(SchoolBookConv(conv.0.quantize(
-                    &s,
-                    bias_s.expect("bias_s is required for schoolbook convolution layer"),
-                )))
-            }
-            Layer::Activation(activation) => Layer::Activation(activation),
-            Layer::Requant(requant) => Layer::Requant(requant),
-            Layer::Pooling(pooling) => Layer::Pooling(pooling),
-            Layer::Reshape(_reshape) => Layer::Reshape(Reshape),
-        }
-    }
     /// TODO: limitation of enum is we can't have same names as in Element run
     pub(crate) fn run(&self, input: &Tensor<f32>) -> Tensor<f32> {
         match self {

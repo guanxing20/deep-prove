@@ -131,33 +131,36 @@ where
     E: ExtensionField + DeserializeOwned,
     E::BaseField: Serialize + DeserializeOwned,
 {
-    fn step_info(&self, id: PolyID, mut aux: ContextAux) -> (LayerCtx<E>, ContextAux) {
+    fn step_info(&self, id: PolyID, mut aux: ContextAux) -> Result<(LayerCtx<E>, ContextAux), ProvableOpError> {
         let info = match self {
             Pooling::Maxpool2D(info) => {
                 aux.tables.insert(TableType::Range);
-                // Pooling only affects the last two dimensions
-                let total_number_dims = aux.last_output_shape.len();
+                let num_vars = aux.last_output_shape.iter_mut().fold(Ok(None), |expected_num_vars, shape| {
+                    // Pooling only affects the last two dimensions
+                    let total_number_dims = shape.len();
 
-                aux.last_output_shape
-                    .first_mut()
-                    .expect("Pooling layer expects at least one input")
-                    .iter_mut()
-                    .skip(total_number_dims - 2)
-                    .for_each(|dim| *dim = (*dim - info.kernel_size) / info.stride + 1);
+                    shape.iter_mut()
+                        .skip(total_number_dims - 2)
+                        .for_each(|dim| *dim = (*dim - info.kernel_size) / info.stride + 1);
+                    
+                    let num_vars = shape.iter()
+                        .map(|dim| ceil_log2(*dim))
+                        .sum::<usize>();
+                    if let Some(vars) = expected_num_vars? {
+                        ensure!(vars == num_vars, 
+                        "All input shapes for convolution must have the same number of variables");
+                    }
+                    Ok(Some(num_vars))                    
+                })?.expect("No input shape found for convolution layer?");
+                
                 LayerCtx::Pooling(PoolingCtx {
                     poolinfo: *info,
                     poly_id: id,
-                    num_vars: aux
-                        .last_output_shape
-                        .first()
-                        .unwrap()
-                        .iter()
-                        .map(|dim| ceil_log2(*dim))
-                        .sum::<usize>(),
+                    num_vars,
                 })
             }
         };
-        (info, aux)
+        Ok((info, aux))
     }
 }
 

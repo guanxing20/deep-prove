@@ -51,7 +51,7 @@ pub fn pad_model(mut model: ProvableModel<Element>) -> Result<ProvableModel<Elem
     let unpadded_input_shapes = model.unpadded_input_shapes();
     let mut catch_err = Ok(());
     let nodes = model
-        .intoto_forward_iterator_mut()
+        .into_forward_iterator()
         .map(
             |(node_id, node)| -> Result<(NodeId, ProvableNode<Element>)> {
                 let shapes = node

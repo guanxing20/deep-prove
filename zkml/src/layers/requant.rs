@@ -10,7 +10,7 @@ use crate::{
     padding::PaddingMode,
     quantization,
 };
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, ensure, Result};
 use ff::Field;
 use ff_ext::ExtensionField;
 use gkr::util::ceil_log2;
@@ -133,22 +133,26 @@ where
     E: ExtensionField + DeserializeOwned,
     E::BaseField: Serialize + DeserializeOwned,
 {
-    fn step_info(&self, id: PolyID, mut aux: ContextAux) -> (LayerCtx<E>, ContextAux) {
+    fn step_info(&self, id: PolyID, mut aux: ContextAux) -> Result<(LayerCtx<E>, ContextAux), ProvableOpError> {
         aux.tables.insert(TableType::Range);
-        (
+        let num_vars = aux.last_output_shape.iter_mut().fold(Ok(None), |expected_num_vars, shape| {            
+            let num_vars = shape.iter()
+                .map(|dim| ceil_log2(*dim))
+                .sum::<usize>();
+            if let Some(vars) = expected_num_vars? {
+                ensure!(vars == num_vars, 
+                "All input shapes for requant layer must have the same number of variables");
+            }
+            Ok(Some(num_vars))                    
+        })?.expect("No input shape found for requant layer?");
+        Ok((
             LayerCtx::Requant(RequantCtx {
                 requant: *self,
                 poly_id: id,
-                num_vars: aux
-                    .last_output_shape
-                    .first()
-                    .expect("Requant layer expects ar least one input")
-                    .iter()
-                    .map(|dim| ceil_log2(*dim))
-                    .sum::<usize>(),
+                num_vars,
             }),
             aux,
-        )
+        ))
     }
 }
 

@@ -31,7 +31,7 @@ pub use model::{InferenceTrace, ModelCtx, ProvableModel, ToIterator};
 
 /// Represents a link between an input/output wire of a node with an input/output wire of
 /// another node.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Edge {
     // Reference to the node linked to this wire, will be `None` if the wire is an input or
     // output of the model
@@ -41,7 +41,7 @@ pub struct Edge {
 }
 
 /// Represents all the edges that are connected to a node's output wire
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct OutputWire {
     // needs to be a vector because the output of a node can be used as input to multiple nodes
     pub(crate) edges: Vec<Edge>,
@@ -239,7 +239,7 @@ where
     E: ExtensionField + DeserializeOwned,
     E::BaseField: Serialize + DeserializeOwned,
 {
-    fn step_info(&self, id: PolyID, aux: ContextAux) -> (LayerCtx<E>, ContextAux);
+    fn step_info(&self, id: PolyID, aux: ContextAux) -> Result<(LayerCtx<E>, ContextAux), ProvableOpError>;
 
     fn commit_info(&self, _id: NodeId) -> Vec<Option<(PolyID, Vec<E>)>> {
         vec![None]

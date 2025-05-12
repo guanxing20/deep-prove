@@ -21,7 +21,7 @@ use crate::{
 
 use super::{Evaluate, InferenceStep, NodeCtx, NodeEgdes, NodeId, Op, ProvableNode, StepData};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ProvableModel<N> {
     pub(crate) nodes: HashMap<NodeId, ProvableNode<N>>,
     pub(crate) input_shapes: Vec<Vec<usize>>,
@@ -269,26 +269,47 @@ where
         Ok(node_id)
     }
 
-    pub(crate) fn route_output(&mut self, output_edges: Vec<Edge>) -> Result<()> {
-        for (out_index, edge) in output_edges.iter().enumerate() {
-            let out_node_id = edge
-                .node
-                .ok_or(anyhow!("Provided output edge with no input node"))?;
-            let out_node = self
-                .nodes
-                .get_mut(&out_node_id)
-                .ok_or(anyhow!("Node {out_node_id} not found"))?;
-            ensure!(
-                edge.index < out_node.outputs.len(),
-                "Specified output {} for node {out_node_id}, but only {} outputs found",
-                edge.index,
-                out_node.outputs.len()
+    // Label the edges provided as input as the output edges of the model. If no edge is provided,
+    // then the method assumes there is a node without routed output edges, and the outputs of
+    // this node will be labelled as the output edges of the model
+    pub(crate) fn route_output(&mut self, output_edges: Option<Vec<Edge>>) -> Result<()> {
+        if let Some(output_edges) = output_edges {
+            for (out_index, edge) in output_edges.iter().enumerate() {
+                let out_node_id = edge
+                    .node
+                    .ok_or(anyhow!("Provided output edge with no input node"))?;
+                let out_node = self
+                    .nodes
+                    .get_mut(&out_node_id)
+                    .ok_or(anyhow!("Node {out_node_id} not found"))?;
+                ensure!(
+                    edge.index < out_node.outputs.len(),
+                    "Specified output {} for node {out_node_id}, but only {} outputs found",
+                    edge.index,
+                    out_node.outputs.len()
+                );
+                out_node.outputs[edge.index].edges.push(Edge {
+                    node: None,
+                    index: out_index,
+                })
+            }
+        } else {
+            // find the node with no output edges, which will be considered the output node
+            let out_node = self.nodes.iter_mut().find(|(id, node)| 
+                node.outputs.iter().all(|out| 
+                    out.clone() == Default::default()        
+                )
             );
-            out_node.outputs[edge.index].edges.push(Edge {
-                node: None,
-                index: out_index,
-            })
+            ensure!(out_node.is_some(), "No output node found for model");
+            let node = out_node.unwrap().1;
+            node.outputs.iter_mut().enumerate().for_each(|(i, out)| 
+                out.edges = vec![Edge { 
+                    node: None, 
+                    index: i,
+                }]
+            );
         }
+        
 
         Ok(())
     }
@@ -300,7 +321,7 @@ where
                 if node
                     .outputs
                     .iter()
-                    .all(|wire| wire.edges.iter().all(|edge| edge.node.is_none()))
+                    .all(|wire| !wire.edges.is_empty() && wire.edges.iter().all(|edge| edge.node.is_none()))
                 {
                     Some(*id)
                 } else {
@@ -312,6 +333,10 @@ where
 
     pub(crate) fn num_layers(&self) -> usize {
         self.nodes.len()
+    }
+
+    pub(crate) fn get_node(&self, id: &NodeId) -> Option<&ProvableNode<N>> {
+        self.nodes.get(id)
     }
 }
 // Creates an iterator over the nodes in the model, starting from the inputs and
@@ -401,14 +426,14 @@ pub trait ToIterator<E: NodeEgdes> {
 
     fn to_backward_iterator<'a>(&'a self) -> NodeIterator<'a, E, false>;
 
-    fn intoto_forward_iterator_mut(self) -> IntoNodeIterator<E, true>
+    fn into_forward_iterator(self) -> IntoNodeIterator<E, true>
     where
         Self: Sized + NodeCollection<E>,
     {
         IntoNodeIterator::new(self)
     }
 
-    fn into_backward_iterator_mut(self) -> IntoNodeIterator<E, false>
+    fn into_backward_iterator(self) -> IntoNodeIterator<E, false>
     where
         Self: Sized + NodeCollection<E>,
     {
@@ -776,10 +801,7 @@ mod tests {
             .add_consecutive_layer(Layer::Dense(dense), Some(relu_node))
             .unwrap();
         model
-            .route_output(vec![Edge {
-                node: Some(output_node),
-                index: 0,
-            }])
+            .route_output(None)
             .unwrap();
 
         assert_eq!(model.output_node(), output_node);
