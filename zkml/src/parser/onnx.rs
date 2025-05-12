@@ -86,7 +86,7 @@ pub fn from_path(path: &str) -> Result<ProvableModel<f32>, ProvableOpError> {
             )),
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let mut model = ProvableModel::new_from_input_shapes(vec![input_shape.to_vec()]);
+    let mut pmodel = ProvableModel::new_from_input_shapes(vec![input_shape.to_vec()]);
     let mut it = inference_order[1..].iter();
     let mut first_node = true;
     let mut last_node_id = 0;
@@ -96,7 +96,7 @@ pub fn from_path(path: &str) -> Result<ProvableModel<f32>, ProvableOpError> {
         })?;
         // let (id, zkml_node) = parse_node(onnx_model, &mut it, first_node)?;
         let desc = zkml_node.operation.describe();
-        model.add_node_with_id(id, zkml_node).map_err(|e| {
+        pmodel.add_node_with_id(id, zkml_node).map_err(|e| {
             ProvableOpError::OnnxParsingError(
                 format!("adding node {} -> {:?}", desc, e.to_string()).into(),
             )
@@ -104,8 +104,18 @@ pub fn from_path(path: &str) -> Result<ProvableModel<f32>, ProvableOpError> {
         first_node = false;
         last_node_id = id;
     }
-    model.route_output(vec![Edge::new(last_node_id, 0)])?;
-    Ok(model)
+    let outputs = onnx_model
+        .output_outlets()?
+        .iter()
+        .map(|outlet| Edge::new(outlet.node, outlet.slot))
+        .collect::<Vec<_>>();
+    assert!(
+        outputs
+            .iter()
+            .any(|edge| edge.node.unwrap() == last_node_id)
+    );
+    pmodel.route_output(outputs)?;
+    Ok(pmodel)
 }
 
 type LoadFn = fn(
@@ -308,51 +318,50 @@ fn load_gemm(
     // must make sure one of the inputs is the current matrix node. Otherwise that's just a normal add that we don't support.
     // TODO: support general case with Add layer.
     let mut piter = iter.peekable();
-    let next_node_id = **piter
-        .peek()
-        .ok_or(ProvableOpError::OnnxParsingError(format!(
-            "Gemm {} has no next node",
-            node.name
-        )))?;
-
-    let next_node = model.node(next_node_id);
-    // if there's a bias, the next op is a TypedBinOp( Add ) node
-    let bias_node_id = match downcast_to::<TypedBinOp>(next_node) {
-        // safety net
-        _ if next_node.inputs.len() != 2 => {
-            // no bias, just return the matrix node
-            None
-        }
-        // the operation must be an Add
-        Ok(binop) if binop.0.is::<tract_core::ops::math::Add>() => {
-            // now on this node, we need to ensure one of the inputs is the current matrix node
-            match next_node
-                .inputs
-                .iter()
-                .enumerate()
-                .find(|(_i, &x)| x.node == node_id)
-            {
-                Some((idx, ..)) => {
-                    // Now we need to find the bias node, which is the other input to the Add node
-                    // and we can extract it as a constant tensor afterwards
-                    // since only two elements, we can just do 1 - idx
-                    let bias_input = next_node.inputs[1 - idx];
-                    // let bias_node = model.node(bias_input.node);
-                    // in that case, we move on the iterator, since we already saw the bias node and the Add is part of the dense layer
-                    // unwrap is safe here since we peeked already
-                    piter.next().unwrap();
-                    Some(bias_input.node)
+    let (edge_id, bias_node_id) = match piter.peek() {
+        // no next node, no bias
+        None => (node_id, None),
+        Some(&&next_node_id) => (next_node_id, {
+            let next_node = model.node(next_node_id);
+            // if there's a bias, the next op is a TypedBinOp( Add ) node
+            match downcast_to::<TypedBinOp>(next_node) {
+                // safety net
+                _ if next_node.inputs.len() != 2 => {
+                    // no bias, just return the matrix node
+                    None
                 }
-                None => {
+                // the operation must be an Add
+                Ok(binop) if binop.0.is::<tract_core::ops::math::Add>() => {
+                    // now on this node, we need to ensure one of the inputs is the current matrix node
+                    match next_node
+                        .inputs
+                        .iter()
+                        .enumerate()
+                        .find(|(_i, &x)| x.node == node_id)
+                    {
+                        Some((idx, ..)) => {
+                            // Now we need to find the bias node, which is the other input to the Add node
+                            // and we can extract it as a constant tensor afterwards
+                            // since only two elements, we can just do 1 - idx
+                            let bias_input = next_node.inputs[1 - idx];
+                            // let bias_node = model.node(bias_input.node);
+                            // in that case, we move on the iterator, since we already saw the bias node and the Add is part of the dense layer
+                            // unwrap is safe here since we peeked already
+                            piter.next().unwrap();
+                            Some(bias_input.node)
+                        }
+                        None => {
+                            // no bias, just return the matrix node
+                            None
+                        }
+                    }
+                }
+                _ => {
                     // no bias, just return the matrix node
                     None
                 }
             }
-        }
-        _ => {
-            // no bias, just return the matrix node
-            None
-        }
+        }),
     };
     let mut bias_tensor = match bias_node_id {
         Some(bias) => {
@@ -386,12 +395,7 @@ fn load_gemm(
     );
     // here since the bias addition is the _last_ operation, the next layers are gonna refer
     // to the id of the add node and not the gemm node.
-    let provable_id = if bias_node_id.is_some() {
-        next_node_id
-    } else {
-        node_id
-    };
-    Ok((provable_id, provable_node))
+    Ok((edge_id, provable_node))
 }
 
 fn load_conv(
