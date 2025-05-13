@@ -410,7 +410,7 @@ fn load_conv(
     // TODO: support for conv without bias
     ensure_onnx!(
         node.inputs.len() == 3,
-        "ONNX Conv {} must have at least 3 inputs: {}",
+        "ONNX Conv {} must have exactly 3 inputs: {}",
         node.name,
         node.inputs.len()
     );
