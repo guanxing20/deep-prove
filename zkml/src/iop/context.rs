@@ -3,7 +3,7 @@ use crate::{
     iop::precommit::{self, PolyID},
     layers::{
         LayerCtx,
-        provable::{ModelCtx, NodeCtx, OpInfo, NodeId, ProvableModel, ToIterator},
+        provable::{ModelCtx, NodeCtx, NodeId, OpInfo, ProvableModel, ToIterator},
     },
     lookup::context::{LookupContext, TableType},
 };

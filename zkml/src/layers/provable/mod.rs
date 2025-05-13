@@ -22,7 +22,7 @@ use crate::{
     tensor::{ConvData, Number},
 };
 
-use super::{Layer, LayerCtx, LayerProof, requant::Requant, flatten::Flatten};
+use super::{Layer, LayerCtx, LayerProof, flatten::Flatten, requant::Requant};
 
 pub(crate) type NodeId = usize;
 

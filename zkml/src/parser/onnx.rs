@@ -5,10 +5,12 @@ use crate::{
         convolution::Convolution,
         pooling::{MAXPOOL2D_KERNEL_SIZE, Maxpool2D, Pooling},
         provable::{
-            Edge, NodeId, Op as DOP, ProvableModel, ProvableNode, ProvableOp, ProvableOpError,
+            Edge, NodeId, Op as DOP, OpInfo, ProvableModel, ProvableNode, ProvableOp,
+            ProvableOpError,
         },
     },
     model::Model,
+    padding::PaddingMode,
     quantization::Fieldizer,
 };
 use anyhow::{Context, bail, ensure};
@@ -86,7 +88,8 @@ pub fn from_path(path: &str) -> Result<ProvableModel<f32>, ProvableOpError> {
             )),
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let mut pmodel = ProvableModel::new_from_input_shapes(vec![input_shape.to_vec()]);
+    let mut pmodel =
+        ProvableModel::new_from_input_shapes(vec![input_shape.to_vec()], PaddingMode::NoPadding);
     let mut it = inference_order[1..].iter();
     let mut first_node = true;
     let mut last_node_id = 0;
@@ -114,7 +117,7 @@ pub fn from_path(path: &str) -> Result<ProvableModel<f32>, ProvableOpError> {
             .iter()
             .any(|edge| edge.node.unwrap() == last_node_id)
     );
-    pmodel.route_output(outputs)?;
+    pmodel.route_output(Some(outputs))?;
     Ok(pmodel)
 }
 
@@ -520,14 +523,13 @@ fn downcast_to<T: Op>(node: &OnnxNode) -> Result<&T, ProvableOpError> {
 
 #[cfg(test)]
 mod tests {
-    use crate::padding::PaddingMode;
 
     use super::*;
 
     #[test]
     fn test_parser_load_conv() {
-        let model = from_path("bench-cnn/model.onnx").unwrap();
-        let input_shape = model.input_shapes(PaddingMode::NoPadding)[0].clone();
+        let model = from_path("assets/model.onnx").unwrap();
+        let input_shape = model.input_shapes()[0].clone();
 
         let input_tensor = crate::tensor::Tensor::random(&input_shape);
         let trace = model.run::<GoldilocksExt2>(&[input_tensor]).unwrap();

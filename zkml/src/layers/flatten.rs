@@ -76,7 +76,7 @@ where
     }
 }
 
-impl PadOp for Reshape {
+impl PadOp for Flatten {
     fn pad_node(self, si: &mut ShapeInfo) -> Result<Self, super::provable::ProvableOpError>
     where
         Self: Sized,

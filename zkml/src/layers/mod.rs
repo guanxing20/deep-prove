@@ -380,26 +380,7 @@ impl PadOp for Layer<Element> {
             Layer::Activation(activation) => Layer::Activation(activation.pad_node(si)?),
             Layer::Requant(requant) => Layer::Requant(requant.pad_node(si)?),
             Layer::Pooling(pooling) => Layer::Pooling(pooling.pad_node(si)?),
-            Layer::Reshape(reshape) => Layer::Reshape(reshape.pad_node(si)?),
-        })
-    }
-}
-
-impl PadOp for Layer<Element> {
-    fn pad_node(self, si: &mut ShapeInfo) -> Result<Self, ProvableOpError>
-    where
-        Self: Sized,
-    {
-        Ok(match self {
-            Layer::Dense(dense) => Layer::Dense(dense.pad_node(si)?),
-            Layer::Convolution(convolution) => Layer::Convolution(convolution.pad_node(si)?),
-            Layer::SchoolBookConvolution(school_book_conv) => {
-                Layer::SchoolBookConvolution(school_book_conv.pad_node(si)?)
-            }
-            Layer::Activation(activation) => Layer::Activation(activation.pad_node(si)?),
-            Layer::Requant(requant) => Layer::Requant(requant.pad_node(si)?),
-            Layer::Pooling(pooling) => Layer::Pooling(pooling.pad_node(si)?),
-            Layer::Reshape(reshape) => Layer::Reshape(reshape.pad_node(si)?),
+            Layer::Flatten(flatten) => Layer::Flatten(flatten.pad_node(si)?),
         })
     }
 }
@@ -551,8 +532,8 @@ impl QuantizeOp<InferenceObserver> for Layer<f32> {
                 output_scalings: input_scaling.to_vec(),
                 requant_layer: None,
             },
-            Layer::Reshape(reshape) => QuantizeOutput {
-                quanzited_op: Layer::Reshape(reshape),
+            Layer::Flatten(flatten) => QuantizeOutput {
+                quanzited_op: Layer::Flatten(flatten),
                 output_scalings: input_scaling.to_vec(),
                 requant_layer: None,
             },

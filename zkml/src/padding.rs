@@ -7,9 +7,9 @@ use crate::{
     layers::{
         convolution::Convolution,
         dense::Dense,
+        flatten::Flatten,
         pooling::Pooling,
         provable::{NodeId, ProvableModel, ProvableNode, ToIterator},
-        flatten::Flatten,
     },
     onnx_parse::{check_filter, safe_conv2d_shape, safe_maxpool2d_shape},
 };
