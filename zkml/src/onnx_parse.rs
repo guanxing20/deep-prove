@@ -730,7 +730,7 @@ mod tests {
 
     #[test]
     fn test_tract() {
-        let filepath = "assets/model.onnx";
+        let filepath = "assets/scripts/CNN/cnn-cifar-01.onnx";
         let model = tract_onnx::onnx()
             .model_for_path(filepath)
             .map_err(|e| Error::msg(format!("Failed to load model: {:?}", e)))

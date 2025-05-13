@@ -528,7 +528,7 @@ mod tests {
 
     #[test]
     fn test_parser_load_conv() {
-        let model = from_path("assets/model.onnx").unwrap();
+        let model = from_path("assets/scripts/CNN/cnn-cifar-01.onnx").unwrap();
         let input_shape = model.input_shapes()[0].clone();
 
         let input_tensor = crate::tensor::Tensor::random(&input_shape);
