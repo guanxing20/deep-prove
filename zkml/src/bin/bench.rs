@@ -147,12 +147,13 @@ impl InputJSON {
         Ok(())
     }
     fn to_elements(self, md: &ModelMetadata) -> (Vec<Vec<Element>>, Vec<Vec<Element>>) {
+        let input_sf = md.input.first().unwrap();
         let inputs = self
             .input_data
             .into_iter()
-            .map(|input| input.into_iter().map(|e| md.input.quantize(&e)).collect())
+            .map(|input| input.into_iter().map(|e| input_sf.quantize(&e)).collect())
             .collect();
-        let output_sf = md.output_scaling_factor();
+        let output_sf = md.output_scaling_factor().first().unwrap().clone();
         let outputs = self
             .output_data
             .into_iter()
@@ -477,7 +478,11 @@ fn calculate_average_accuracy(accuracies: &[usize]) -> f32 {
 fn quantization_strategy_from(args: &Args, inputs: &InputJSON) -> Box<dyn ScalingStrategy> {
     match args.quantization.as_ref() {
         "inference" => Box::new(InferenceObserver::new_with_representative_input(
-            inputs.input_data.clone(),
+            inputs
+                .input_data
+                .iter()
+                .map(|inp| vec![inp.clone()])
+                .collect(),
         )),
         "maxabs" => Box::new(AbsoluteMax::new()),
         _ => panic!("Unsupported quantization strategy: {}", args.quantization),

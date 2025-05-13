@@ -1,25 +1,27 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use anyhow::{Result, anyhow, ensure};
 use ff_ext::ExtensionField;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use tracing::info;
 use transcript::Transcript;
 
 use crate::{
-    IO, Tensor,
+    Element, IO, Tensor,
     layers::{
         Layer, LayerCtx,
         provable::{Edge, OpInfo},
+        requant::Requant,
     },
     padding::PaddingMode,
-    quantization::{Fieldizer, TensorFielder},
+    quantization::{Fieldizer, InferenceTracker, ModelMetadata, TensorFielder},
     tensor::Number,
     try_unzip,
 };
 
 use super::{Evaluate, InferenceStep, NodeCtx, NodeEgdes, NodeId, Op, ProvableNode, StepData};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ProvableModel<N> {
     pub(crate) nodes: HashMap<NodeId, ProvableNode<N>>,
     pub(crate) input_shapes: Vec<Vec<usize>>,
@@ -36,21 +38,10 @@ pub type InferenceTrace<'a, E: ExtensionField, N> = Trace<'a, E, N, N>;
 // The trace used to prove the model
 pub type ProvingTrace<'a, E: ExtensionField, N> = Trace<'a, E, N, E>;
 
-impl<N> ProvableModel<N> {
-    pub fn to_forward_iterator(&self) -> ModelForwardIterator<N> {
-        NodeIterator {
-            unvisited_nodes: self.nodes.keys().cloned().collect(),
-            nodes: &self.nodes,
-        }
-    }
-
-    pub fn to_backward_iterator(&self) -> ModelBackwardIterator<N> {
-        NodeIterator {
-            unvisited_nodes: self.nodes.keys().cloned().collect(),
-            nodes: &self.nodes,
-        }
-    }
-
+impl<N> ProvableModel<N>
+where
+    N: Number,
+{
     /// Returns an iterator over the nodes in the model, in arbitrary order.
     /// It is more efficient then `ForwardIterator` and `BackwardIterator`, so it
     /// can be used to iterate over the nodes when the order does not matter
@@ -58,16 +49,26 @@ impl<N> ProvableModel<N> {
         self.nodes.iter()
     }
 
-    pub(crate) fn new_from_input_shapes(unpadded_input_shapes: Vec<Vec<usize>>) -> Self {
-        let input_shapes = unpadded_input_shapes
-            .iter()
+    fn compute_padded_input_shapes(unpadded_input_shapes: &[Vec<usize>]) -> Vec<Vec<usize>> {
+        unpadded_input_shapes
+            .into_iter()
             .map(|shape| {
                 shape
                     .into_iter()
                     .map(|dim| dim.next_power_of_two())
                     .collect()
             })
-            .collect();
+            .collect()
+    }
+
+    pub(crate) fn new_from_input_shapes(
+        unpadded_input_shapes: Vec<Vec<usize>>,
+        padding: PaddingMode,
+    ) -> Self {
+        let input_shapes = match padding {
+            PaddingMode::NoPadding => unpadded_input_shapes.clone(),
+            PaddingMode::Padding => Self::compute_padded_input_shapes(&unpadded_input_shapes),
+        };
         Self {
             nodes: HashMap::new(),
             input_shapes,
@@ -75,15 +76,171 @@ impl<N> ProvableModel<N> {
         }
     }
 
+    pub(crate) fn new<I: Iterator<Item = (NodeId, ProvableNode<N>)>>(
+        unpadded_input_shapes: Vec<Vec<usize>>,
+        padding: PaddingMode,
+        nodes: I,
+    ) -> Self {
+        let mut model = Self::new_from_input_shapes(unpadded_input_shapes, padding);
+        model.nodes = nodes.collect();
+
+        model
+    }
+
+    pub(crate) fn new_from_shapes<I: Iterator<Item = (NodeId, ProvableNode<N>)>>(
+        unpadded_input_shapes: Vec<Vec<usize>>,
+        actual_input_shapes: Vec<Vec<usize>>,
+        nodes: I,
+    ) -> Self {
+        Self {
+            unpadded_input_shapes,
+            input_shapes: actual_input_shapes,
+            nodes: nodes.collect(),
+        }
+    }
+
     pub(crate) fn unpadded_input_shapes(&self) -> Vec<Vec<usize>> {
         self.unpadded_input_shapes.clone()
     }
 
-    pub(crate) fn input_shapes(&self, padding: PaddingMode) -> Vec<Vec<usize>> {
-        match padding {
-            PaddingMode::NoPadding => self.unpadded_input_shapes.clone(),
-            PaddingMode::Padding => self.input_shapes.clone(),
+    /// Get the actual input shapes
+    pub fn input_shapes(&self) -> Vec<Vec<usize>> {
+        self.input_shapes.clone()
+    }
+
+    pub fn prepare_inputs(&self, inputs: Vec<Tensor<N>>) -> Result<Vec<Tensor<N>>> {
+        let input_shapes = self.input_shapes.clone();
+        ensure!(
+            input_shapes.len() == inputs.len(),
+            "Unexpected number of inputs tensors: expected {}, found {}",
+            input_shapes.len(),
+            inputs.len()
+        );
+        Ok(inputs
+            .into_iter()
+            .zip(input_shapes)
+            .map(|(mut input, shape)| {
+                if input.get_shape().clone() == shape {
+                    // no need to pad, simply return the input
+                    input
+                } else {
+                    input.pad_to_shape(shape);
+                    input
+                }
+            })
+            .collect())
+    }
+
+    pub fn load_input_flat(&self, input: Vec<Vec<N>>) -> Result<Vec<Tensor<N>>> {
+        let input_tensor = input
+            .into_iter()
+            .zip(self.unpadded_input_shapes())
+            .map(|(inp, shape)| Tensor::new(shape, inp))
+            .collect();
+        self.prepare_inputs(input_tensor)
+    }
+
+    pub(crate) fn padded_input_shapes(&self) -> Vec<Vec<usize>> {
+        Self::compute_padded_input_shapes(&self.unpadded_input_shapes)
+    }
+
+    pub fn describe(&self) {
+        info!("Model description:");
+        for (idx, layer) in self.to_forward_iterator() {
+            info!("\t- {}: {:?}", idx, layer.inputs);
+            info!("\t- {}: {}", idx, layer.operation.describe());
         }
+        info!("Output nodes:");
+        for (idx, node) in self.output_nodes() {
+            info!("\t- {}:{:?}", idx, node.outputs);
+        }
+    }
+
+    pub(crate) fn add_requant_node(
+        &mut self,
+        requant: Requant,
+        input_node_id: NodeId,
+    ) -> anyhow::Result<NodeId> {
+        let input_node = self
+            .nodes
+            .get_mut(&input_node_id)
+            .ok_or(anyhow!("Node {input_node_id} not found in the model"))?;
+        let num_outputs = input_node.outputs.len();
+        let requant_node = ProvableNode::new_with_outputs(
+            (0..num_outputs)
+                .map(|i| Edge {
+                    node: Some(input_node_id),
+                    index: i,
+                })
+                .collect(),
+            Layer::Requant(requant),
+            input_node.outputs.clone(), // copy output wires of `input_node` to requant node
+        );
+        // remove edges from outputs of `input_node`
+        input_node.outputs = vec![Default::default(); num_outputs];
+        let requant_id = self.add_node(requant_node)?;
+        // route inputs of the nodes using outputs of `input_node_id` to the newly inserted
+        // requant node
+        let requant_node = self.nodes.get(&requant_id).ok_or(anyhow!(
+            "Requant node {requant_id} just inserted not found in the model"
+        ))?;
+        for (i, wire) in requant_node.outputs.clone().iter().enumerate() {
+            // change inputs of each node using this output wire
+            wire.edges.iter().filter(|edge| edge.node.is_some()).try_for_each(|edge|{
+                let node_id = edge.node.unwrap();
+                let node = self.nodes.get_mut(&node_id).ok_or(
+                    anyhow!("Node {node_id}, which should use an output of requant node {requant_id}, not found in model")
+                )?;
+                ensure!(edge.index < node.inputs.len(),
+                    "Node {node_id} has {} inputs, so cannot access input {}",
+                    node.inputs.len(),
+                    edge.index,
+                );
+                // check that this input was indeed referring to an output of input_node_id
+                let input_edge = &mut node.inputs[edge.index];
+                ensure!(input_edge.node.ok_or(
+                    anyhow!("{} input of node {node_id} should not be an input of the model", edge.index)
+                )? == input_node_id,
+                    "{} input of node {node_id} should be {input_node_id}", edge.index
+                );
+                // replace `input_node_id` with `requant_id`
+                input_edge.node = Some(requant_id);
+                input_edge.index = i;
+                Ok(())
+            })?;
+        }
+        Ok(requant_id)
+    }
+
+    /// Corner-case method to add a node whose inputs correspond to the outputs of a node already inserted in the model
+    /// The `NodeId` of the already inserted node is the `previous_node_id` input; if no id is provided, it is assumed
+    /// that the inputs of the node correspond to the inputs of the model
+    pub(crate) fn add_consecutive_layer(
+        &mut self,
+        layer: Layer<N>,
+        previous_node_id: Option<NodeId>,
+    ) -> anyhow::Result<NodeId> {
+        let num_outputs = if let Some(id) = &previous_node_id {
+            let previous_node = self
+                .nodes
+                .get(id)
+                .ok_or(anyhow!("Node {id} not found in model"))?;
+            previous_node.outputs.len()
+        } else {
+            // correspond to inputs of the model
+            self.input_shapes.len()
+        };
+
+        let new_node = ProvableNode::new(
+            (0..num_outputs)
+                .map(|i| Edge {
+                    node: previous_node_id,
+                    index: i,
+                })
+                .collect(),
+            layer,
+        );
+        self.add_node(new_node)
     }
 
     pub(crate) fn add_node(&mut self, node: ProvableNode<N>) -> anyhow::Result<NodeId> {
@@ -125,49 +282,73 @@ impl<N> ProvableModel<N> {
         Ok(())
     }
 
-    pub(crate) fn route_output(&mut self, output_edges: Vec<Edge>) -> Result<()> {
-        for (out_index, edge) in output_edges.iter().enumerate() {
-            let out_node_id = edge
-                .node
-                .ok_or(anyhow!("Provided output edge with no input node"))?;
-            let out_node = self
-                .nodes
-                .get_mut(&out_node_id)
-                .ok_or(anyhow!("Node {out_node_id} not found"))?;
-            ensure!(
-                edge.index < out_node.outputs.len(),
-                "Specified output {} for node {out_node_id}, but only {} outputs found",
-                edge.index,
-                out_node.outputs.len()
-            );
-            out_node.outputs[edge.index].edges.push(Edge {
-                node: None,
-                index: out_index,
-            })
+    // Label the edges provided as input as the output edges of the model. If no edge is provided,
+    // then the method assumes there is a node without routed output edges, and the outputs of
+    // this node will be labelled as the output edges of the model
+    pub(crate) fn route_output(&mut self, output_edges: Option<Vec<Edge>>) -> Result<()> {
+        if let Some(output_edges) = output_edges {
+            for (out_index, edge) in output_edges.iter().enumerate() {
+                let out_node_id = edge
+                    .node
+                    .ok_or(anyhow!("Provided output edge with no input node"))?;
+                let out_node = self
+                    .nodes
+                    .get_mut(&out_node_id)
+                    .ok_or(anyhow!("Node {out_node_id} not found"))?;
+                ensure!(
+                    edge.index < out_node.outputs.len(),
+                    "Specified output {} for node {out_node_id}, but only {} outputs found",
+                    edge.index,
+                    out_node.outputs.len()
+                );
+                out_node.outputs[edge.index].edges.push(Edge {
+                    node: None,
+                    index: out_index,
+                })
+            }
+        } else {
+            // find the node with no output edges, which will be considered the output node
+            let out_node = self.nodes.iter_mut().find(|(id, node)| {
+                node.outputs
+                    .iter()
+                    .all(|out| out.clone() == Default::default())
+            });
+            ensure!(out_node.is_some(), "No output node found for model");
+            let node = out_node.unwrap().1;
+            node.outputs.iter_mut().enumerate().for_each(|(i, out)| {
+                out.edges = vec![Edge {
+                    node: None,
+                    index: i,
+                }]
+            });
         }
 
         Ok(())
     }
 
-    pub(crate) fn output_node(&self) -> NodeId {
+    pub(crate) fn output_nodes(&self) -> Vec<(NodeId, &ProvableNode<N>)> {
         self.nodes
             .iter()
-            .find_map(|(id, node)| {
+            .filter_map(|(id, node)| {
                 if node
                     .outputs
                     .iter()
-                    .all(|wire| wire.edges.iter().all(|edge| edge.node.is_none()))
+                    .all(|wire| wire.edges.iter().any(|edge| edge.node.is_none()))
                 {
-                    Some(*id)
+                    Some((*id, node))
                 } else {
                     None
                 }
             })
-            .expect("No output node found")
+            .collect()
     }
 
     pub(crate) fn num_layers(&self) -> usize {
         self.nodes.len()
+    }
+
+    pub(crate) fn get_node(&self, id: &NodeId) -> Option<&ProvableNode<N>> {
+        self.nodes.get(id)
     }
 }
 // Creates an iterator over the nodes in the model, starting from the inputs and
@@ -194,22 +375,53 @@ impl<E: ExtensionField + DeserializeOwned> ModelCtx<E>
 where
     E::BaseField: Serialize + DeserializeOwned,
 {
-    pub(crate) fn to_forward_iterator(&self) -> ModelCtxForwardIterator<E> {
-        NodeIterator {
-            unvisited_nodes: self.nodes.keys().cloned().collect(),
-            nodes: &self.nodes,
-        }
-    }
-
-    pub(crate) fn to_backward_iterator(&self) -> ModelCtxBackwardIterator<E> {
-        NodeIterator {
-            unvisited_nodes: self.nodes.keys().cloned().collect(),
-            nodes: &self.nodes,
-        }
-    }
-
     pub(crate) fn contexts(&self) -> impl Iterator<Item = &LayerCtx<E>> {
         self.nodes.iter().map(|(_, nodes)| &nodes.ctx)
+    }
+}
+
+impl<E: ExtensionField + DeserializeOwned> ToIterator<NodeCtx<E>> for ModelCtx<E>
+where
+    E::BaseField: Serialize + DeserializeOwned,
+{
+    fn to_forward_iterator<'a>(&'a self) -> ModelCtxForwardIterator<'a, E> {
+        NodeIterator {
+            unvisited_nodes: self.nodes.keys().cloned().collect(),
+            nodes: &self.nodes,
+        }
+    }
+
+    fn to_backward_iterator<'a>(&'a self) -> ModelCtxBackwardIterator<'a, E> {
+        NodeIterator {
+            unvisited_nodes: self.nodes.keys().cloned().collect(),
+            nodes: &self.nodes,
+        }
+    }
+}
+
+impl<N> ToIterator<ProvableNode<N>> for ProvableModel<N> {
+    fn to_forward_iterator<'a>(&'a self) -> ModelForwardIterator<'a, N> {
+        NodeIterator {
+            unvisited_nodes: self.nodes.keys().cloned().collect(),
+            nodes: &self.nodes,
+        }
+    }
+
+    fn to_backward_iterator<'a>(&'a self) -> ModelBackwardIterator<'a, N> {
+        NodeIterator {
+            unvisited_nodes: self.nodes.keys().cloned().collect(),
+            nodes: &self.nodes,
+        }
+    }
+}
+
+pub trait NodeCollection<E: NodeEgdes> {
+    fn nodes(self) -> HashMap<NodeId, E>;
+}
+
+impl<N> NodeCollection<ProvableNode<N>> for ProvableModel<N> {
+    fn nodes(self) -> HashMap<NodeId, ProvableNode<N>> {
+        self.nodes
     }
 }
 
@@ -217,8 +429,53 @@ pub type ModelCtxForwardIterator<'a, E> = NodeIterator<'a, NodeCtx<E>, true>;
 pub type ModelCtxBackwardIterator<'a, E> = NodeIterator<'a, NodeCtx<E>, false>;
 
 pub struct NodeIterator<'a, E: NodeEgdes, const FORWARD: bool> {
-    pub(crate) unvisited_nodes: HashSet<NodeId>,
+    pub(crate) unvisited_nodes: BTreeSet<NodeId>, /* Use BTreeSet to make the iterator deterministic */
     pub(crate) nodes: &'a HashMap<NodeId, E>,
+}
+
+pub trait ToIterator<E: NodeEgdes> {
+    fn to_forward_iterator<'a>(&'a self) -> NodeIterator<'a, E, true>;
+
+    fn to_backward_iterator<'a>(&'a self) -> NodeIterator<'a, E, false>;
+
+    fn into_forward_iterator(self) -> IntoNodeIterator<E, true>
+    where
+        Self: Sized + NodeCollection<E>,
+    {
+        IntoNodeIterator::new(self)
+    }
+
+    fn into_backward_iterator(self) -> IntoNodeIterator<E, false>
+    where
+        Self: Sized + NodeCollection<E>,
+    {
+        IntoNodeIterator::new(self)
+    }
+}
+
+pub struct IntoNodeIterator<E: NodeEgdes, const FORWARD: bool> {
+    pub(crate) node_ids: Vec<NodeId>,
+    pub(crate) nodes: HashMap<NodeId, E>,
+}
+
+impl<E: NodeEgdes, const FORWARD: bool> IntoNodeIterator<E, FORWARD> {
+    fn new<I: ToIterator<E> + NodeCollection<E>>(iter: I) -> Self {
+        let mut node_ids: Vec<_> = if FORWARD {
+            iter.to_forward_iterator()
+                .map(|(node_id, _)| node_id)
+                .collect()
+        } else {
+            iter.to_backward_iterator()
+                .map(|(node_id, _)| node_id)
+                .collect()
+        };
+        node_ids.reverse(); // reverse since we will pop elements from the end in implementation
+        // of Iterator
+        Self {
+            node_ids,
+            nodes: iter.nodes(),
+        }
+    }
 }
 
 impl<'a, E: NodeEgdes, const FORWARD: bool> Iterator for NodeIterator<'a, E, FORWARD> {
@@ -252,6 +509,23 @@ impl<'a, E: NodeEgdes, const FORWARD: bool> Iterator for NodeIterator<'a, E, FOR
             self.unvisited_nodes.remove(node_id);
         }
         node
+    }
+}
+
+impl<E: NodeEgdes, const FORWARD: bool> Iterator for IntoNodeIterator<E, FORWARD> {
+    type Item = (NodeId, E);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.node_ids.is_empty() {
+            None
+        } else {
+            let node_id = self.node_ids.pop().unwrap();
+            let node = self
+                .nodes
+                .remove(&node_id)
+                .expect(format!("Node {node_id} not found").as_str());
+            Some((node_id, node))
+        }
     }
 }
 
@@ -318,20 +592,72 @@ impl<'a, E: ExtensionField, N, D> Trace<'a, E, N, D> {
         }
     }
 
-    pub(crate) fn output(&self) -> Result<&Tensor<D>> {
-        // we assume for now there is only one output tensor
-        ensure!(
-            self.output.len() == 1,
-            "Found more than 1 output tensor for the model"
-        );
-        Ok(&self.output[0])
+    pub(crate) fn outputs(&self) -> Result<Vec<&Tensor<D>>> {
+        Ok(self.output.iter().collect())
+    }
+}
+
+impl<'a, E: ExtensionField> InferenceTrace<'a, E, Element> {
+    pub fn dequantized(&self, md: &ModelMetadata) -> Trace<'a, E, Element, f32> {
+        let inputs = self
+            .input
+            .iter()
+            .zip(&md.input)
+            .map(|(input, s)| input.dequantize(s))
+            .collect();
+        let outputs = self
+            .output
+            .iter()
+            .zip(&md.output)
+            .map(|(out, s)| out.dequantize(s))
+            .collect();
+        let steps = self
+            .steps
+            .iter()
+            .map(|(node_id, step)| {
+                let input_scaling = md.layer_input_scaling_factor(*node_id);
+                let inputs = step
+                    .step_data
+                    .inputs
+                    .iter()
+                    .zip(input_scaling)
+                    .map(|(inp, s)| inp.dequantize(s))
+                    .collect();
+                let output_scaling = md.layer_output_scaling_factor(*node_id);
+                let outputs = step
+                    .step_data
+                    .outputs
+                    .outputs()
+                    .into_iter()
+                    .zip(output_scaling)
+                    .map(|(out, s)| out.dequantize(s))
+                    .collect();
+                (*node_id, InferenceStep {
+                    op: step.op,
+                    step_data: StepData {
+                        inputs,
+                        outputs: super::LayerOut {
+                            outputs,
+                            proving_data: step.step_data.outputs.proving_data.clone(),
+                        },
+                        unpadded_output_shapes: step.step_data.unpadded_output_shapes.clone(),
+                    },
+                })
+            })
+            .collect();
+        Trace {
+            steps,
+            input: inputs,
+            output: outputs,
+        }
     }
 }
 
 impl<N: Number> ProvableModel<N> {
-    pub(crate) fn run<E: ExtensionField>(
+    pub(crate) fn run_with_tracker<E: ExtensionField>(
         &self,
         input: &[Tensor<N>],
+        mut tracker: Option<&mut InferenceTracker>,
     ) -> anyhow::Result<InferenceTrace<'_, E, N>>
     where
         E::BaseField: Serialize + DeserializeOwned,
@@ -372,6 +698,12 @@ impl<N: Number> ProvableModel<N> {
                 .operation
                 .output_shapes(&shapes, PaddingMode::NoPadding);
             let output = node.run(inputs.as_slice(), shapes)?;
+            // add output tensors to tracker, if any
+            if let Some(tracker) = &mut tracker {
+                for (i, out) in output.outputs().into_iter().enumerate() {
+                    tracker.track(node_id, i, out.to_f32()?);
+                }
+            }
             let new_step = StepData {
                 inputs: inputs.into_iter().cloned().collect(),
                 outputs: output,
@@ -384,19 +716,55 @@ impl<N: Number> ProvableModel<N> {
         }
 
         // compute the output tensor from the outputs of the output nodes
-        let output_node = self.output_node();
-        let output: Vec<Tensor<N>> = trace
-            .get_step(&output_node)
-            .ok_or(anyhow!("Output node {} not found in trace", output_node))?
-            .outputs()
-            .into_iter()
-            .cloned()
-            .collect();
-        ensure!(output.len() == 1, "Unexpected number of output tensors");
+        let output_nodes = self.output_nodes();
+        let mut outputs = BTreeMap::new();
+        for (id, out_node) in output_nodes {
+            let node_outputs = trace
+                .get_step(&id)
+                .ok_or(anyhow!("Output node {} not found in trace", id))?
+                .outputs();
+            ensure!(node_outputs.len() == out_node.outputs.len(),
+                "Number of outputs found in trace for node {id} is different from the number of expected outputs
+                for the node");
+            for (i, wire) in out_node.outputs.iter().enumerate() {
+                if let Some(out_index) = wire.edges.iter().find_map(|edge| {
+                    if edge.node.is_none() {
+                        Some(edge.index)
+                    } else {
+                        None
+                    }
+                }) {
+                    // if this output wire is an output of the model, insert in the collection of the
+                    // model outputs, paired with the index among the outputs of the model
+                    ensure!(
+                        outputs.insert(out_index, node_outputs[i]).is_none(),
+                        "Trying to insert twice an output value for the same index {out_index}"
+                    );
+                }
+            }
+        }
+        // check that all outputs have been found
+        ensure!(!outputs.is_empty(), "No outputs found for the model");
+        ensure!(
+            *outputs.first_key_value().unwrap().0 == 0
+                && *outputs.last_key_value().unwrap().0 == outputs.len() - 1
+        );
 
-        trace.output = output;
+        trace.output = outputs.into_iter().map(|(_, out)| out.clone()).collect();
 
         Ok(trace)
+    }
+
+    pub(crate) fn run<E: ExtensionField>(
+        &self,
+        input: &[Tensor<N>],
+    ) -> anyhow::Result<InferenceTrace<'_, E, N>>
+    where
+        E::BaseField: Serialize + DeserializeOwned,
+        E: Serialize + DeserializeOwned,
+        Layer<N>: Evaluate<N>,
+    {
+        self.run_with_tracker(input, None)
     }
 
     pub(crate) fn provable_nodes(&self) -> impl Iterator<Item = (&NodeId, &ProvableNode<N>)> {
@@ -409,18 +777,19 @@ impl<N: Number> ProvableModel<N> {
 #[cfg(test)]
 mod tests {
     use goldilocks::GoldilocksExt2;
+    use itertools::Itertools;
     use transcript::BasicTranscript;
 
     use crate::{
-        Context, Element, IO, Prover, Tensor,
+        Context, Element, IO, Prover, ScalingStrategy, Tensor, init_test_logging,
         layers::{
             Layer,
             activation::{Activation, Relu},
             dense::Dense,
             provable::{Edge, OpInfo, ProvableNode},
         },
-        padding::PaddingMode,
-        quantization::TensorFielder,
+        padding::{PaddingMode, pad_model},
+        quantization::{InferenceObserver, TensorFielder},
         tensor::Number,
         testing::random_vector,
         verify,
@@ -432,70 +801,40 @@ mod tests {
     type T = BasicTranscript<GoldilocksExt2>;
     type N = Element;
 
-    fn build_test_model<N: Number, const INPUT_SIZE: usize, const PADDED: bool>() -> ProvableModel<N>
-    {
+    fn build_test_model<N: Number, const INPUT_SIZE: usize>() -> ProvableModel<N> {
         let input_shape = vec![INPUT_SIZE];
-        let mut model = ProvableModel::<N>::new_from_input_shapes(vec![input_shape.clone()]);
+        let mut model = ProvableModel::<N>::new_from_input_shapes(
+            vec![input_shape.clone()],
+            PaddingMode::NoPadding,
+        );
         // add input dense layer
         // generate random dense matrix
         let ncols = input_shape[0];
         let nrows = 42;
         let dense = Dense::random(vec![nrows, ncols]);
-        let dense_out_shape = &dense.output_shapes(
-            &model.input_shapes(PaddingMode::NoPadding),
-            PaddingMode::NoPadding,
-        )[0];
-        let dense = if PADDED {
-            dense.pad_next_power_of_two()
-        } else {
-            dense
-        };
+        let dense_out_shape =
+            &dense.output_shapes(&model.unpadded_input_shapes(), PaddingMode::NoPadding)[0];
         let input_node = model
-            .add_node(ProvableNode::new(
-                vec![Edge {
-                    node: None, // it's the input tensor for the model
-                    index: 0,   // it's the first (and only) input tensor
-                }],
+            .add_consecutive_layer(
                 Layer::Dense(dense),
-            ))
+                None, // it's connected to the inputs of the model
+            )
             .unwrap();
         // add activation layer
         let relu = Activation::Relu(Relu::new());
         let relu_node = model
-            .add_node(ProvableNode::new(
-                vec![Edge {
-                    node: Some(input_node),
-                    index: 0, // it's the first (and only) output tensor of the previous layer
-                }],
-                Layer::Activation(relu),
-            ))
+            .add_consecutive_layer(Layer::Activation(relu), Some(input_node))
             .unwrap();
         // add another dense layer as output
         let nrows = 37;
         let ncols = dense_out_shape[0]; // it's a vector, so it has only one dimension
         let dense = Dense::random(vec![nrows, ncols]);
-        let dense = if PADDED {
-            dense.pad_next_power_of_two()
-        } else {
-            dense
-        };
         let output_node = model
-            .add_node(ProvableNode::new(
-                vec![Edge {
-                    node: Some(relu_node),
-                    index: 0, // it's the first (and only) output tensor of the previous layer
-                }],
-                Layer::Dense(dense),
-            ))
+            .add_consecutive_layer(Layer::Dense(dense), Some(relu_node))
             .unwrap();
-        model
-            .route_output(vec![Edge {
-                node: Some(output_node),
-                index: 0,
-            }])
-            .unwrap();
+        model.route_output(None).unwrap();
 
-        assert_eq!(model.output_node(), output_node);
+        assert_eq!(model.output_nodes()[0].0, output_node);
 
         model
     }
@@ -503,8 +842,8 @@ mod tests {
     #[test]
     fn test_model_inference() {
         const INPUT_SIZE: usize = 45;
-        let model = build_test_model::<N, INPUT_SIZE, false>();
-        let input_shape = model.input_shapes(PaddingMode::NoPadding)[0].clone();
+        let model = build_test_model::<N, INPUT_SIZE>();
+        let input_shape = model.input_shapes()[0].clone();
 
         let input = random_vector(input_shape.iter().product());
         let input_tensor = Tensor::new(input_shape, input);
@@ -515,22 +854,33 @@ mod tests {
     #[test]
     fn test_model_float_inference() {
         const INPUT_SIZE: usize = 45;
-        let model = build_test_model::<f32, INPUT_SIZE, false>();
-        let input_shape = model.input_shapes(PaddingMode::NoPadding)[0].clone();
+        let model = build_test_model::<f32, INPUT_SIZE>();
+        let input_shape = model.input_shapes()[0].clone();
 
         let input_tensor = Tensor::random(&input_shape);
         let trace = model.run::<E>(&[input_tensor]).unwrap();
         assert_eq!(trace.steps.len(), 3);
     }
 
-    #[test]
-    fn test_model_proving() {
-        const INPUT_SIZE: usize = 57;
-        let model = build_test_model::<N, INPUT_SIZE, true>();
-        let input_shape = model.input_shapes(PaddingMode::Padding)[0].clone();
+    fn prove_model(model: ProvableModel<f32>) -> anyhow::Result<()> {
+        let float_inputs = model
+            .input_shapes()
+            .into_iter()
+            .map(|shape| Tensor::random(&shape))
+            .collect_vec();
+        let (quantized_model, md) = InferenceObserver::new().quantize(model)?;
+        let model = pad_model(quantized_model)?;
 
-        let input_tensor = Tensor::random(&input_shape);
-        let trace = model.run(&[input_tensor]).unwrap();
+        model.describe();
+
+        // quantize and pad input tensor
+        let input_tensors = float_inputs
+            .into_iter()
+            .zip(&md.input)
+            .map(|(tensor, s)| tensor.quantize(s).pad_next_power_of_two())
+            .collect_vec();
+
+        let trace = model.run(&input_tensors)?;
         let mut tr: BasicTranscript<GoldilocksExt2> = BasicTranscript::new(b"model");
         let ctx =
             Context::<GoldilocksExt2>::generate(&model, None).expect("Unable to generate context");
@@ -539,6 +889,107 @@ mod tests {
         let proof = prover.prove(trace).expect("unable to generate proof");
         let mut verifier_transcript: BasicTranscript<GoldilocksExt2> =
             BasicTranscript::new(b"model");
-        verify::<_, _>(ctx, proof, io, &mut verifier_transcript).unwrap();
+        verify::<_, _>(ctx, proof, io, &mut verifier_transcript)
+    }
+
+    #[test]
+    fn test_model_proving() {
+        init_test_logging();
+        const INPUT_SIZE: usize = 57;
+        let model = build_test_model::<f32, INPUT_SIZE>();
+        prove_model(model).unwrap();
+    }
+
+    #[test]
+    fn test_model_multiple_outputs() {
+        init_test_logging();
+        const FIRST_INPUT_SIZE: usize = 27;
+        const SECOND_INPUT_SIZE: usize = 49;
+        let input_shapes = vec![vec![FIRST_INPUT_SIZE], vec![SECOND_INPUT_SIZE]];
+        let mut model =
+            ProvableModel::<f32>::new_from_input_shapes(input_shapes, PaddingMode::NoPadding);
+        // add first dense layer
+        // generate random dense matrix
+        let ncols = FIRST_INPUT_SIZE;
+        let nrows = 42;
+        let dense = Dense::random(vec![nrows, ncols]);
+        let first_dense_out_shape = &dense.output_shapes(
+            &vec![model.unpadded_input_shapes()[0].clone()],
+            PaddingMode::NoPadding,
+        )[0];
+        let first_input_dense = model
+            .add_node(ProvableNode::new(
+                vec![Edge {
+                    node: None,
+                    index: 0,
+                }],
+                Layer::Dense(dense),
+            ))
+            .unwrap();
+        // add second input dense layer
+        let ncols = SECOND_INPUT_SIZE;
+        let nrows = 47;
+        let dense = Dense::random(vec![nrows, ncols]);
+        let second_dense_out_shape = &dense.output_shapes(
+            &vec![model.unpadded_input_shapes()[1].clone()],
+            PaddingMode::NoPadding,
+        )[0];
+        let second_input_dense = model
+            .add_node(ProvableNode::new(
+                vec![Edge {
+                    node: None,
+                    index: 1,
+                }],
+                Layer::Dense(dense),
+            ))
+            .unwrap();
+        // add Relu nodes
+        let relu = Activation::Relu(Relu::new());
+        let first_relu_node = model
+            .add_consecutive_layer(Layer::Activation(relu.clone()), Some(first_input_dense))
+            .unwrap();
+        let second_relu_node = model
+            .add_consecutive_layer(Layer::Activation(relu), Some(second_input_dense))
+            .unwrap();
+        // add other dense nodes
+        let nrows = 52;
+        let ncols = second_dense_out_shape[0]; // it's a vector, so it has only one dimension
+        let dense = Dense::random(vec![nrows, ncols]);
+        let first_output_node = model
+            .add_consecutive_layer(Layer::Dense(dense), Some(second_relu_node))
+            .unwrap();
+        let nrows = 17;
+        let ncols = first_dense_out_shape[0];
+        let dense = Dense::random(vec![nrows, ncols]);
+        let second_output_node = model
+            .add_consecutive_layer(Layer::Dense(dense), Some(first_relu_node))
+            .unwrap();
+
+        model
+            .route_output(Some(vec![
+                Edge {
+                    node: Some(first_output_node),
+                    index: 0,
+                },
+                Edge {
+                    node: Some(second_output_node),
+                    index: 0,
+                },
+            ]))
+            .unwrap();
+
+        let out_node_ids = model
+            .output_nodes()
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect_vec();
+
+        assert_eq!(out_node_ids.len(), 2);
+        assert!(out_node_ids.contains(&first_output_node));
+        assert!(out_node_ids.contains(&second_output_node));
+
+        model.describe();
+
+        prove_model(model).unwrap();
     }
 }

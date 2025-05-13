@@ -2,7 +2,7 @@ use crate::{
     ScalingFactor,
     quantization::{self, MAX_FLOAT, MIN_FLOAT},
 };
-use anyhow::bail;
+use anyhow::{anyhow, bail, ensure};
 use ark_std::rand::{self, Rng, SeedableRng, rngs::StdRng};
 use ff::Field;
 use ff_ext::ExtensionField;
@@ -65,6 +65,7 @@ pub trait Number:
     }
     fn compare(&self, other: &Self) -> Ordering;
     fn is_negative(&self) -> bool;
+    fn to_f32(&self) -> anyhow::Result<f32>;
 }
 
 impl Number for Element {
@@ -81,6 +82,17 @@ impl Number for Element {
     }
     fn is_negative(&self) -> bool {
         *self < 0
+    }
+    fn to_f32(&self) -> anyhow::Result<f32> {
+        ensure!(
+            *self >= f32::MIN.ceil() as Element,
+            "Element {self} is smaller than the minimum integer representable by f32"
+        );
+        ensure!(
+            *self <= f32::MAX.floor() as Element,
+            "Element {self} is bigger than the maximum integer representable by f32"
+        );
+        Ok(*self as f32)
     }
 }
 impl Number for f32 {
@@ -105,6 +117,9 @@ impl Number for f32 {
     fn is_negative(&self) -> bool {
         *self < 0.0
     }
+    fn to_f32(&self) -> anyhow::Result<f32> {
+        Ok(*self)
+    }
 }
 impl Number for GoldilocksExt2 {
     const MIN: GoldilocksExt2 = GoldilocksExt2::ZERO;
@@ -122,6 +137,10 @@ impl Number for GoldilocksExt2 {
 
     fn is_negative(&self) -> bool {
         panic!("GoldilocksExt2: is_negative is meaningless");
+    }
+
+    fn to_f32(&self) -> anyhow::Result<f32> {
+        unreachable!("Called to_f32 for Goldilocks")
     }
 }
 
@@ -316,6 +335,7 @@ impl Tensor<Element> {
             .collect::<Vec<_>>();
         Tensor::new(self.shape.clone(), data)
     }
+
     pub fn into_fft_conv(self, input_shape: &[usize]) -> Self {
         let shape = self.shape;
         let data = self.data;
@@ -1324,6 +1344,18 @@ where
             shape: out_shape,
             og_shape: vec![0],
         }
+    }
+
+    pub fn to_f32(&self) -> anyhow::Result<Tensor<f32>> {
+        Ok(Tensor {
+            data: self
+                .data
+                .iter()
+                .map(Number::to_f32)
+                .collect::<anyhow::Result<Vec<_>>>()?,
+            shape: self.shape.clone(),
+            og_shape: self.og_shape.clone(),
+        })
     }
 }
 

@@ -29,11 +29,11 @@ use transcript::Transcript;
 use crate::{quantization::BIT_LEN, tensor::Tensor};
 
 use super::provable::{
-    Evaluate, LayerOut, NodeId, Op, OpInfo, ProvableOp, ProvableOpError, ProveInfo, StepData,
-    VerifiableCtx,
+    Evaluate, LayerOut, NodeId, Op, OpInfo, PadOp, ProvableOp, ProvableOpError, ProveInfo,
+    StepData, VerifiableCtx,
 };
 
-use anyhow::anyhow;
+use anyhow::{anyhow, ensure};
 
 #[derive(Clone, Debug, Serialize, Deserialize, Copy)]
 pub enum Activation {
@@ -106,24 +106,38 @@ where
     E: ExtensionField + DeserializeOwned,
     E::BaseField: Serialize + DeserializeOwned,
 {
-    fn step_info(&self, id: PolyID, mut aux: ContextAux) -> (LayerCtx<E>, ContextAux) {
+    fn step_info(
+        &self,
+        id: PolyID,
+        mut aux: ContextAux,
+    ) -> Result<(LayerCtx<E>, ContextAux), ProvableOpError> {
         aux.tables.insert(TableType::Relu);
+        let num_vars = aux
+            .last_output_shape
+            .iter_mut()
+            .fold(Ok(None), |expected_num_vars, shape| {
+                let num_vars = shape.iter().map(|dim| ceil_log2(*dim)).sum::<usize>();
+                if let Some(vars) = expected_num_vars? {
+                    ensure!(
+                        vars == num_vars,
+                        "All input shapes for activation must have the same number of variables"
+                    );
+                }
+                Ok(Some(num_vars))
+            })?
+            .expect("No input shape found for activation layer?");
         let info = match self {
             Activation::Relu(relu) => LayerCtx::Activation(ActivationCtx {
                 op: Activation::Relu(*relu),
                 poly_id: id,
-                num_vars: aux
-                    .last_output_shape
-                    .first()
-                    .expect("RELU should have at least one input")
-                    .iter()
-                    .map(|dim| ceil_log2(*dim))
-                    .sum::<usize>(),
+                num_vars,
             }),
         };
-        (info, aux)
+        Ok((info, aux))
     }
 }
+
+impl PadOp for Activation {}
 
 impl<E> ProvableOp<E> for Activation
 where
@@ -205,7 +219,7 @@ where
                 .collect(),
         ));
         gen.lookups_no_challenges
-            .push((vec![col_one, col_two], 2, TableType::Relu));
+            .insert(id, (vec![col_one, col_two], 2, TableType::Relu));
 
         Ok(())
     }
@@ -275,7 +289,7 @@ impl Activation {
         E: ExtensionField + Serialize + DeserializeOwned,
         E::BaseField: Serialize + DeserializeOwned,
     {
-        let prover_info = prover.next_lookup_witness()?;
+        let prover_info = prover.get_lookup_witness(node_id)?;
 
         // Run the lookup protocol and return the lookup proof
         let logup_proof = logup_batch_prove(&prover_info, prover.transcript)?;

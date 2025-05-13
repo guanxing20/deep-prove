@@ -11,27 +11,27 @@ use std::{
 use transcript::Transcript;
 
 use crate::{
-    Claim, Element, Prover, Tensor,
+    Claim, Element, Prover, ScalingFactor, Tensor,
     commit::precommit::PolyID,
     iop::{
         context::{ContextAux, ShapeStep},
         verifier::Verifier,
     },
     lookup::context::LookupWitnessGen,
-    padding::PaddingMode,
+    padding::{PaddingMode, ShapeInfo},
     tensor::{ConvData, Number},
 };
 
-use super::{Layer, LayerCtx, LayerProof, flatten::Flatten};
+use super::{Layer, LayerCtx, LayerProof, requant::Requant, flatten::Flatten};
 
 pub(crate) type NodeId = usize;
 
 pub use error::ProvableOpError;
-pub use model::{InferenceTrace, ModelCtx, ProvableModel};
+pub use model::{InferenceTrace, ModelCtx, ProvableModel, ToIterator};
 
 /// Represents a link between an input/output wire of a node with an input/output wire of
 /// another node.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Edge {
     // Reference to the node linked to this wire, will be `None` if the wire is an input or
     // output of the model
@@ -55,7 +55,7 @@ impl Edge {
 }
 
 /// Represents all the edges that are connected to a node's output wire
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct OutputWire {
     // needs to be a vector because the output of a node can be used as input to multiple nodes
     pub(crate) edges: Vec<Edge>,
@@ -98,10 +98,18 @@ where
 
 impl<N: Number> ProvableNode<N> {
     pub(crate) fn new(inputs: Vec<Edge>, operation: Layer<N>) -> Self {
-        let num_inputs = inputs.len();
+        let num_outputs = operation.num_outputs(inputs.len());
+        Self::new_with_outputs(inputs, operation, vec![Default::default(); num_outputs])
+    }
+
+    pub(crate) fn new_with_outputs(
+        inputs: Vec<Edge>,
+        operation: Layer<N>,
+        outputs: Vec<OutputWire>,
+    ) -> Self {
         Self {
             inputs,
-            outputs: vec![Default::default(); operation.num_outputs(num_inputs)],
+            outputs,
             operation,
         }
     }
@@ -152,7 +160,7 @@ where
     pub(crate) fn get_claims_for_node(
         &self,
         claims_by_node: &HashMap<NodeId, Vec<Claim<E>>>,
-        output_claim: &Claim<E>,
+        output_claims: &[Claim<E>],
     ) -> Result<Vec<Claim<E>>> {
         self.outputs.iter().map(|out| {
             // For now, we support in proving only one edge per output wire,
@@ -172,8 +180,13 @@ where
                 );
                 claims_for_node[edge.index].clone() // ToDo: avoid clone
             } else {
-                // it's an output node, so we use directly the claim for the output
-                output_claim.clone()
+                // it's an output node, so we use directly the claim for the corresponding output
+                ensure!(edge.index < output_claims.len(),
+                 "Required claim for output {} of the model, but only {} output claims found",
+                 edge.index,
+                 output_claims.len(),
+                );
+                output_claims[edge.index].clone()
             })
         }).collect()
     }
@@ -245,14 +258,52 @@ where
     E: ExtensionField + DeserializeOwned,
     E::BaseField: Serialize + DeserializeOwned,
 {
-    fn step_info(&self, id: PolyID, aux: ContextAux) -> (LayerCtx<E>, ContextAux);
+    fn step_info(
+        &self,
+        id: PolyID,
+        aux: ContextAux,
+    ) -> Result<(LayerCtx<E>, ContextAux), ProvableOpError>;
 
     fn commit_info(&self, _id: NodeId) -> Vec<Option<(PolyID, Vec<E>)>> {
         vec![None]
     }
 }
 
-pub trait ProvableOp<E>: OpInfo
+pub trait QuantizationStrategy {
+    type AuxData: Sized;
+}
+
+/// Output of `QuantizeOp` method over a layer
+pub struct QuantizeOutput<Op> {
+    /// The actual layer after quantization
+    pub(crate) quanzited_op: Op,
+    /// The scaling factor of the output wires of the operation
+    pub(crate) output_scalings: Vec<ScalingFactor>,
+    /// The requant layer to be added to the model, if any
+    pub(crate) requant_layer: Option<Requant>,
+}
+
+pub trait QuantizeOp<Q: QuantizationStrategy> {
+    type QuantizedOp: Sized;
+
+    fn quantize_op(
+        self,
+        data: &Q::AuxData,
+        node_id: NodeId,
+        input_scaling: &[ScalingFactor],
+    ) -> anyhow::Result<QuantizeOutput<Self::QuantizedOp>>;
+}
+
+pub trait PadOp {
+    fn pad_node(self, _si: &mut ShapeInfo) -> Result<Self, ProvableOpError>
+    where
+        Self: Sized,
+    {
+        Ok(self)
+    }
+}
+
+pub trait ProvableOp<E>: OpInfo + PadOp
 where
     E: ExtensionField,
     E::BaseField: Serialize + DeserializeOwned,

@@ -15,6 +15,7 @@ use crate::{
     tensor::{Number, Tensor},
 };
 pub use metadata::ModelMetadata;
+pub(crate) use strategy::InferenceTracker;
 pub use strategy::{AbsoluteMax, InferenceObserver, ScalingStrategy};
 
 // Get BIT_LEN from environment variable or use default value

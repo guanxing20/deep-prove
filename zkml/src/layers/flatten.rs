@@ -3,13 +3,17 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use transcript::Transcript;
 
 use crate::{
-    Element, NextPowerOfTwo, ScalingFactor, Tensor, commit::precommit::PolyID,
-    iop::context::ContextAux, layers::LayerCtx, padding::PaddingMode, tensor::Number,
+    Element, NextPowerOfTwo, ScalingFactor, Tensor,
+    commit::precommit::PolyID,
+    iop::context::ContextAux,
+    layers::LayerCtx,
+    padding::{PaddingMode, ShapeInfo, reshape},
+    tensor::Number,
 };
 
 use super::{
     Layer,
-    provable::{Evaluate, LayerOut, Op, OpInfo, ProvableOp, ProveInfo},
+    provable::{Evaluate, LayerOut, Op, OpInfo, PadOp, ProvableOp, ProvableOpError, ProveInfo},
 };
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Flatten;
@@ -60,11 +64,24 @@ where
     E: ExtensionField + DeserializeOwned,
     E::BaseField: Serialize + DeserializeOwned,
 {
-    fn step_info(&self, _id: PolyID, mut aux: ContextAux) -> (LayerCtx<E>, ContextAux) {
+    fn step_info(
+        &self,
+        _id: PolyID,
+        mut aux: ContextAux,
+    ) -> Result<(LayerCtx<E>, ContextAux), ProvableOpError> {
         aux.last_output_shape
             .iter_mut()
             .for_each(|s| *s = s.next_power_of_two());
-        (LayerCtx::Flatten, aux)
+        Ok((LayerCtx::Flatten, aux))
+    }
+}
+
+impl PadOp for Reshape {
+    fn pad_node(self, si: &mut ShapeInfo) -> Result<Self, super::provable::ProvableOpError>
+    where
+        Self: Sized,
+    {
+        reshape(si).map_err(|e| ProvableOpError::GenericError(e))
     }
 }
 

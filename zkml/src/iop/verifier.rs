@@ -4,7 +4,7 @@ use crate::{
     Claim, VectorTranscript,
     commit::{self, precommit},
     iop::{ChallengeStorage, context::ShapeStep},
-    layers::provable::{NodeCtx, NodeId, ProvableOpError, VerifiableCtx},
+    layers::provable::{NodeCtx, NodeId, ProvableOpError, ToIterator, VerifiableCtx},
     lookup::{context::TableType, logup_gkr::verifier::verify_logup_proof},
     tensor::Tensor,
     try_unzip,
@@ -94,27 +94,27 @@ where
             numerators.extend(nums.into_iter());
             denominators.extend(denoms.into_iter());
         });
+        // 2. Derive output claims
+        let out_claims = io
+            .output
+            .iter()
+            .map(|out| {
+                // Derive the first randomness
+                let first_randomness = self
+                    .transcript
+                    .read_challenges(out.get_data().len().ilog2() as usize);
+                // For the output, we manually evaluate the MLE and check if it's the same as what prover
+                // gave. Note prover could ellude that but it's simpler to avoid that special check right
+                // now.
+                let output_mle = out.get_data().to_vec().into_mle();
+                let computed_sum = output_mle.evaluate(&first_randomness);
 
-        // 2. Derive the first randomness
-        // For now, we support only one output tensor for simplicity
-        ensure!(
-            io.output.len() == 1,
-            "More than one output tensor found in verifier IO"
-        );
-        let output = &io.output[0];
-        let first_randomness = self
-            .transcript
-            .read_challenges(output.get_data().len().ilog2() as usize);
-        // 3. For the output, we manually evaluate the MLE and check if it's the same as what prover
-        //    gave. Note prover could ellude that but it's simpler to avoid that special check right
-        //    now.
-        let output_mle = output.get_data().to_vec().into_mle();
-        let computed_sum = output_mle.evaluate(&first_randomness);
-
-        let output_claim = Claim {
-            point: first_randomness,
-            eval: computed_sum,
-        };
+                Claim {
+                    point: first_randomness,
+                    eval: computed_sum,
+                }
+            })
+            .collect_vec();
 
         let mut shape_steps: HashMap<NodeId, ShapeStep> = HashMap::new();
         for (node_id, node_ctx) in ctx.steps_info.to_forward_iterator() {
@@ -165,8 +165,11 @@ where
             let shape_step = shape_steps
                 .get(&node_id)
                 .ok_or(anyhow!("Shape for node {node_id} not found"))?;
-            println!("VERIFIER: Verifying proof {}", node_proof.variant_name(),);
-            let claims_for_verify = step.get_claims_for_node(&claims_by_layer, &output_claim)?;
+            println!(
+                "VERIFIER: Verifying proof {} for node {node_id}",
+                node_proof.variant_name(),
+            );
+            let claims_for_verify = step.get_claims_for_node(&claims_by_layer, &out_claims)?;
             let claims = {
                 let res = step
                     .ctx

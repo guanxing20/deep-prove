@@ -3,7 +3,7 @@ use crate::{
     iop::precommit::{self, PolyID},
     layers::{
         LayerCtx,
-        provable::{ModelCtx, NodeCtx, NodeId, ProvableModel},
+        provable::{ModelCtx, NodeCtx, OpInfo, NodeId, ProvableModel, ToIterator},
     },
     lookup::context::{LookupContext, TableType},
 };
@@ -205,7 +205,7 @@ where
                 })
                 .collect::<anyhow::Result<Vec<_>>>()?;
             ctx_aux.last_output_shape = node_input_shapes;
-            let (info, new_aux) = node.step_info(id as PolyID, ctx_aux);
+            let (info, new_aux) = node.step_info(id as PolyID, ctx_aux)?;
             step_infos.insert(id, NodeCtx {
                 inputs: node.inputs.clone(),
                 outputs: node.outputs.clone(),

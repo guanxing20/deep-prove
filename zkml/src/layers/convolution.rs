@@ -1,6 +1,9 @@
 use crate::{
-    VectorTranscript, iop::context::ShapeStep, layers::hadamard, padding::PaddingMode,
-    quantization::TensorFielder,
+    VectorTranscript,
+    iop::context::ShapeStep,
+    layers::{hadamard, requant::Requant},
+    padding::{PaddingMode, ShapeInfo, pad_conv},
+    quantization::{BIT_LEN, InferenceObserver, InferenceTracker, TensorFielder},
 };
 use core::f32;
 
@@ -34,8 +37,8 @@ use transcript::Transcript;
 use super::{
     LayerCtx,
     provable::{
-        Evaluate, LayerOut, NodeId, Op, OpInfo, ProvableOp, ProvableOpError, ProveInfo,
-        VerifiableCtx,
+        Evaluate, LayerOut, NodeId, Op, OpInfo, PadOp, ProvableOp, ProvableOpError, ProveInfo,
+        QuantizeOp, QuantizeOutput, VerifiableCtx,
     },
 };
 
@@ -449,10 +452,16 @@ where
     E: ExtensionField + DeserializeOwned,
     E::BaseField: Serialize + DeserializeOwned,
 {
-    fn step_info(&self, id: PolyID, mut aux: ContextAux) -> (LayerCtx<E>, ContextAux) {
+    fn step_info(
+        &self,
+        id: PolyID,
+        mut aux: ContextAux,
+    ) -> Result<(LayerCtx<E>, ContextAux), ProvableOpError> {
         let mut filter_shape = self.filter.get_shape();
         filter_shape.remove(1);
-        aux.last_output_shape = vec![filter_shape];
+        aux.last_output_shape
+            .iter_mut()
+            .for_each(|shape| *shape = filter_shape.clone());
 
         let mut delegation_fft: Vec<VPAuxInfo<E>> = Vec::new();
         let mut delegation_fft_weights: Vec<VPAuxInfo<E>> = Vec::new();
@@ -506,7 +515,7 @@ where
             unpadded_filter_shape: self.unpadded_shape.clone(),
             padded_filter_shape: self.filter.real_shape(),
         });
-        (conv_info, aux)
+        Ok((conv_info, aux))
     }
 
     fn commit_info(&self, id: NodeId) -> Vec<Option<(PolyID, Vec<E>)>> {
@@ -527,6 +536,55 @@ where
             Some((id, filter_evals)),
             Some((BIAS_POLY_ID + id, bias_evals)),
         ]
+    }
+}
+
+impl QuantizeOp<InferenceObserver> for Convolution<f32> {
+    type QuantizedOp = Convolution<Element>;
+
+    fn quantize_op(
+        self,
+        tracker: &InferenceTracker,
+        node_id: NodeId,
+        input_scaling: &[ScalingFactor],
+    ) -> anyhow::Result<QuantizeOutput<Self::QuantizedOp>> {
+        let model_scaling = ScalingFactor::from_absolute_max(self.max_abs_weight(), None);
+        let num_inputs = input_scaling.len();
+        ensure!(
+            num_inputs == 1,
+            "Number of input scaling factor for convolution layer different from 1"
+        );
+        let input_scaling = &input_scaling[0];
+        let (min, max) = tracker.distribution_info(node_id, 0);
+        let output_scaling = ScalingFactor::from_absolute_max(min.abs().max(max.abs()), None);
+        let bias_scaling = {
+            // bias has to be quantized over integers with double bit length
+            let min_quantized = -(1 << (2 * (*BIT_LEN) - 1)) + 1;
+            let max_quantized = (1 << (2 * (*BIT_LEN) - 1)) - 1;
+            ScalingFactor::from_scale(
+                input_scaling.scale() * model_scaling.scale(),
+                Some((min_quantized, max_quantized)),
+            )
+        };
+        let quantized_conv = self.quantize(&model_scaling, &bias_scaling);
+        let shift = input_scaling.shift(&model_scaling, &output_scaling);
+        let (quantized_min, _quantized_max) =
+            quantized_conv.output_range(*quantization::MIN, *quantization::MAX);
+        let requant = Requant::new(quantized_min.abs() as usize, shift);
+        Ok(QuantizeOutput {
+            quanzited_op: quantized_conv,
+            output_scalings: vec![output_scaling],
+            requant_layer: Some(requant),
+        })
+    }
+}
+
+impl PadOp for Convolution<Element> {
+    fn pad_node(self, si: &mut ShapeInfo) -> Result<Self, ProvableOpError>
+    where
+        Self: Sized,
+    {
+        pad_conv(self, si).map_err(|e| ProvableOpError::GenericError(e))
     }
 }
 
@@ -1316,6 +1374,8 @@ impl<T: Number> Evaluate<T> for SchoolBookConv<T> {
     }
 }
 
+impl PadOp for SchoolBookConv<Element> {}
+
 impl<E: ExtensionField> ProvableOp<E> for SchoolBookConv<Element>
 where
     E::BaseField: Serialize + DeserializeOwned,
@@ -1338,9 +1398,13 @@ where
     E::BaseField: Serialize + DeserializeOwned,
     E: ExtensionField + Serialize + DeserializeOwned,
 {
-    fn step_info(&self, _id: PolyID, aux: ContextAux) -> (LayerCtx<E>, ContextAux) {
+    fn step_info(
+        &self,
+        _id: PolyID,
+        aux: ContextAux,
+    ) -> Result<(LayerCtx<E>, ContextAux), ProvableOpError> {
         let conv_info = LayerCtx::SchoolBookConvolution(SchoolBookConvCtx);
-        (conv_info, aux)
+        Ok((conv_info, aux))
     }
 }
 
