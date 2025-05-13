@@ -146,7 +146,7 @@ where
     pub(crate) fn get_claims_for_node(
         &self,
         claims_by_node: &HashMap<NodeId, Vec<Claim<E>>>,
-        output_claim: &Claim<E>,
+        output_claims: &[Claim<E>],
     ) -> Result<Vec<Claim<E>>> {
         self.outputs.iter().map(|out| {
             // For now, we support in proving only one edge per output wire,
@@ -166,8 +166,13 @@ where
                 );
                 claims_for_node[edge.index].clone() // ToDo: avoid clone
             } else {
-                // it's an output node, so we use directly the claim for the output
-                output_claim.clone()
+                // it's an output node, so we use directly the claim for the corresponding output
+                ensure!(edge.index < output_claims.len(),
+                 "Required claim for output {} of the model, but only {} output claims found",
+                 edge.index,
+                 output_claims.len(),
+                );
+                output_claims[edge.index].clone()
             })
         }).collect()
     }
@@ -239,7 +244,11 @@ where
     E: ExtensionField + DeserializeOwned,
     E::BaseField: Serialize + DeserializeOwned,
 {
-    fn step_info(&self, id: PolyID, aux: ContextAux) -> Result<(LayerCtx<E>, ContextAux), ProvableOpError>;
+    fn step_info(
+        &self,
+        id: PolyID,
+        aux: ContextAux,
+    ) -> Result<(LayerCtx<E>, ContextAux), ProvableOpError>;
 
     fn commit_info(&self, _id: NodeId) -> Vec<Option<(PolyID, Vec<E>)>> {
         vec![None]

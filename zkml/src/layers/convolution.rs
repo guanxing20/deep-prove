@@ -452,12 +452,16 @@ where
     E: ExtensionField + DeserializeOwned,
     E::BaseField: Serialize + DeserializeOwned,
 {
-    fn step_info(&self, id: PolyID, mut aux: ContextAux) -> Result<(LayerCtx<E>, ContextAux), ProvableOpError> {
+    fn step_info(
+        &self,
+        id: PolyID,
+        mut aux: ContextAux,
+    ) -> Result<(LayerCtx<E>, ContextAux), ProvableOpError> {
         let mut filter_shape = self.filter.get_shape();
         filter_shape.remove(1);
-        aux.last_output_shape.iter_mut().for_each(|shape| 
-            *shape = filter_shape.clone()
-        );
+        aux.last_output_shape
+            .iter_mut()
+            .for_each(|shape| *shape = filter_shape.clone());
 
         let mut delegation_fft: Vec<VPAuxInfo<E>> = Vec::new();
         let mut delegation_fft_weights: Vec<VPAuxInfo<E>> = Vec::new();
@@ -1394,7 +1398,11 @@ where
     E::BaseField: Serialize + DeserializeOwned,
     E: ExtensionField + Serialize + DeserializeOwned,
 {
-    fn step_info(&self, _id: PolyID, aux: ContextAux) -> Result<(LayerCtx<E>, ContextAux), ProvableOpError> {
+    fn step_info(
+        &self,
+        _id: PolyID,
+        aux: ContextAux,
+    ) -> Result<(LayerCtx<E>, ContextAux), ProvableOpError> {
         let conv_info = LayerCtx::SchoolBookConvolution(SchoolBookConvCtx);
         Ok((conv_info, aux))
     }

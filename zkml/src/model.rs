@@ -1,5 +1,9 @@
 use crate::{
-    layers::{provable::OpInfo, Layer, LayerOutput}, padding::PaddingMode, quantization::{ModelMetadata, TensorFielder}, tensor::{ConvData, Number, Tensor}, Element
+    Element,
+    layers::{Layer, LayerOutput, provable::OpInfo},
+    padding::PaddingMode,
+    quantization::{ModelMetadata, TensorFielder},
+    tensor::{ConvData, Number, Tensor},
 };
 use anyhow::Result;
 use ff_ext::ExtensionField;
@@ -310,10 +314,21 @@ impl Model<f32> {
 #[cfg(test)]
 pub(crate) mod test {
     use crate::{
+        ScalingFactor,
         layers::{
-            activation::{Activation, Relu}, convolution::{Convolution, SchoolBookConv}, dense::Dense, pooling::{Maxpool2D, Pooling, MAXPOOL2D_KERNEL_SIZE}, provable::{evaluate_layer, Edge, ProvableModel, ToIterator}, requant::Requant, Layer
-        }, padding::PaddingMode, quantization, testing::{random_bool_vector, random_vector}, ScalingFactor
+            Layer,
+            activation::{Activation, Relu},
+            convolution::{Convolution, SchoolBookConv},
+            dense::Dense,
+            pooling::{MAXPOOL2D_KERNEL_SIZE, Maxpool2D, Pooling},
+            provable::{Edge, ProvableModel, ToIterator, evaluate_layer},
+            requant::Requant,
+        },
+        padding::PaddingMode,
+        quantization,
+        testing::{random_bool_vector, random_vector},
     };
+    use anyhow::Result;
     use ark_std::rand::{Rng, RngCore, thread_rng};
     use ff_ext::ExtensionField;
     use goldilocks::GoldilocksExt2;
@@ -323,7 +338,6 @@ pub(crate) mod test {
         virtual_poly::VirtualPolynomial,
     };
     use sumcheck::structs::{IOPProverState, IOPVerifierState};
-    use anyhow::Result;
     use tract_onnx::tract_core::ops::matmul::quant;
 
     use crate::{Element, default_transcript, quantization::TensorFielder, tensor::Tensor};
@@ -374,33 +388,35 @@ pub(crate) mod test {
                     let shift =
                         input_scaling_factor.shift(&model_scaling_factor, &output_scaling_factor);
                     let requant = Requant::new(min_output_range as usize, shift);
-                    last_node_id = Some(
-                        model.add_consecutive_layer(Layer::Dense(dense), last_node_id)?
-                    );
-                    last_node_id = Some(
-                        model.add_consecutive_layer(Layer::Requant(requant), last_node_id)?
-                    );
+                    last_node_id =
+                        Some(model.add_consecutive_layer(Layer::Dense(dense), last_node_id)?);
+                    last_node_id =
+                        Some(model.add_consecutive_layer(Layer::Requant(requant), last_node_id)?);
                 } else if selector % MOD_SELECTOR == SELECTOR_RELU {
-                    last_node_id = Some(
-                        model.add_consecutive_layer(Layer::Activation(Activation::Relu(Relu::new())), last_node_id)?
-                    );
+                    last_node_id = Some(model.add_consecutive_layer(
+                        Layer::Activation(Activation::Relu(Relu::new())),
+                        last_node_id,
+                    )?);
                     // no need to change the `last_row` since RELU layer keeps the same shape
                     // of outputs
                 } else if selector % MOD_SELECTOR == SELECTOR_POOLING {
                     // Currently unreachable until Model is updated to work with higher dimensional tensors
                     // TODO: Implement higher dimensional tensor functionality.
-                    last_node_id = Some(
-                        model.add_consecutive_layer(Layer::Pooling(Pooling::Maxpool2D(Maxpool2D::default())), last_node_id)?
-                    );
+                    last_node_id = Some(model.add_consecutive_layer(
+                        Layer::Pooling(Pooling::Maxpool2D(Maxpool2D::default())),
+                        last_node_id,
+                    )?);
                     last_row -= MAXPOOL2D_KERNEL_SIZE - 1;
                 } else {
                     panic!("random selection shouldn't be in that case");
                 }
             }
             model.route_output(None).unwrap();
-            let inputs = model.input_shapes().iter().map(|shape| 
-                Tensor::random(shape)
-            ).collect();
+            let inputs = model
+                .input_shapes()
+                .iter()
+                .map(|shape| Tensor::random(shape))
+                .collect();
             Ok((model, inputs))
         }
 
@@ -435,10 +451,12 @@ pub(crate) mod test {
                 PaddingMode::NoPadding,
             );
 
-            let inputs = model.input_shapes().iter().map(|shape| 
-                Tensor::random(shape)
-            ).collect();
-           
+            let inputs = model
+                .input_shapes()
+                .iter()
+                .map(|shape| Tensor::random(shape))
+                .collect();
+
             let info = Maxpool2D::default();
             let mut last_node_id = None;
             for _ in 0..num_layers {
@@ -446,18 +464,22 @@ pub(crate) mod test {
                     .iter_mut()
                     .skip(1)
                     .for_each(|dim| *dim = (*dim - info.kernel_size) / info.stride + 1);
-                last_node_id = Some(
-                    model.add_consecutive_layer(Layer::Pooling(Pooling::Maxpool2D(info)), last_node_id)?
-                );
+                last_node_id = Some(model.add_consecutive_layer(
+                    Layer::Pooling(Pooling::Maxpool2D(info)),
+                    last_node_id,
+                )?);
             }
 
             let (nrows, ncols): (usize, usize) =
                 (rng.gen_range(3..15), input_shape.iter().product::<usize>());
 
-            model.add_consecutive_layer(Layer::Dense(Dense::random(vec![
-                nrows.next_power_of_two(),
-                ncols.next_power_of_two(),
-            ])), last_node_id)?;
+            model.add_consecutive_layer(
+                Layer::Dense(Dense::random(vec![
+                    nrows.next_power_of_two(),
+                    ncols.next_power_of_two(),
+                ])),
+                last_node_id,
+            )?;
 
             model.route_output(None)?;
 
@@ -530,48 +552,67 @@ pub(crate) mod test {
 
         let input_shape = vec![1, 32, 32];
 
-        let mut model = ProvableModel::new_from_input_shapes(
-            vec![input_shape.clone()],
-            PaddingMode::Padding,
-        );
+        let mut model =
+            ProvableModel::new_from_input_shapes(vec![input_shape.clone()], PaddingMode::Padding);
         let input = Tensor::random(&model.input_shapes()[0]);
-        let first_id = model.add_consecutive_layer(Layer::Convolution(
-            Convolution::new(trad_conv1.clone(), bias1.clone())
-                .into_padded_and_ffted(&in_dimensions[0]),
-        ), None).unwrap();
-        let second_id = model.add_consecutive_layer(Layer::Convolution(
-            Convolution::new(trad_conv2.clone(), bias2.clone())
-                .into_padded_and_ffted(&in_dimensions[1]),
-        ), Some(first_id)).unwrap();
-        let third_id = model.add_consecutive_layer(Layer::Convolution(
-            Convolution::new(trad_conv3.clone(), bias3.clone())
-                .into_padded_and_ffted(&in_dimensions[2]),
-        ), Some(second_id)).unwrap();
+        let first_id = model
+            .add_consecutive_layer(
+                Layer::Convolution(
+                    Convolution::new(trad_conv1.clone(), bias1.clone())
+                        .into_padded_and_ffted(&in_dimensions[0]),
+                ),
+                None,
+            )
+            .unwrap();
+        let second_id = model
+            .add_consecutive_layer(
+                Layer::Convolution(
+                    Convolution::new(trad_conv2.clone(), bias2.clone())
+                        .into_padded_and_ffted(&in_dimensions[1]),
+                ),
+                Some(first_id),
+            )
+            .unwrap();
+        let third_id = model
+            .add_consecutive_layer(
+                Layer::Convolution(
+                    Convolution::new(trad_conv3.clone(), bias3.clone())
+                        .into_padded_and_ffted(&in_dimensions[2]),
+                ),
+                Some(second_id),
+            )
+            .unwrap();
         model.route_output(None).unwrap();
 
         // END TEST
-        let trace =
-            model.run::<F>(&vec![input.clone()]).unwrap();
+        let trace = model.run::<F>(&vec![input.clone()]).unwrap();
 
-        let mut model2 = ProvableModel::new_from_input_shapes(
-            vec![input_shape],
-            PaddingMode::NoPadding,
-        );
-        let first_id = model2.add_consecutive_layer(Layer::SchoolBookConvolution(SchoolBookConv(
-            Convolution::new(trad_conv1, bias1),
-        )), None).unwrap();
-        let second_id = model2.add_consecutive_layer(Layer::SchoolBookConvolution(SchoolBookConv(
-            Convolution::new(trad_conv2, bias2),
-        )), Some(first_id)).unwrap();
-        let third_id = model2.add_consecutive_layer(Layer::SchoolBookConvolution(SchoolBookConv(
-            Convolution::new(trad_conv3, bias3),
-        )), Some(second_id)).unwrap();
+        let mut model2 =
+            ProvableModel::new_from_input_shapes(vec![input_shape], PaddingMode::NoPadding);
+        let first_id = model2
+            .add_consecutive_layer(
+                Layer::SchoolBookConvolution(SchoolBookConv(Convolution::new(trad_conv1, bias1))),
+                None,
+            )
+            .unwrap();
+        let second_id = model2
+            .add_consecutive_layer(
+                Layer::SchoolBookConvolution(SchoolBookConv(Convolution::new(trad_conv2, bias2))),
+                Some(first_id),
+            )
+            .unwrap();
+        let third_id = model2
+            .add_consecutive_layer(
+                Layer::SchoolBookConvolution(SchoolBookConv(Convolution::new(trad_conv3, bias3))),
+                Some(second_id),
+            )
+            .unwrap();
         model2.route_output(None).unwrap();
         let trace2 = model.run::<F>(&vec![input]).unwrap();
 
         check_tensor_consistency_field::<GoldilocksExt2>(
-            trace2.output().unwrap().to_fields(),
-            trace.output().unwrap().to_fields(),
+            trace2.outputs().unwrap()[0].to_fields(),
+            trace.outputs().unwrap()[0].to_fields(),
         );
     }
 
@@ -582,16 +623,23 @@ pub(crate) mod test {
         let filter = Tensor::random(&shape1);
         let bias1 = Tensor::random(&vec![shape1[0]]);
 
-        let mut model = ProvableModel::new_from_input_shapes(
-            vec![input_shape.clone()],
-            PaddingMode::Padding,
-        );
-        let conv_layer = model.add_consecutive_layer(Layer::Convolution(
-            Convolution::new(filter.clone(), bias1.clone()).into_padded_and_ffted(&input_shape),
-        ), None).unwrap();
-        let pool_layer = model.add_consecutive_layer(
-            Layer::Pooling(Pooling::Maxpool2D(Maxpool2D::default())), Some(conv_layer)
-        ).unwrap();
+        let mut model =
+            ProvableModel::new_from_input_shapes(vec![input_shape.clone()], PaddingMode::Padding);
+        let conv_layer = model
+            .add_consecutive_layer(
+                Layer::Convolution(
+                    Convolution::new(filter.clone(), bias1.clone())
+                        .into_padded_and_ffted(&input_shape),
+                ),
+                None,
+            )
+            .unwrap();
+        let pool_layer = model
+            .add_consecutive_layer(
+                Layer::Pooling(Pooling::Maxpool2D(Maxpool2D::default())),
+                Some(conv_layer),
+            )
+            .unwrap();
         model.route_output(None).unwrap();
 
         // TODO: have a "builder" for the model that automatically tracks the shape after each layer such that
@@ -599,8 +647,7 @@ pub(crate) mod test {
         // Here is not possible since we didnt run through the onnx loader
         let input = Tensor::random(&input_shape);
         let input_padded = model.prepare_inputs(vec![input]).unwrap();
-        let _ =
-            model.run::<F>(&input_padded).unwrap();
+        let _ = model.run::<F>(&input_padded).unwrap();
     }
 
     #[test]
@@ -628,8 +675,12 @@ pub(crate) mod test {
             vec![input_shape],
             PaddingMode::NoPadding,
         );
-        let first_id = model.add_consecutive_layer(Layer::Dense(dense1.clone()), None).unwrap();
-        let second_id = model.add_consecutive_layer(Layer::Dense(dense2.clone()), Some(first_id)).unwrap();
+        let first_id = model
+            .add_consecutive_layer(Layer::Dense(dense1.clone()), None)
+            .unwrap();
+        let second_id = model
+            .add_consecutive_layer(Layer::Dense(dense2.clone()), Some(first_id))
+            .unwrap();
         model.route_output(None).unwrap();
 
         let trace = model.run::<F>(&vec![input]).unwrap();
@@ -638,7 +689,10 @@ pub(crate) mod test {
         assert_eq!(*trace.get_step(&first_id).unwrap().outputs()[0], output1);
 
         // Verify second step
-        assert_eq!(*trace.get_step(&second_id).unwrap().outputs()[0], final_output.clone());
+        assert_eq!(
+            *trace.get_step(&second_id).unwrap().outputs()[0],
+            final_output.clone()
+        );
         let (nrow, _) = (dense2.nrows(), dense2.ncols());
         assert_eq!(final_output.get_data().len(), nrow);
     }
@@ -662,7 +716,8 @@ pub(crate) mod test {
             .collect_vec();
         assert_eq!(dense_layers.len(), 1);
         let point1 = random_bool_vector(dense_layers[0].1.matrix.nrows_2d().ilog2() as usize);
-        let computed_eval1 = trace.get_step(&dense_layers[0].0)
+        let computed_eval1 = trace
+            .get_step(&dense_layers[0].0)
             .expect(format!("Node with id {} not found", dense_layers[0].0).as_str())
             .outputs()[0]
             .get_data()
@@ -670,7 +725,8 @@ pub(crate) mod test {
             .into_mle()
             .evaluate(&point1);
         let flatten_mat1 = matrices_mle[0].1.fix_high_variables(&point1);
-        let bias_eval = dense_layers[0].1
+        let bias_eval = dense_layers[0]
+            .1
             .bias
             .evals_flat::<F>()
             .into_mle()
@@ -714,25 +770,25 @@ pub(crate) mod test {
         let w2 = random_vector_quant(1024);
         let conv2 = Tensor::new(vec![1024], w2.clone());
         let input_shape = vec![1024];
-        
-        let mut model = ProvableModel::new_from_input_shapes(
-            vec![input_shape],
-            PaddingMode::Padding,
-        );
+
+        let mut model =
+            ProvableModel::new_from_input_shapes(vec![input_shape], PaddingMode::Padding);
         let input = Tensor::random(&model.input_shapes()[0]);
-        model.add_consecutive_layer(Layer::Dense(Dense::new(conv1, conv2)), None).unwrap();
+        model
+            .add_consecutive_layer(Layer::Dense(Dense::new(conv1, conv2)), None)
+            .unwrap();
         model.route_output(None).unwrap();
         model.describe();
         let trace = model.run::<F>(&vec![input]).unwrap();
         let mut tr: BasicTranscript<GoldilocksExt2> = BasicTranscript::new(b"m2vec");
         let ctx =
-        Context::<GoldilocksExt2>::generate(&model, None).expect("Unable to generate context");
+            Context::<GoldilocksExt2>::generate(&model, None).expect("Unable to generate context");
         let io = trace.to_verifier_io();
         let prover: Prover<'_, GoldilocksExt2, BasicTranscript<GoldilocksExt2>> =
-        Prover::new(&ctx, &mut tr);
+            Prover::new(&ctx, &mut tr);
         let proof = prover.prove(trace).expect("unable to generate proof");
         let mut verifier_transcript: BasicTranscript<GoldilocksExt2> =
-        BasicTranscript::new(b"m2vec");
+            BasicTranscript::new(b"m2vec");
         verify::<_, _>(ctx, proof, io, &mut verifier_transcript).unwrap();
     }
 
@@ -744,35 +800,37 @@ pub(crate) mod test {
         let k_x = 1 << 1;
 
         let in_dimensions: Vec<Vec<usize>> =
-        vec![vec![k_x, n_x, n_x], vec![16, 29, 29], vec![4, 26, 26]];
+            vec![vec![k_x, n_x, n_x], vec![16, 29, 29], vec![4, 26, 26]];
 
         let conv1 = Tensor::random(&vec![k_w, k_x, n_w, n_w]);
         let input_shape = vec![k_x, n_x, n_x];
-        
 
-        let mut model = ProvableModel::new_from_input_shapes(
-            vec![input_shape],
-            PaddingMode::Padding,
-        );
+        let mut model =
+            ProvableModel::new_from_input_shapes(vec![input_shape], PaddingMode::Padding);
         let input = Tensor::random(&model.input_shapes()[0]);
-        let _conv_layer = model.add_consecutive_layer(Layer::Convolution(
-            Convolution::new(conv1.clone(), Tensor::random(&vec![conv1.kw()]))
-            .into_padded_and_ffted(&in_dimensions[0]),
-        ), None).unwrap();
+        let _conv_layer = model
+            .add_consecutive_layer(
+                Layer::Convolution(
+                    Convolution::new(conv1.clone(), Tensor::random(&vec![conv1.kw()]))
+                        .into_padded_and_ffted(&in_dimensions[0]),
+                ),
+                None,
+            )
+            .unwrap();
         model.route_output(None).unwrap();
         model.describe();
-        let trace= model.run::<F>(&vec![input]).unwrap();
+        let trace = model.run::<F>(&vec![input]).unwrap();
         let mut tr: BasicTranscript<GoldilocksExt2> = BasicTranscript::new(b"m2vec");
-        let ctx = Context::<GoldilocksExt2>::generate(&model, None)
-        .expect("Unable to generate context");
+        let ctx =
+            Context::<GoldilocksExt2>::generate(&model, None).expect("Unable to generate context");
         let io = trace.to_verifier_io();
 
         let prover: Prover<'_, GoldilocksExt2, BasicTranscript<GoldilocksExt2>> =
-        Prover::new(&ctx, &mut tr);
+            Prover::new(&ctx, &mut tr);
         let proof = prover.prove(trace).expect("unable to generate proof");
 
         let mut verifier_transcript: BasicTranscript<GoldilocksExt2> =
-        BasicTranscript::new(b"m2vec");
+            BasicTranscript::new(b"m2vec");
         verify::<_, _>(ctx, proof, io, &mut verifier_transcript).unwrap();
     }
 
@@ -788,7 +846,7 @@ pub(crate) mod test {
                         let k_x = 1 << i;
 
                         let in_dimensions: Vec<Vec<usize>> =
-                        vec![vec![k_x, n_x, n_x], vec![16, 29, 29], vec![4, 26, 26]];
+                            vec![vec![k_x, n_x, n_x], vec![16, 29, 29], vec![4, 26, 26]];
                         let input_shape = vec![k_x, n_x, n_x];
                         let conv1 = Tensor::random(&vec![k_w, k_x, n_w, n_w]);
                         let mut model = ProvableModel::<Element>::new_from_input_shapes(
@@ -796,24 +854,31 @@ pub(crate) mod test {
                             PaddingMode::Padding,
                         );
                         let input = Tensor::random(&model.input_shapes()[0]);
-                        model.add_consecutive_layer(Layer::Convolution(
-                            Convolution::new(conv1.clone(), Tensor::random(&vec![conv1.kw()]))
-                            .into_padded_and_ffted(&in_dimensions[0]),
-                        ), None).unwrap();
+                        model
+                            .add_consecutive_layer(
+                                Layer::Convolution(
+                                    Convolution::new(
+                                        conv1.clone(),
+                                        Tensor::random(&vec![conv1.kw()]),
+                                    )
+                                    .into_padded_and_ffted(&in_dimensions[0]),
+                                ),
+                                None,
+                            )
+                            .unwrap();
                         model.route_output(None).unwrap();
                         model.describe();
                         let trace = model.run::<F>(&vec![input]).unwrap();
                         let mut tr: BasicTranscript<GoldilocksExt2> =
-                        BasicTranscript::new(b"m2vec");
-                        let ctx =
-                        Context::<GoldilocksExt2>::generate(&model, None)
-                        .expect("Unable to generate context");
+                            BasicTranscript::new(b"m2vec");
+                        let ctx = Context::<GoldilocksExt2>::generate(&model, None)
+                            .expect("Unable to generate context");
                         let io = trace.to_verifier_io();
                         let prover: Prover<'_, GoldilocksExt2, BasicTranscript<GoldilocksExt2>> =
-                        Prover::new(&ctx, &mut tr);
+                            Prover::new(&ctx, &mut tr);
                         let proof = prover.prove(trace).expect("unable to generate proof");
                         let mut verifier_transcript: BasicTranscript<GoldilocksExt2> =
-                        BasicTranscript::new(b"m2vec");
+                            BasicTranscript::new(b"m2vec");
                         verify::<_, _>(ctx, proof, io, &mut verifier_transcript).unwrap();
                     }
                 }

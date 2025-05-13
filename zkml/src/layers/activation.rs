@@ -106,18 +106,26 @@ where
     E: ExtensionField + DeserializeOwned,
     E::BaseField: Serialize + DeserializeOwned,
 {
-    fn step_info(&self, id: PolyID, mut aux: ContextAux) -> Result<(LayerCtx<E>, ContextAux), ProvableOpError> {
+    fn step_info(
+        &self,
+        id: PolyID,
+        mut aux: ContextAux,
+    ) -> Result<(LayerCtx<E>, ContextAux), ProvableOpError> {
         aux.tables.insert(TableType::Relu);
-        let num_vars = aux.last_output_shape.iter_mut().fold(Ok(None), |expected_num_vars, shape| {            
-            let num_vars = shape.iter()
-                .map(|dim| ceil_log2(*dim))
-                .sum::<usize>();
-            if let Some(vars) = expected_num_vars? {
-                ensure!(vars == num_vars, 
-                "All input shapes for activation must have the same number of variables");
-            }
-            Ok(Some(num_vars))                    
-        })?.expect("No input shape found for activation layer?");
+        let num_vars = aux
+            .last_output_shape
+            .iter_mut()
+            .fold(Ok(None), |expected_num_vars, shape| {
+                let num_vars = shape.iter().map(|dim| ceil_log2(*dim)).sum::<usize>();
+                if let Some(vars) = expected_num_vars? {
+                    ensure!(
+                        vars == num_vars,
+                        "All input shapes for activation must have the same number of variables"
+                    );
+                }
+                Ok(Some(num_vars))
+            })?
+            .expect("No input shape found for activation layer?");
         let info = match self {
             Activation::Relu(relu) => LayerCtx::Activation(ActivationCtx {
                 op: Activation::Relu(*relu),
@@ -211,7 +219,7 @@ where
                 .collect(),
         ));
         gen.lookups_no_challenges
-            .push((vec![col_one, col_two], 2, TableType::Relu));
+            .insert(id, (vec![col_one, col_two], 2, TableType::Relu));
 
         Ok(())
     }
@@ -281,7 +289,7 @@ impl Activation {
         E: ExtensionField + Serialize + DeserializeOwned,
         E::BaseField: Serialize + DeserializeOwned,
     {
-        let prover_info = prover.next_lookup_witness()?;
+        let prover_info = prover.get_lookup_witness(node_id)?;
 
         // Run the lookup protocol and return the lookup proof
         let logup_proof = logup_batch_prove(&prover_info, prover.transcript)?;

@@ -189,14 +189,9 @@ impl ScalingStrategy for InferenceObserver {
             let output_scaling = input_scaling.to_vec(); // output scaling factors are the same as input ones for requant
             md.set_layers_scaling(node_id, output_scaling, input_scaling.to_vec());
         }
-        let out_node = model.output_node();
-        let out_scaling = md
-            .get_output_layer_scaling(&out_node)
-            .ok_or(anyhow!(
-                "Scaling factor for output node {out_node} not found"
-            ))?
-            .to_vec();
-        Ok((model, md.build(out_scaling)))
+        let out_nodes = model.output_nodes();
+        let md = md.build(out_nodes)?;
+        Ok((model, md))
     }
 }
 

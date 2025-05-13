@@ -10,7 +10,7 @@ use crate::{
     padding::PaddingMode,
     quantization,
 };
-use anyhow::{anyhow, ensure, Result};
+use anyhow::{Result, anyhow, ensure};
 use ff::Field;
 use ff_ext::ExtensionField;
 use gkr::util::ceil_log2;
@@ -133,18 +133,26 @@ where
     E: ExtensionField + DeserializeOwned,
     E::BaseField: Serialize + DeserializeOwned,
 {
-    fn step_info(&self, id: PolyID, mut aux: ContextAux) -> Result<(LayerCtx<E>, ContextAux), ProvableOpError> {
+    fn step_info(
+        &self,
+        id: PolyID,
+        mut aux: ContextAux,
+    ) -> Result<(LayerCtx<E>, ContextAux), ProvableOpError> {
         aux.tables.insert(TableType::Range);
-        let num_vars = aux.last_output_shape.iter_mut().fold(Ok(None), |expected_num_vars, shape| {            
-            let num_vars = shape.iter()
-                .map(|dim| ceil_log2(*dim))
-                .sum::<usize>();
-            if let Some(vars) = expected_num_vars? {
-                ensure!(vars == num_vars, 
-                "All input shapes for requant layer must have the same number of variables");
-            }
-            Ok(Some(num_vars))                    
-        })?.expect("No input shape found for requant layer?");
+        let num_vars = aux
+            .last_output_shape
+            .iter_mut()
+            .fold(Ok(None), |expected_num_vars, shape| {
+                let num_vars = shape.iter().map(|dim| ceil_log2(*dim)).sum::<usize>();
+                if let Some(vars) = expected_num_vars? {
+                    ensure!(
+                        vars == num_vars,
+                        "All input shapes for requant layer must have the same number of variables"
+                    );
+                }
+                Ok(Some(num_vars))
+            })?
+            .expect("No input shape found for requant layer?");
         Ok((
             LayerCtx::Requant(RequantCtx {
                 requant: *self,
@@ -223,7 +231,7 @@ where
         ));
 
         gen.lookups_no_challenges
-            .push((column_evals, 1, TableType::Range));
+            .insert(id, (column_evals, 1, TableType::Range));
 
         Ok(())
     }
@@ -556,7 +564,7 @@ impl Requant {
         E: ExtensionField + Serialize + DeserializeOwned,
         E::BaseField: Serialize + DeserializeOwned,
     {
-        let prover_info = prover.next_lookup_witness()?;
+        let prover_info = prover.get_lookup_witness(id)?;
 
         // Run the lookup protocol and return the lookup proof
         let logup_proof = logup_batch_prove(&prover_info, prover.transcript)?;

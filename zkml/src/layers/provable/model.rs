@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use anyhow::{Result, anyhow, ensure};
 use ff_ext::ExtensionField;
@@ -147,8 +147,12 @@ where
     pub fn describe(&self) {
         info!("Model description:");
         for (idx, layer) in self.to_forward_iterator() {
-            info!("\t - {}: {:?}", idx, layer.inputs);
+            info!("\t- {}: {:?}", idx, layer.inputs);
             info!("\t- {}: {}", idx, layer.operation.describe());
+        }
+        info!("Output nodes:");
+        for (idx, node) in self.output_nodes() {
+            info!("\t- {}:{:?}", idx, node.outputs);
         }
     }
 
@@ -295,40 +299,39 @@ where
             }
         } else {
             // find the node with no output edges, which will be considered the output node
-            let out_node = self.nodes.iter_mut().find(|(id, node)| 
-                node.outputs.iter().all(|out| 
-                    out.clone() == Default::default()        
-                )
-            );
+            let out_node = self.nodes.iter_mut().find(|(id, node)| {
+                node.outputs
+                    .iter()
+                    .all(|out| out.clone() == Default::default())
+            });
             ensure!(out_node.is_some(), "No output node found for model");
             let node = out_node.unwrap().1;
-            node.outputs.iter_mut().enumerate().for_each(|(i, out)| 
-                out.edges = vec![Edge { 
-                    node: None, 
+            node.outputs.iter_mut().enumerate().for_each(|(i, out)| {
+                out.edges = vec![Edge {
+                    node: None,
                     index: i,
                 }]
-            );
+            });
         }
-        
 
         Ok(())
     }
 
-    pub(crate) fn output_node(&self) -> NodeId {
+    pub(crate) fn output_nodes(&self) -> Vec<(NodeId, &ProvableNode<N>)> {
         self.nodes
             .iter()
-            .find_map(|(id, node)| {
+            .filter_map(|(id, node)| {
                 if node
                     .outputs
                     .iter()
-                    .all(|wire| !wire.edges.is_empty() && wire.edges.iter().all(|edge| edge.node.is_none()))
+                    .all(|wire| wire.edges.iter().any(|edge| edge.node.is_none()))
                 {
-                    Some(*id)
+                    Some((*id, node))
                 } else {
                     None
                 }
             })
-            .expect("No output node found")
+            .collect()
     }
 
     pub(crate) fn num_layers(&self) -> usize {
@@ -417,7 +420,7 @@ pub type ModelCtxForwardIterator<'a, E> = NodeIterator<'a, NodeCtx<E>, true>;
 pub type ModelCtxBackwardIterator<'a, E> = NodeIterator<'a, NodeCtx<E>, false>;
 
 pub struct NodeIterator<'a, E: NodeEgdes, const FORWARD: bool> {
-    pub(crate) unvisited_nodes: HashSet<NodeId>,
+    pub(crate) unvisited_nodes: BTreeSet<NodeId>, /* Use BTreeSet to make the iterator deterministic */
     pub(crate) nodes: &'a HashMap<NodeId, E>,
 }
 
@@ -580,13 +583,8 @@ impl<'a, E: ExtensionField, N, D> Trace<'a, E, N, D> {
         }
     }
 
-    pub(crate) fn output(&self) -> Result<&Tensor<D>> {
-        // we assume for now there is only one output tensor
-        ensure!(
-            self.output.len() == 1,
-            "Found more than 1 output tensor for the model"
-        );
-        Ok(&self.output[0])
+    pub(crate) fn outputs(&self) -> Result<Vec<&Tensor<D>>> {
+        Ok(self.output.iter().collect())
     }
 }
 
@@ -709,17 +707,41 @@ impl<N: Number> ProvableModel<N> {
         }
 
         // compute the output tensor from the outputs of the output nodes
-        let output_node = self.output_node();
-        let output: Vec<Tensor<N>> = trace
-            .get_step(&output_node)
-            .ok_or(anyhow!("Output node {} not found in trace", output_node))?
-            .outputs()
-            .into_iter()
-            .cloned()
-            .collect();
-        ensure!(output.len() == 1, "Unexpected number of output tensors");
+        let output_nodes = self.output_nodes();
+        let mut outputs = BTreeMap::new();
+        for (id, out_node) in output_nodes {
+            let node_outputs = trace
+                .get_step(&id)
+                .ok_or(anyhow!("Output node {} not found in trace", id))?
+                .outputs();
+            ensure!(node_outputs.len() == out_node.outputs.len(),
+                "Number of outputs found in trace for node {id} is different from the number of expected outputs
+                for the node");
+            for (i, wire) in out_node.outputs.iter().enumerate() {
+                if let Some(out_index) = wire.edges.iter().find_map(|edge| {
+                    if edge.node.is_none() {
+                        Some(edge.index)
+                    } else {
+                        None
+                    }
+                }) {
+                    // if this output wire is an output of the model, insert in the collection of the
+                    // model outputs, paired with the index among the outputs of the model
+                    ensure!(
+                        outputs.insert(out_index, node_outputs[i]).is_none(),
+                        "Trying to insert twice an output value for the same index {out_index}"
+                    );
+                }
+            }
+        }
+        // check that all outputs have been found
+        ensure!(!outputs.is_empty(), "No outputs found for the model");
+        ensure!(
+            *outputs.first_key_value().unwrap().0 == 0
+                && *outputs.last_key_value().unwrap().0 == outputs.len() - 1
+        );
 
-        trace.output = output;
+        trace.output = outputs.into_iter().map(|(_, out)| out.clone()).collect();
 
         Ok(trace)
     }
@@ -746,6 +768,7 @@ impl<N: Number> ProvableModel<N> {
 #[cfg(test)]
 mod tests {
     use goldilocks::GoldilocksExt2;
+    use itertools::Itertools;
     use transcript::BasicTranscript;
 
     use crate::{
@@ -800,11 +823,9 @@ mod tests {
         let output_node = model
             .add_consecutive_layer(Layer::Dense(dense), Some(relu_node))
             .unwrap();
-        model
-            .route_output(None)
-            .unwrap();
+        model.route_output(None).unwrap();
 
-        assert_eq!(model.output_node(), output_node);
+        assert_eq!(model.output_nodes()[0].0, output_node);
 
         model
     }
@@ -832,25 +853,25 @@ mod tests {
         assert_eq!(trace.steps.len(), 3);
     }
 
-    #[test]
-    fn test_model_proving() {
-        init_test_logging();
-        const INPUT_SIZE: usize = 57;
-        let model = build_test_model::<f32, INPUT_SIZE>();
-        let input_shape = model.input_shapes()[0].clone();
-
-        let float_input_tensor = Tensor::random(&input_shape);
-        let (quantized_model, md) = InferenceObserver::new().quantize(model).unwrap();
-        let model = pad_model(quantized_model).unwrap();
+    fn prove_model(model: ProvableModel<f32>) -> anyhow::Result<()> {
+        let float_inputs = model
+            .input_shapes()
+            .into_iter()
+            .map(|shape| Tensor::random(&shape))
+            .collect_vec();
+        let (quantized_model, md) = InferenceObserver::new().quantize(model)?;
+        let model = pad_model(quantized_model)?;
 
         model.describe();
 
         // quantize and pad input tensor
-        let input_tensor = float_input_tensor
-            .quantize(&md.input[0])
-            .pad_next_power_of_two();
+        let input_tensors = float_inputs
+            .into_iter()
+            .zip(&md.input)
+            .map(|(tensor, s)| tensor.quantize(s).pad_next_power_of_two())
+            .collect_vec();
 
-        let trace = model.run(&[input_tensor]).unwrap();
+        let trace = model.run(&input_tensors)?;
         let mut tr: BasicTranscript<GoldilocksExt2> = BasicTranscript::new(b"model");
         let ctx =
             Context::<GoldilocksExt2>::generate(&model, None).expect("Unable to generate context");
@@ -859,6 +880,107 @@ mod tests {
         let proof = prover.prove(trace).expect("unable to generate proof");
         let mut verifier_transcript: BasicTranscript<GoldilocksExt2> =
             BasicTranscript::new(b"model");
-        verify::<_, _>(ctx, proof, io, &mut verifier_transcript).unwrap();
+        verify::<_, _>(ctx, proof, io, &mut verifier_transcript)
+    }
+
+    #[test]
+    fn test_model_proving() {
+        init_test_logging();
+        const INPUT_SIZE: usize = 57;
+        let model = build_test_model::<f32, INPUT_SIZE>();
+        prove_model(model).unwrap();
+    }
+
+    #[test]
+    fn test_model_multiple_outputs() {
+        init_test_logging();
+        const FIRST_INPUT_SIZE: usize = 27;
+        const SECOND_INPUT_SIZE: usize = 49;
+        let input_shapes = vec![vec![FIRST_INPUT_SIZE], vec![SECOND_INPUT_SIZE]];
+        let mut model =
+            ProvableModel::<f32>::new_from_input_shapes(input_shapes, PaddingMode::NoPadding);
+        // add first dense layer
+        // generate random dense matrix
+        let ncols = FIRST_INPUT_SIZE;
+        let nrows = 42;
+        let dense = Dense::random(vec![nrows, ncols]);
+        let first_dense_out_shape = &dense.output_shapes(
+            &vec![model.unpadded_input_shapes()[0].clone()],
+            PaddingMode::NoPadding,
+        )[0];
+        let first_input_dense = model
+            .add_node(ProvableNode::new(
+                vec![Edge {
+                    node: None,
+                    index: 0,
+                }],
+                Layer::Dense(dense),
+            ))
+            .unwrap();
+        // add second input dense layer
+        let ncols = SECOND_INPUT_SIZE;
+        let nrows = 47;
+        let dense = Dense::random(vec![nrows, ncols]);
+        let second_dense_out_shape = &dense.output_shapes(
+            &vec![model.unpadded_input_shapes()[1].clone()],
+            PaddingMode::NoPadding,
+        )[0];
+        let second_input_dense = model
+            .add_node(ProvableNode::new(
+                vec![Edge {
+                    node: None,
+                    index: 1,
+                }],
+                Layer::Dense(dense),
+            ))
+            .unwrap();
+        // add Relu nodes
+        let relu = Activation::Relu(Relu::new());
+        let first_relu_node = model
+            .add_consecutive_layer(Layer::Activation(relu.clone()), Some(first_input_dense))
+            .unwrap();
+        let second_relu_node = model
+            .add_consecutive_layer(Layer::Activation(relu), Some(second_input_dense))
+            .unwrap();
+        // add other dense nodes
+        let nrows = 52;
+        let ncols = second_dense_out_shape[0]; // it's a vector, so it has only one dimension
+        let dense = Dense::random(vec![nrows, ncols]);
+        let first_output_node = model
+            .add_consecutive_layer(Layer::Dense(dense), Some(second_relu_node))
+            .unwrap();
+        let nrows = 17;
+        let ncols = first_dense_out_shape[0];
+        let dense = Dense::random(vec![nrows, ncols]);
+        let second_output_node = model
+            .add_consecutive_layer(Layer::Dense(dense), Some(first_relu_node))
+            .unwrap();
+
+        model
+            .route_output(Some(vec![
+                Edge {
+                    node: Some(first_output_node),
+                    index: 0,
+                },
+                Edge {
+                    node: Some(second_output_node),
+                    index: 0,
+                },
+            ]))
+            .unwrap();
+
+        let out_node_ids = model
+            .output_nodes()
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect_vec();
+
+        assert_eq!(out_node_ids.len(), 2);
+        assert!(out_node_ids.contains(&first_output_node));
+        assert!(out_node_ids.contains(&second_output_node));
+
+        model.describe();
+
+        prove_model(model).unwrap();
     }
 }

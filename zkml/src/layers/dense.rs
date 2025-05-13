@@ -186,12 +186,16 @@ where
     E::BaseField: Serialize + DeserializeOwned,
     E: Serialize + DeserializeOwned,
 {
-    fn step_info(&self, id: PolyID, mut aux: ContextAux) -> Result<(LayerCtx<E>, ContextAux), ProvableOpError> {
+    fn step_info(
+        &self,
+        id: PolyID,
+        mut aux: ContextAux,
+    ) -> Result<(LayerCtx<E>, ContextAux), ProvableOpError> {
         // construct dimension of the polynomial given to the sumcheck
         let ncols = self.matrix.ncols_2d();
-        aux.last_output_shape.iter_mut().for_each(|shape| 
-            *shape = vec![self.matrix.nrows_2d()]
-        );
+        aux.last_output_shape
+            .iter_mut()
+            .for_each(|shape| *shape = vec![self.matrix.nrows_2d()]);
         // each poly is only two polynomial right now: matrix and vector
         // for matrix, each time we fix the variables related to rows so we are only left
         // with the variables related to columns

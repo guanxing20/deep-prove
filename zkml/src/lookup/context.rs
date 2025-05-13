@@ -14,7 +14,7 @@ use crate::{
     iop::ChallengeStorage,
     layers::{
         activation::Relu,
-        provable::{InferenceTrace, ModelCtx, ProvableOp, ToIterator},
+        provable::{InferenceTrace, ModelCtx, NodeId, ProvableOp, ToIterator},
     },
     lookup::logup_gkr::structs::LogUpInput,
     quantization::{self, Fieldizer},
@@ -152,7 +152,7 @@ pub struct LookupWitnessGen<E: ExtensionField> {
     pub(crate) tables: BTreeSet<TableType>,
     pub(crate) lookups: HashMap<TableType, HashMap<Element, u64>>,
     pub(crate) polys_with_id: Vec<(usize, Vec<E>)>,
-    pub(crate) lookups_no_challenges: Vec<(Vec<Vec<E::BaseField>>, usize, TableType)>,
+    pub(crate) lookups_no_challenges: HashMap<NodeId, (Vec<Vec<E::BaseField>>, usize, TableType)>,
 }
 
 impl<E: ExtensionField> LookupWitnessGen<E> {
@@ -161,7 +161,7 @@ impl<E: ExtensionField> LookupWitnessGen<E> {
             tables: BTreeSet::new(),
             lookups: HashMap::new(),
             polys_with_id: Vec::new(),
-            lookups_no_challenges: Vec::new(),
+            lookups_no_challenges: HashMap::new(),
         }
     }
 }
@@ -176,7 +176,7 @@ pub fn generate_lookup_witnesses<'a, E: ExtensionField, T: Transcript<E>>(
     (
         Option<Context<E>>,
         ChallengeStorage<E>,
-        Vec<LogUpInput<E>>,
+        HashMap<NodeId, LogUpInput<E>>,
         Vec<LogUpInput<E>>,
     ),
     LogUpError,
@@ -213,7 +213,7 @@ where
                 constant_challenge: E::ZERO,
                 challenge_map: HashMap::new(),
             },
-            vec![],
+            HashMap::new(),
             vec![],
         ));
     }
@@ -258,22 +258,27 @@ where
     let lookup_inputs = witness_gen
         .lookups_no_challenges
         .into_iter()
-        .map(|(column_evals, columns_per_instance, table_type)| {
-            let (constant_challenge, column_challenge) = challenge_storage
-                .get_challenges_by_name(&table_type.name())
-                .ok_or(LogUpError::ParamterError(format!(
-                    "No challegnes found for table type: {} when generating lookup witness",
-                    table_type.name()
-                )))?;
+        .map(
+            |(node_id, (column_evals, columns_per_instance, table_type))| {
+                let (constant_challenge, column_challenge) = challenge_storage
+                    .get_challenges_by_name(&table_type.name())
+                    .ok_or(LogUpError::ParamterError(format!(
+                        "No challegnes found for table type: {} when generating lookup witness",
+                        table_type.name()
+                    )))?;
 
-            LogUpInput::<E>::new_lookup(
-                column_evals,
-                constant_challenge,
-                column_challenge,
-                columns_per_instance,
-            )
-        })
-        .collect::<Result<Vec<LogUpInput<E>>, LogUpError>>()?;
+                Ok((
+                    node_id,
+                    LogUpInput::<E>::new_lookup(
+                        column_evals,
+                        constant_challenge,
+                        column_challenge,
+                        columns_per_instance,
+                    )?,
+                ))
+            },
+        )
+        .collect::<Result<HashMap<NodeId, LogUpInput<E>>, LogUpError>>()?;
 
     let table_inputs = tables_no_challenges
         .into_iter()

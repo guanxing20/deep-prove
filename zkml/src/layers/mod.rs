@@ -210,7 +210,11 @@ where
         self.operation.evaluate(inputs, unpadded_input_shapes)
     }
 
-    pub(crate) fn step_info<E>(&self, id: PolyID, aux: ContextAux) -> Result<(LayerCtx<E>, ContextAux), ProvableOpError>
+    pub(crate) fn step_info<E>(
+        &self,
+        id: PolyID,
+        aux: ContextAux,
+    ) -> Result<(LayerCtx<E>, ContextAux), ProvableOpError>
     where
         E: ExtensionField + DeserializeOwned,
         E::BaseField: Serialize + DeserializeOwned,
@@ -333,7 +337,11 @@ where
     E: ExtensionField + DeserializeOwned,
     E::BaseField: Serialize + DeserializeOwned,
 {
-    fn step_info(&self, id: PolyID, aux: ContextAux) -> Result<(LayerCtx<E>, ContextAux), ProvableOpError> {
+    fn step_info(
+        &self,
+        id: PolyID,
+        aux: ContextAux,
+    ) -> Result<(LayerCtx<E>, ContextAux), ProvableOpError> {
         match self {
             Layer::Dense(dense) => dense.step_info(id, aux),
             Layer::Convolution(convolution) => convolution.step_info(id, aux),
@@ -550,7 +558,6 @@ impl<T: Number> Layer<T> {
         }
     }
 
-    
     pub fn needs_requant(&self) -> bool {
         match self {
             Layer::Dense(..) | Layer::Convolution(..) => true,

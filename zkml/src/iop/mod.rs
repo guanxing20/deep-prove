@@ -84,7 +84,10 @@ where
 mod test {
     use goldilocks::GoldilocksExt2;
 
-    use crate::{default_transcript, init_test_logging, layers::provable::ProvableModel, model::Model, quantization::TensorFielder};
+    use crate::{
+        default_transcript, init_test_logging, layers::provable::ProvableModel, model::Model,
+        quantization::TensorFielder,
+    };
 
     use super::{
         Context,
@@ -94,8 +97,8 @@ mod test {
 
     type F = GoldilocksExt2;
 
-     #[test]
-     fn test_prover_steps_generic() {
+    #[test]
+    fn test_prover_steps_generic() {
         init_test_logging();
         let (model, input) = ProvableModel::random(4).unwrap();
         model.describe();
@@ -107,21 +110,20 @@ mod test {
         let proof = prover.prove(trace).expect("unable to generate proof");
         let mut verifier_transcript = default_transcript();
         verify::<_, _>(ctx, proof, io, &mut verifier_transcript).expect("invalid proof");
-     }
-    
-     #[test]
-     fn test_prover_steps_pooling() {
+    }
+
+    #[test]
+    fn test_prover_steps_pooling() {
         init_test_logging();
         let (model, input) = ProvableModel::random_pooling(4).unwrap();
         model.describe();
         let trace = model.run(&input).unwrap();
         let io = trace.to_verifier_io();
-        let ctx = Context::<F>::generate(&model, None)
-        .expect("unable to generate context");
+        let ctx = Context::<F>::generate(&model, None).expect("unable to generate context");
         let mut prover_transcript = default_transcript();
         let prover = Prover::<_, _>::new(&ctx, &mut prover_transcript);
         let proof = prover.prove(trace).expect("unable to generate proof");
         let mut verifier_transcript = default_transcript();
         verify::<_, _>(ctx, proof, io, &mut verifier_transcript).expect("invalid proof");
-     }
+    }
 }

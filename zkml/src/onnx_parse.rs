@@ -1,7 +1,16 @@
 use crate::{
+    Element,
     layers::{
-        activation::{Activation, Relu}, convolution::{conv2d_shape, Convolution}, dense::Dense, pooling::{maxpool2d_shape, Maxpool2D, Pooling, MAXPOOL2D_KERNEL_SIZE}, provable::{OpInfo, ProvableModel}, reshape::Reshape, Layer
-    }, padding::pad_model, quantization::{AbsoluteMax, ModelMetadata, ScalingStrategy}, Element
+        Layer,
+        activation::{Activation, Relu},
+        convolution::{Convolution, conv2d_shape},
+        dense::Dense,
+        pooling::{MAXPOOL2D_KERNEL_SIZE, Maxpool2D, Pooling, maxpool2d_shape},
+        provable::{OpInfo, ProvableModel},
+        reshape::Reshape,
+    },
+    padding::pad_model,
+    quantization::{AbsoluteMax, ModelMetadata, ScalingStrategy},
 };
 use anyhow::{Context, Error, Result, bail, ensure};
 use itertools::Itertools;

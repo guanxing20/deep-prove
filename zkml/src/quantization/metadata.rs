@@ -1,8 +1,14 @@
 //! Metadata related information for a model. These are the information derived from the
 //! float based model weights and activations.
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
-use crate::{layers::provable::NodeId, model::Model};
+use anyhow::{Result, anyhow, ensure};
+
+use crate::{
+    Element,
+    layers::provable::{NodeId, ProvableModel, ProvableNode},
+    model::Model,
+};
 
 use super::ScalingFactor;
 
@@ -65,13 +71,53 @@ impl MetadataBuilder {
             .map(|s| s.as_slice())
     }
 
-    pub fn build(self, output_scaling: Vec<ScalingFactor>) -> ModelMetadata {
-        ModelMetadata {
+    pub fn build(
+        self,
+        output_nodes: Vec<(NodeId, &ProvableNode<Element>)>,
+    ) -> Result<ModelMetadata> {
+        let mut output_scalings = BTreeMap::new();
+        for (id, node) in output_nodes.into_iter() {
+            let scalings = self
+                .get_output_layer_scaling(&id)
+                .ok_or(anyhow!("Scaling factors not found for node {id}"))?;
+            ensure!(
+                scalings.len() == node.outputs.len(),
+                "Number of scalings factors found for node {id} is different from
+                the expected number of outputs of the node"
+            );
+            node.outputs.iter().enumerate().try_for_each(|(i, out)| {
+                if let Some(out_index) = out.edges.iter().find_map(|edge| {
+                    if edge.node.is_none() {
+                        Some(edge.index)
+                    } else {
+                        None
+                    }
+                }) {
+                    ensure!(
+                        output_scalings.insert(out_index, scalings[i]).is_none(),
+                        "Scaling factor for output {out_index} found twice"
+                    );
+                }
+                Ok(())
+            })?;
+        }
+        // check that all scaling factors have been found
+        ensure!(
+            !output_scalings.is_empty(),
+            "No output scaling factors found"
+        );
+        ensure!(
+            *output_scalings.first_key_value().unwrap().0 == 0
+                && *output_scalings.last_key_value().unwrap().0 == output_scalings.len() - 1,
+            "Not all output scaling factors found"
+        );
+
+        Ok(ModelMetadata {
             input: self.input_scaling,
             output_layers_scaling: self.output_layers_scaling,
             input_layers_scaling: self.input_layers_scaling,
-            output: output_scaling,
+            output: output_scalings.into_iter().map(|(_, s)| s).collect(),
             float_model: None,
-        }
+        })
     }
 }
