@@ -321,14 +321,14 @@ fn load_gemm(
     let (edge_id, bias_node_id) = match piter.peek() {
         // no next node, no bias
         None => (node_id, None),
-        Some(&&next_node_id) => (next_node_id, {
+        Some(&&next_node_id) =>  {
             let next_node = model.node(next_node_id);
             // if there's a bias, the next op is a TypedBinOp( Add ) node
             match downcast_to::<TypedBinOp>(next_node) {
                 // safety net
                 _ if next_node.inputs.len() != 2 => {
                     // no bias, just return the matrix node
-                    None
+                    (node_id,None)
                 }
                 // the operation must be an Add
                 Ok(binop) if binop.0.is::<tract_core::ops::math::Add>() => {
@@ -348,20 +348,20 @@ fn load_gemm(
                             // in that case, we move on the iterator, since we already saw the bias node and the Add is part of the dense layer
                             // unwrap is safe here since we peeked already
                             piter.next().unwrap();
-                            Some(bias_input.node)
+                            (next_node_id,Some(bias_input.node))
                         }
                         None => {
                             // no bias, just return the matrix node
-                            None
+                            (node_id,None)
                         }
                     }
                 }
                 _ => {
                     // no bias, just return the matrix node
-                    None
+                    (node_id,None)
                 }
             }
-        }),
+        }
     };
     let mut bias_tensor = match bias_node_id {
         Some(bias) => {
