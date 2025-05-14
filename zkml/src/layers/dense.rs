@@ -1,15 +1,10 @@
 use std::cmp::Ordering;
 
 use crate::{
-    Claim, NextPowerOfTwo, Prover,
     iop::{
         context::{ContextAux, ShapeStep},
         verifier::Verifier,
-    },
-    layers::{LayerCtx, LayerProof, PolyID, requant::Requant},
-    padding::{PaddingMode, ShapeInfo, pad_dense},
-    quantization::{self, BIT_LEN, InferenceObserver, InferenceTracker, ScalingFactor},
-    tensor::Number,
+    }, layers::{requant::Requant, LayerCtx, LayerProof, PolyID}, padding::{pad_dense, PaddingMode, ShapeInfo}, quantization::{self, AbsoluteMax, InferenceObserver, InferenceTracker, ScalingFactor, BIT_LEN}, tensor::Number, Claim, NextPowerOfTwo, Prover
 };
 use anyhow::{Context, ensure};
 use ff_ext::ExtensionField;
@@ -242,15 +237,13 @@ impl PadOp for Dense<Element> {
     }
 }
 
-impl QuantizeOp<InferenceObserver> for Dense<f32> {
-    type QuantizedOp = Dense<Element>;
-
-    fn quantize_op(
-        self,
-        tracker: &InferenceTracker,
-        node_id: NodeId,
+impl Dense<f32> {
+    // Quantize a dense layer using scaling factor of input and output
+    fn quantize_from_scalings(
+        self, 
         input_scaling: &[ScalingFactor],
-    ) -> anyhow::Result<QuantizeOutput<Self::QuantizedOp>> {
+        output_scaling: ScalingFactor,
+    ) -> anyhow::Result<QuantizeOutput<Dense<Element>>> {
         let model_scaling = ScalingFactor::from_absolute_max(self.max_abs_weight(), None);
         let num_inputs = input_scaling.len();
         ensure!(
@@ -258,8 +251,6 @@ impl QuantizeOp<InferenceObserver> for Dense<f32> {
             "Number of input scaling factor for dense layer different from 1"
         );
         let input_scaling = &input_scaling[0];
-        let (min, max) = tracker.distribution_info(node_id, 0);
-        let output_scaling = ScalingFactor::from_absolute_max(min.abs().max(max.abs()), None);
         let bias_scaling = {
             // bias has to be quantized over integers with double bit length
             let min_quantized = -(1 << (2 * (*BIT_LEN) - 1)) + 1;
@@ -280,6 +271,36 @@ impl QuantizeOp<InferenceObserver> for Dense<f32> {
             output_scalings: vec![output_scaling],
             requant_layer: Some(requant),
         })
+    }
+}
+
+impl QuantizeOp<InferenceObserver> for Dense<f32> {
+    type QuantizedOp = Dense<Element>;
+
+    fn quantize_op(
+        self,
+        tracker: &InferenceTracker,
+        node_id: NodeId,
+        input_scaling: &[ScalingFactor],
+    ) -> anyhow::Result<QuantizeOutput<Self::QuantizedOp>> {
+        let (min, max) = tracker.distribution_info(node_id, 0);
+        let output_scaling = ScalingFactor::from_absolute_max(min.abs().max(max.abs()), None);
+        self.quantize_from_scalings(input_scaling, output_scaling)
+    }
+}
+
+impl QuantizeOp<AbsoluteMax> for Dense<f32> {
+    type QuantizedOp = Dense<Element>;
+
+    fn quantize_op(
+        self,
+        _: &(),
+        _node_id: NodeId,
+        input_scaling: &[ScalingFactor],
+    ) -> anyhow::Result<QuantizeOutput<Self::QuantizedOp>> {
+        // TODO: remove this is broken
+        let output_scaling = ScalingFactor::default();
+        self.quantize_from_scalings(input_scaling, output_scaling)
     }
 }
 

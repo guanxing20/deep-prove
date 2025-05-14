@@ -294,6 +294,15 @@ pub trait QuantizeOp<Q: QuantizationStrategy> {
     ) -> anyhow::Result<QuantizeOutput<Self::QuantizedOp>>;
 }
 
+pub fn quantize_op<Q: QuantizationStrategy, O: QuantizeOp<Q>>(
+    op: O,
+    data: &Q::AuxData,
+    node_id: NodeId,
+    input_scaling: &[ScalingFactor],
+) -> anyhow::Result<QuantizeOutput<O::QuantizedOp>> {
+    op.quantize_op(data, node_id, input_scaling)
+}
+
 pub trait PadOp {
     fn pad_node(self, _si: &mut ShapeInfo) -> Result<Self, ProvableOpError>
     where

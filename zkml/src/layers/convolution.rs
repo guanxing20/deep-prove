@@ -1,9 +1,5 @@
 use crate::{
-    VectorTranscript,
-    iop::context::ShapeStep,
-    layers::{hadamard, requant::Requant},
-    padding::{PaddingMode, ShapeInfo, pad_conv},
-    quantization::{BIT_LEN, InferenceObserver, InferenceTracker, TensorFielder},
+    iop::context::ShapeStep, layers::{hadamard, requant::Requant}, padding::{pad_conv, PaddingMode, ShapeInfo}, quantization::{AbsoluteMax, InferenceObserver, InferenceTracker, TensorFielder, BIT_LEN}, VectorTranscript
 };
 use core::f32;
 
@@ -35,11 +31,9 @@ use tracing::{debug, instrument, warn};
 use transcript::Transcript;
 
 use super::{
-    LayerCtx,
     provable::{
-        Evaluate, LayerOut, NodeId, Op, OpInfo, PadOp, ProvableOp, ProvableOpError, ProveInfo,
-        QuantizeOp, QuantizeOutput, VerifiableCtx,
-    },
+        Evaluate, LayerOut, NodeId, Op, OpInfo, PadOp, ProvableOp, ProvableOpError, ProveInfo, QuantizationStrategy, QuantizeOp, QuantizeOutput, VerifiableCtx
+    }, LayerCtx
 };
 
 pub(crate) const BIAS_POLY_ID: PolyID = 200_000;
@@ -539,15 +533,12 @@ where
     }
 }
 
-impl QuantizeOp<InferenceObserver> for Convolution<f32> {
-    type QuantizedOp = Convolution<Element>;
-
-    fn quantize_op(
+impl Convolution<f32> {
+    fn quantize_from_scalings(
         self,
-        tracker: &InferenceTracker,
-        node_id: NodeId,
         input_scaling: &[ScalingFactor],
-    ) -> anyhow::Result<QuantizeOutput<Self::QuantizedOp>> {
+        output_scaling: ScalingFactor,
+    ) -> anyhow::Result<QuantizeOutput<Convolution<Element>>> {
         let model_scaling = ScalingFactor::from_absolute_max(self.max_abs_weight(), None);
         let num_inputs = input_scaling.len();
         ensure!(
@@ -555,8 +546,6 @@ impl QuantizeOp<InferenceObserver> for Convolution<f32> {
             "Number of input scaling factor for convolution layer different from 1"
         );
         let input_scaling = &input_scaling[0];
-        let (min, max) = tracker.distribution_info(node_id, 0);
-        let output_scaling = ScalingFactor::from_absolute_max(min.abs().max(max.abs()), None);
         let bias_scaling = {
             // bias has to be quantized over integers with double bit length
             let min_quantized = -(1 << (2 * (*BIT_LEN) - 1)) + 1;
@@ -576,6 +565,36 @@ impl QuantizeOp<InferenceObserver> for Convolution<f32> {
             output_scalings: vec![output_scaling],
             requant_layer: Some(requant),
         })
+    }
+}
+
+impl QuantizeOp<InferenceObserver> for Convolution<f32> {
+    type QuantizedOp = Convolution<Element>;
+
+    fn quantize_op(
+        self,
+        tracker: &InferenceTracker,
+        node_id: NodeId,
+        input_scaling: &[ScalingFactor],
+    ) -> anyhow::Result<QuantizeOutput<Self::QuantizedOp>> {
+        let (min, max) = tracker.distribution_info(node_id, 0);
+        let output_scaling = ScalingFactor::from_absolute_max(min.abs().max(max.abs()), None);
+        self.quantize_from_scalings(input_scaling, output_scaling)
+    }
+}
+
+impl QuantizeOp<AbsoluteMax> for Convolution<f32> {
+    type QuantizedOp = Convolution<Element>;
+
+    fn quantize_op(
+        self,
+        _: &<AbsoluteMax as super::provable::QuantizationStrategy>::AuxData,
+        _node_id: NodeId,
+        input_scaling: &[ScalingFactor],
+    ) -> anyhow::Result<QuantizeOutput<Self::QuantizedOp>> {
+        //TODO: remove this is broken
+        let output_scaling = ScalingFactor::default();
+        self.quantize_from_scalings(input_scaling, output_scaling)
     }
 }
 
@@ -1390,6 +1409,33 @@ where
     E: Serialize + DeserializeOwned,
 {
 }
+
+
+impl<Q: QuantizationStrategy> QuantizeOp<Q> for SchoolBookConv<f32> {
+    type QuantizedOp = SchoolBookConv<Element>;
+
+    fn quantize_op(
+        self,
+        _: &<Q as QuantizationStrategy>::AuxData,
+        _node_id: NodeId,
+        input_scaling: &[ScalingFactor],
+    ) -> anyhow::Result<QuantizeOutput<Self::QuantizedOp>> {
+        Ok(
+            QuantizeOutput {
+                quanzited_op: SchoolBookConv(
+                    self.0.quantize(
+                        // we don't care about accurate quantization for schoolbook conv
+                        &input_scaling[0],
+                        &input_scaling[0],
+                    ),
+                ),
+                output_scalings: input_scaling.to_vec(),
+                requant_layer: None,
+            }
+        )
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SchoolBookConvCtx;
 

@@ -240,7 +240,6 @@ mod tests {
 
     // cargo test --release --package zkml -- onnx_parse::tests::test_tract --nocapture
 
-    /* Uncomment the following tests once AbsoluteMax strategy for quantization is implemented
     #[test]
     fn test_load_mlp() {
         let filepath = "assets/scripts/MLP/mlp-iris-01.onnx";
@@ -265,7 +264,6 @@ mod tests {
         let trace = model.run::<F>(&input).unwrap();
         println!("Result: {:?}", trace.outputs());
     }
-    */
 
     #[test]
     fn test_quantize() {

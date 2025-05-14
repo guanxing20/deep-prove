@@ -5,9 +5,7 @@ use std::collections::{BTreeMap, HashMap};
 use anyhow::{Result, anyhow, ensure};
 
 use crate::{
-    Element,
-    layers::provable::{NodeId, ProvableModel, ProvableNode},
-    model::Model,
+    layers::provable::{Edge, NodeId, ProvableModel, ProvableNode}, model::Model, Element
 };
 
 use super::ScalingFactor;
@@ -63,6 +61,29 @@ impl MetadataBuilder {
     ) {
         self.output_layers_scaling.insert(node_id, output_scaling);
         self.input_layers_scaling.insert(node_id, input_scaling);
+    }
+
+    pub(crate) fn compute_input_scaling(&self, node_inputs: &[Edge]) -> Result<Vec<ScalingFactor>> {
+        node_inputs.into_iter().map(|edge| {
+                if let Some(n) = &edge.node {
+                    let scalings = self.get_output_layer_scaling(n).ok_or(
+                        anyhow!("Scaling factors for node {n} not found")
+                    )?;
+                    ensure!(edge.index < scalings.len(),
+                        "Getting scaling factor {} for node {n}, but there are only {} scaling factors",
+                        edge.index,
+                        scalings.len(),
+                    );
+                    Ok(scalings[edge.index].clone())
+                } else {
+                    ensure!(edge.index < self.input_scaling.len(),
+                        "Getting scaling factor {} for model inputs, but there are only {} scaling factors",
+                        edge.index,
+                        self.input_scaling.len(),
+                    );
+                    Ok(self.input_scaling[edge.index].clone())
+                }
+            }).collect()
     }
 
     pub(crate) fn get_output_layer_scaling(&self, node_id: &NodeId) -> Option<&[ScalingFactor]> {

@@ -1,11 +1,10 @@
 use crate::{
-    layers::provable::{
-        Edge, NodeId, ProvableModel, ProvableNode, QuantizationStrategy, QuantizeOp, ToIterator,
-    },
+    layers::{convolution::Convolution, dense::Dense, provable::{
+        quantize_op, Edge, NodeId, ProvableModel, ProvableNode, QuantizationStrategy, QuantizeOp, ToIterator
+    }},
     padding::PaddingMode,
     quantization::{
-        BIT_LEN,
-        metadata::{MetadataBuilder, ModelMetadata},
+        metadata::{MetadataBuilder, ModelMetadata}, BIT_LEN
     },
     tensor::Number,
 };
@@ -132,67 +131,7 @@ impl ScalingStrategy for InferenceObserver {
                 ScalingFactor::from_absolute_max(input_min.abs().max(input_max.abs()), None)
             })
             .collect_vec();
-        let mut md = MetadataBuilder::new(input_scaling);
-        // 2. Create the requant layers from the infered data
-        let mut requant_layers = vec![];
-        let mut catch_err: Result<()> = Ok(());
-        let nodes = model.into_forward_iterator().map(|(node_id, node)| {
-            println!("Quantizing node {node_id}");
-            let input_scaling = node.inputs.iter().map(|edge| {
-                if let Some(n) = &edge.node {
-                    let scalings = md.get_output_layer_scaling(n).ok_or(
-                        anyhow!("Scaling factors for node {n} not found")
-                    )?;
-                    ensure!(edge.index < scalings.len(),
-                        "Getting scaling factor {} for node {n}, but there are only {} scaling factors",
-                        edge.index,
-                        scalings.len(),
-                    );
-                    Ok(scalings[edge.index].clone())
-                } else {
-                    ensure!(edge.index < md.input_scaling.len(),
-                        "Getting scaling factor {} for model inputs, but there are only {} scaling factors",
-                        edge.index,
-                        md.input_scaling.len(),
-                    );
-                    Ok(md.input_scaling[edge.index].clone())
-                }
-            }).collect::<Result<Vec<_>>>()?;
-            let quantized_out = node.operation.quantize_op(&tracker, node_id, &input_scaling)?;
-            md.set_layers_scaling(node_id, quantized_out.output_scalings, input_scaling);
-            if let Some(requant) = quantized_out.requant_layer {
-                requant_layers.push((node_id, requant));
-            }
-            let quantized_node = ProvableNode::new_with_outputs(
-                node.inputs,
-                quantized_out.quanzited_op,
-                node.outputs,
-            );
-            Ok((node_id, quantized_node))
-        }).map_while(|n|
-            if n.is_err() {
-                catch_err = Err(n.unwrap_err());
-                None
-            } else {
-                Some(n.unwrap())
-            }
-        );
-        let mut model =
-            ProvableModel::new_from_shapes(input_not_padded_shapes, input_shapes, nodes);
-        catch_err?;
-        for (input_node_id, requant) in requant_layers {
-            let node_id = model.add_requant_node(requant, input_node_id)?;
-            // add scaling factor to `md` for requant layers: the scaling factors of the inputs correspond to
-            // the scaling factors of the outputs of the previous node
-            let input_scaling = md.get_output_layer_scaling(&input_node_id).ok_or(anyhow!(
-                "Scaling factors not found for node {input_node_id}"
-            ))?;
-            let output_scaling = input_scaling.to_vec(); // output scaling factors are the same as input ones for requant
-            md.set_layers_scaling(node_id, output_scaling, input_scaling.to_vec());
-        }
-        let out_nodes = model.output_nodes();
-        let md = md.build(out_nodes)?;
-        Ok((model, md))
+        quantize_model::<InferenceObserver>(model, tracker, input_scaling)
     }
 }
 
@@ -238,16 +177,21 @@ impl InferenceTracker {
 }
 
 #[derive(Debug)]
-pub struct AbsoluteMax(Option<Vec<f32>>);
+pub struct AbsoluteMax(Option<Vec<Vec<f32>>>);
 
 impl AbsoluteMax {
-    pub fn new_with_representative_input(input: Vec<f32>) -> Self {
+    pub fn new_with_representative_input(input: Vec<Vec<f32>>) -> Self {
         Self(Some(input))
     }
     pub fn new() -> Self {
         Self(None)
     }
 }
+
+impl QuantizationStrategy for AbsoluteMax {
+    type AuxData = ();
+}
+
 impl ScalingStrategy for AbsoluteMax {
     fn name(&self) -> String {
         "absolute_max".to_string()
@@ -257,94 +201,79 @@ impl ScalingStrategy for AbsoluteMax {
         &self,
         model: ProvableModel<f32>,
     ) -> Result<(ProvableModel<Element>, ModelMetadata)> {
-        todo!()
-    }
+        let input_scaling_factor = if let Some(ref input) = self.0 {
+            let input_tensor = model.load_input_flat(input.clone())?;
+            model.input_shapes().into_iter().zip(&input_tensor).try_for_each(|(shape, input)| {
+                ensure!(
+                shape == input.get_shape(),
+                "input shape mismatch: expected {:?}, got {:?}",
+                shape,
+                input.get_shape()
+                );
+                Ok(())
+            })?;
+            input_tensor.into_iter().map(|input| 
+                ScalingFactor::from_absolute_max(input.max_abs_output(), None)
+            ).collect_vec()
+        } else {
+            (0..model.num_inputs()).map(|_| 
+                ScalingFactor::default()
+            ).collect_vec()
+        };
+        quantize_model::<AbsoluteMax>(model, (), input_scaling_factor)
+     }
+}
 
-    // fn quantize(&self, model: Model<f32>) -> Result<(Model<Element>, ModelMetadata)> {
-    // let mut last_input_scaling_factor = if let Some(ref input) = self.0 {
-    // let input_tensor = model.load_input_flat(input.clone());
-    // ensure!(
-    // model.input_shape() == input_tensor.get_shape(),
-    // "input shape mismatch: expected {:?}, got {:?}",
-    // model.input_shape(),
-    // input_tensor.get_shape()
-    // );
-    // ScalingFactor::from_absolute_max(input_tensor.max_abs_output(), None)
-    // } else {
-    // ScalingFactor::default()
-    // };
-    // let mut md = MetadataBuilder::new(last_input_scaling_factor.clone());
-    // let input_shape = model.input_shape();
-    // let input_not_padded_shape = model.unpadded_input_shape();
-    // let quantized_layers = model
-    // .layers
-    // .into_iter()
-    // .enumerate()
-    // .flat_map(|(id, l)| {
-    // If a layer requires a requantization step the current layer, this method returns the
-    // next layer, e.g. requantization layer, as well as the scaling factor of the output. This is
-    // given to the next layer as input scaling factor.
-    // match l {
-    // Layer::Dense(d) => {
-    // let max_weight = d.max_abs_weight();
-    // let model_scaling = ScalingFactor::from_absolute_max(max_weight, None);
-    // let bias_scaling = {
-    // bias has to be quantized over integers with double bit length
-    // let min_quantized = -(1 << (2 * (*BIT_LEN) - 1)) + 1;
-    // let max_quantized = (1 << (2 * (*BIT_LEN) - 1)) - 1;
-    // ScalingFactor::from_scale(
-    // last_input_scaling_factor.scale() * model_scaling.scale(),
-    // Some((min_quantized, max_quantized)),
-    // )
-    // };
-    // let quantized_dense = d.quantize(&model_scaling, &bias_scaling);
-    // let (quant_min_output, _quant_max_output) =
-    // quantized_dense.output_range(*quantization::MIN, *quantization::MAX);
-    // TODO: remove this is broken
-    // let output_scaling = ScalingFactor::default();
-    // last_input_scaling_factor = output_scaling;
-    // md.set_layers_scaling(id, output_scaling);
-    // let shift =
-    // last_input_scaling_factor.shift(&model_scaling, &output_scaling);
-    // let requant = Requant::new(quant_min_output.abs() as usize, shift);
-    // vec![Layer::Dense(quantized_dense), Layer::Requant(requant)]
-    // }
-    // Layer::Convolution(d) => {
-    // let max_weight = d.max_abs_weight();
-    // let model_scaling = ScalingFactor::from_absolute_max(max_weight, None);
-    // let bias_scaling = {
-    // bias has to be quantized over integers with double bit length
-    // let min_quantized = -(1 << (2 * (*BIT_LEN) - 1)) + 1;
-    // let max_quantized = (1 << (2 * (*BIT_LEN) - 1)) - 1;
-    // ScalingFactor::from_scale(
-    // last_input_scaling_factor.scale() * model_scaling.scale(),
-    // Some((min_quantized, max_quantized)),
-    // )
-    // };
-    // let quantized_conv = d.quantize(&model_scaling, &bias_scaling);
-    // let (quant_min_output, _quant_max_output) =
-    // quantized_conv.output_range(*quantization::MIN, *quantization::MAX);
-    // TODO: remove this is broken
-    // let output_scaling = ScalingFactor::default();
-    // md.set_layers_scaling(id, output_scaling);
-    // let shift =
-    // last_input_scaling_factor.shift(&model_scaling, &output_scaling);
-    // last_input_scaling_factor = output_scaling;
-    // let requant = Requant::new(quant_min_output.abs() as usize, shift);
-    // vec![Layer::Convolution(quantized_conv), Layer::Requant(requant)]
-    // }
-    // a => {
-    // return vec![a.quantize(
-    // &last_input_scaling_factor,
-    // None, // no scaling factor for bias needed for this layer
-    // )];
-    // }
-    // }
-    // })
-    // .collect::<Vec<Layer<Element>>>();
-    // Ok((
-    // Model::<Element>::new_from(quantized_layers, input_not_padded_shape, input_shape),
-    // md.build(),
-    // ))
-    // }
+fn quantize_model<Q: QuantizationStrategy>(
+    model: ProvableModel<f32>,
+    data: Q::AuxData,
+    input_scaling: Vec<ScalingFactor>,
+) -> anyhow::Result<(ProvableModel<Element>, ModelMetadata)> 
+where 
+    Dense<f32>: QuantizeOp<Q, QuantizedOp = Dense<Element>>,
+    Convolution<f32>: QuantizeOp<Q, QuantizedOp = Convolution<Element>>,
+{
+    let input_shapes = model.input_shapes();
+    let input_not_padded_shapes = model.unpadded_input_shapes();
+    let mut md = MetadataBuilder::new(input_scaling);
+    // 2. Create the requant layers from the infered data
+    let mut requant_layers = vec![];
+    let mut catch_err: Result<()> = Ok(());
+    let nodes = model.into_forward_iterator().map(|(node_id, node)| {
+        let input_scaling = md.compute_input_scaling(&node.inputs)?;
+        let quantized_out = quantize_op::<Q, _>(node.operation, &data, node_id, &input_scaling)?;
+        md.set_layers_scaling(node_id, quantized_out.output_scalings, input_scaling);
+        if let Some(requant) = quantized_out.requant_layer {
+            requant_layers.push((node_id, requant));
+        }
+        let quantized_node = ProvableNode::new_with_outputs(
+            node.inputs,
+            quantized_out.quanzited_op,
+            node.outputs,
+        );
+        Ok((node_id, quantized_node))
+    }).map_while(|n|
+        if n.is_err() {
+            catch_err = Err(n.unwrap_err());
+            None
+        } else {
+            Some(n.unwrap())
+        }
+    );
+    let mut model =
+        ProvableModel::new_from_shapes(input_not_padded_shapes, input_shapes, nodes);
+    catch_err?;
+    for (input_node_id, requant) in requant_layers {
+        let node_id = model.add_requant_node(requant, input_node_id)?;
+        // add scaling factor to `md` for requant layers: the scaling factors of the inputs correspond to
+        // the scaling factors of the outputs of the previous node
+        let input_scaling = md.get_output_layer_scaling(&input_node_id).ok_or(anyhow!(
+            "Scaling factors not found for node {input_node_id}"
+        ))?;
+        let output_scaling = input_scaling.to_vec(); // output scaling factors are the same as input ones for requant
+        md.set_layers_scaling(node_id, output_scaling, input_scaling.to_vec());
+    }
+    let out_nodes = model.output_nodes();
+    let md = md.build(out_nodes)?;
+    Ok((model, md))
 }

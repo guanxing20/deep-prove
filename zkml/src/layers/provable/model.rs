@@ -108,6 +108,10 @@ where
         self.input_shapes.clone()
     }
 
+    pub fn num_inputs(&self) -> usize {
+        self.input_shapes.len()
+    }
+
     pub fn prepare_inputs(&self, inputs: Vec<Tensor<N>>) -> Result<Vec<Tensor<N>>> {
         let input_shapes = self.input_shapes.clone();
         ensure!(
