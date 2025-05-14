@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use anyhow::{Result, anyhow, ensure};
 use ff_ext::ExtensionField;
+use goldilocks::GoldilocksExt2;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tracing::info;
 use transcript::Transcript;
@@ -219,7 +220,7 @@ where
     /// Corner-case method to add a node whose inputs correspond to the outputs of a node already inserted in the model
     /// The `NodeId` of the already inserted node is the `previous_node_id` input; if no id is provided, it is assumed
     /// that the inputs of the node correspond to the inputs of the model
-    pub(crate) fn add_consecutive_layer(
+    pub fn add_consecutive_layer(
         &mut self,
         layer: Layer<N>,
         previous_node_id: Option<NodeId>,
@@ -552,7 +553,7 @@ impl<'a, E: ExtensionField, N, D> Trace<'a, E, N, D> {
         self.steps.iter()
     }
 
-    pub(crate) fn to_verifier_io(&self) -> IO<E>
+    pub fn to_verifier_io(&self) -> IO<E>
     where
         D: Fieldizer<E>,
     {
@@ -602,7 +603,7 @@ impl<'a, E: ExtensionField, N, D> Trace<'a, E, N, D> {
         }
     }
 
-    pub(crate) fn outputs(&self) -> Result<Vec<&Tensor<D>>> {
+    pub fn outputs(&self) -> Result<Vec<&Tensor<D>>> {
         Ok(self.output.iter().collect())
     }
 }
@@ -660,6 +661,17 @@ impl<'a, E: ExtensionField> InferenceTrace<'a, E, Element> {
             input: inputs,
             output: outputs,
         }
+    }
+}
+
+impl ProvableModel<f32> {
+    pub fn run_float(
+        &self,
+        input: &[Tensor<f32>],
+    ) -> anyhow::Result<Vec<Tensor<f32>>> {
+        Ok(self.run::<GoldilocksExt2>(input)?.outputs()?.into_iter().map(|out| 
+            out.clone()
+        ).collect())
     }
 }
 
@@ -765,7 +777,7 @@ impl<N: Number> ProvableModel<N> {
         Ok(trace)
     }
 
-    pub(crate) fn run<E: ExtensionField>(
+    pub fn run<E: ExtensionField>(
         &self,
         input: &[Tensor<N>],
     ) -> anyhow::Result<InferenceTrace<'_, E, N>>

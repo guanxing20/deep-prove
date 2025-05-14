@@ -229,8 +229,8 @@ mod tests {
     use super::*;
 
     use crate::{
-        Context, IO, Prover, ScalingFactor, init_test_logging,
-        quantization::{InferenceObserver, TensorFielder},
+        Context, Prover, ScalingFactor, init_test_logging,
+        quantization::InferenceObserver,
         verify,
     };
     use goldilocks::GoldilocksExt2;

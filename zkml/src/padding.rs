@@ -133,7 +133,7 @@ pub(crate) fn pooling(p: Pooling, si: &mut ShapeInfo) -> Result<Pooling> {
 }
 
 pub(crate) fn pad_conv(
-    mut c: Convolution<Element>,
+    c: Convolution<Element>,
     si: &mut ShapeInfo,
 ) -> Result<Convolution<Element>> {
     // convolution layer currently expects 1 input, so we check there is only 1 input shape

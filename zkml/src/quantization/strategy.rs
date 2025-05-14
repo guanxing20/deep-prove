@@ -1,10 +1,9 @@
 use crate::{
     layers::{convolution::Convolution, dense::Dense, provable::{
-        quantize_op, Edge, NodeId, ProvableModel, ProvableNode, QuantizationStrategy, QuantizeOp, ToIterator
+        quantize_op, NodeId, ProvableModel, ProvableNode, QuantizationStrategy, QuantizeOp, ToIterator
     }},
-    padding::PaddingMode,
     quantization::{
-        metadata::{MetadataBuilder, ModelMetadata}, BIT_LEN
+        metadata::{MetadataBuilder, ModelMetadata},
     },
     tensor::Number,
 };
@@ -12,8 +11,6 @@ use std::collections::HashMap;
 
 use crate::{
     Element, Tensor,
-    layers::{Layer, requant::Requant},
-    model::Model,
     quantization,
 };
 use anyhow::{Result, anyhow, ensure};
@@ -21,7 +18,7 @@ use ark_std::rand;
 use goldilocks::GoldilocksExt2;
 use itertools::Itertools;
 use statrs::statistics::{Data, Max, Min, OrderStatistics};
-use tracing::{debug, info};
+use tracing::info;
 
 use super::ScalingFactor;
 
@@ -70,14 +67,6 @@ impl ScalingStrategy for InferenceObserver {
     fn name(&self) -> String {
         format!("inference [{},{}]", *quantization::MIN, *quantization::MAX)
     }
-
-    // x^2 + y^2 = AC^2
-    // y^2 - b^2 = x^2 - a^2 = BM^2
-    // a+b = AC -> a = AC -b
-    // y^2 - b^2 = x^2 - (AC - b)^2 = x^2 - AC^2 - b^2 +2b*AC -> y^2 - x^2 = 2b*AC - AC^2 = 2b*AC - x^2 - y^2 -> 2*y^2 = 2b*AC
-    // -> BM^2 + b^2 - b*AC = 0
-
-    // b = (AC +- sqrt(AC^2 - 4BM^2))/2
 
     fn quantize(
         &self,

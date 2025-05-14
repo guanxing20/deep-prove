@@ -83,8 +83,8 @@ parser.add_argument("--num-params", type=int, default=None,
                     help="Target number of parameters for the model (default: None, uses default model)")
 parser.add_argument("--distribution", action="store_true",
                     help="Show distribution of model weights")
-parser.add_argument("--with-bias", type=bool, default=True,
-                    help="Use bias in the model (default: False)")
+parser.add_argument("--without-bias", action="store_true",
+                    help="Don't use bias in the layers of the model (optional)")
 
 args = parser.parse_args()
 
@@ -246,7 +246,7 @@ class Net(nn.Module):
 #         x = self.dequant(x)
 #         return x
 
-with_bias = args.with_bias
+with_bias = not args.without_bias
 if args.num_params:
     print(
         f"🏗️ Initializing neural network with target parameter count: {args.num_params:,}...")
@@ -261,14 +261,14 @@ if args.num_params:
         print(f"   Using bias: {args.with_bias}")
     except AssertionError as e:
         print(f"❌ Error: {e}")
-        print(f"Using default model instead.")
+        print(f"Using default model instead with bias: {with_bias}.")
         net = Net(use_bias=with_bias)  # Use default parameters
 else:
     print("🏗️ Initializing default neural network...")
     net = Net(use_bias=with_bias)  # Use the default parameters
     total_params = sum(p.numel() for p in net.parameters())
     print(f"✅ Default model created with {total_params:,} parameters")
-    print(f"   Using bias: {args.with_bias}")
+    print(f"   Using bias: {with_bias}")
 
 # Add after class definition
 print("🏗️ Initializing neural network...")

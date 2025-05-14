@@ -6,11 +6,11 @@ use std::{
     time,
 };
 use zkml::{
-    model::Model,
     quantization::{AbsoluteMax, InferenceObserver, ModelMetadata, ScalingStrategy},
+    layers::provable::ProvableModel,
 };
 
-use anyhow::{Context as CC, ensure};
+use anyhow::{Context as CC, ensure, Result};
 use clap::Parser;
 use csv::WriterBuilder;
 use goldilocks::GoldilocksExt2;
@@ -20,7 +20,7 @@ use zkml::FloatOnnxLoader;
 
 use serde::{Deserialize, Serialize};
 use zkml::{
-    Context, Element, IO, Prover, argmax, default_transcript, quantization::TensorFielder, verify,
+    Context, Element, Prover, argmax, default_transcript, verify,
 };
 
 use rmp_serde::encode::to_vec_named;
@@ -72,7 +72,7 @@ pub fn main() -> anyhow::Result<()> {
 
     tracing::subscriber::set_global_default(subscriber).expect("Failed to set global subscriber");
     let args = Args::parse();
-    // run(args).context("error running bench:")?;
+    run(args).context("error running bench:")?;
 
     Ok(())
 }
@@ -197,7 +197,7 @@ const CSV_ACCURACY: &str = "accuracy (bool)";
 const CSV_PROOF_SIZE: &str = "proof size (KB)";
 
 /// Runs the model in float format and returns the average accuracy
-fn run_float_model(raw_inputs: &InputJSON, model: &Model<f32>) -> f32 {
+fn run_float_model(raw_inputs: &InputJSON, model: &ProvableModel<f32>) -> Result<f32> {
     let mut accuracies = Vec::new();
     info!("[+] Running model in float format");
 
@@ -208,7 +208,8 @@ fn run_float_model(raw_inputs: &InputJSON, model: &Model<f32>) -> f32 {
         .enumerate()
     {
         // Run the model in float mode
-        let output = model.run_float(input.clone());
+        let input = model.load_input_flat(vec![input.clone()])?;
+        let output = &model.run_float(&input)?[0];
         let accuracy = argmax_compare(expected, &output.get_data());
         accuracies.push(accuracy);
         debug!(
@@ -219,9 +220,9 @@ fn run_float_model(raw_inputs: &InputJSON, model: &Model<f32>) -> f32 {
         );
     }
 
-    calculate_average_accuracy(&accuracies)
+    Ok(calculate_average_accuracy(&accuracies))
 }
-#[cfg(feature = "bench")]
+
 fn run(args: Args) -> anyhow::Result<()> {
     info!("[+] Reading raw input/output from {}", args.io);
     let run_inputs = InputJSON::from(&args.io, args.num_samples).context("loading input:")?;
@@ -240,7 +241,7 @@ fn run(args: Args) -> anyhow::Result<()> {
     // Get float accuracy if float model is available
     let float_accuracy = if let Some(ref float_model) = md.float_model {
         info!("[+] Running float model");
-        run_float_model(&run_inputs, float_model)
+        run_float_model(&run_inputs, float_model)?
     } else {
         info!("[!] No float model available");
         0.0
@@ -286,12 +287,12 @@ fn run(args: Args) -> anyhow::Result<()> {
         // Store the setup time in the bencher (without re-running setup)
         bencher.set(CSV_SETUP, setup_time);
 
-        let input_tensor = model.load_input_flat(input);
+        let input_tensor = model.load_input_flat(vec![input])?;
         // let input_tensor : Tensor<Element> = Tensor::new(model.input_not_padded.clone(), input);
 
         info!("[+] Running inference");
         // Handle model.run failures gracefully
-        let trace_result = bencher.r(CSV_INFERENCE, || model.run(input_tensor.clone()));
+        let trace_result = bencher.r(CSV_INFERENCE, || model.run(&input_tensor));
 
         // If model.run fails, print the error and continue to the next input
         let trace = match trace_result {
@@ -321,7 +322,7 @@ fn run(args: Args) -> anyhow::Result<()> {
         //        );
         //    }
         //}
-        let output = trace.final_output().clone();
+        let output = trace.outputs()?[0];
         let accuracy = argmax_compare(&given_output, &output.get_data().to_vec());
         accuracies.push(accuracy);
         bencher.set(CSV_ACCURACY, accuracy);
@@ -337,6 +338,7 @@ fn run(args: Args) -> anyhow::Result<()> {
             continue;
         }
         info!("[+] Running prover");
+        let io = trace.to_verifier_io();
         let mut prover_transcript = default_transcript();
         let prover = Prover::<_, _>::new(ctx.as_ref().unwrap(), &mut prover_transcript);
         let proof = bencher.r(CSV_PROVING, move || {
@@ -350,7 +352,6 @@ fn run(args: Args) -> anyhow::Result<()> {
 
         info!("[+] Running verifier");
         let mut verifier_transcript = default_transcript();
-        let io = IO::new(input_tensor.to_fields(), output.to_fields());
         bencher.r(CSV_VERIFYING, || {
             verify::<_, _>(
                 ctx.as_ref().unwrap().clone(),

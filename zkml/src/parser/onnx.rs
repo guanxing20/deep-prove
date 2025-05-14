@@ -1,19 +1,15 @@
 use crate::{
     layers::{
         activation::Activation, convolution::Convolution, pooling::{Maxpool2D, Pooling, MAXPOOL2D_KERNEL_SIZE}, provable::{
-            Edge, NodeId, Op as DOP, OpInfo, ProvableModel, ProvableNode, ProvableOp,
+            Edge, NodeId, OpInfo, ProvableModel, ProvableNode,
             ProvableOpError,
         }, Layer
     },
-    model::Model,
     padding::PaddingMode,
-    quantization::Fieldizer, ModelType,
+    ModelType,
 };
-use anyhow::{Context, bail, ensure};
-use ff_ext::ExtensionField;
-use goldilocks::GoldilocksExt2;
-use once_cell::sync::Lazy;
-use std::{collections::HashMap, sync::Mutex};
+use anyhow::Context;
+use std::{collections::HashMap, iter::Peekable};
 use tracing::debug;
 use tract_onnx::{
     prelude::*,
@@ -27,11 +23,9 @@ use tract_onnx::{
         },
     },
     tract_hir::{
-        internal::Expansion,
-        ops::{cnn::PaddingSpec, konst::Const, math::Add},
+        ops::{cnn::PaddingSpec, konst::Const},
     },
 };
-use transcript::Transcript;
 
 type OnnxModel = Graph<TypedFact, Box<dyn TypedOp + 'static>>;
 type OnnxNode = Node<TypedFact, Box<dyn TypedOp + 'static>>;
@@ -98,11 +92,12 @@ pub fn from_path(path: &str) -> Result<ProvableModel<f32>, ProvableOpError> {
     
     let mut pmodel =
         ProvableModel::new_from_input_shapes(vec![input_shape.to_vec()], PaddingMode::NoPadding);
-    let mut it = inference_order[1..].iter();
+    let mut it = inference_order[1..].iter().peekable();
     let mut first_node = true;
     let mut last_node_id = 0;
+    let parser = ParserFactory::init();
     while !it.is_empty() {
-        let (id, zkml_node) = parse_node(onnx_model, &mut it, first_node).map_err(|e| {
+        let (id, zkml_node) = parser.parse_node(onnx_model, &mut it, first_node).map_err(|e| {
             ProvableOpError::OnnxParsingError(format!("Error parsing node: {:?}", e.to_string()))
         })?;
         // let (id, zkml_node) = parse_node(onnx_model, &mut it, first_node)?;
@@ -129,67 +124,85 @@ pub fn from_path(path: &str) -> Result<ProvableModel<f32>, ProvableOpError> {
     Ok(pmodel)
 }
 
-type LoadFn = fn(
+type LoadFn<'a, I> = fn(
     model: &OnnxModel,
     node_id: NodeId,
     node: &OnnxNode,
-    iter: &mut dyn Iterator<Item = &usize>,
+    iter: &mut Peekable<I>,
 ) -> Result<(NodeId, CustomNode), ProvableOpError>;
 
-static PARSER_FACTORY: Lazy<HashMap<&'static str, LoadFn>> = Lazy::new(|| {
+/*static PARSER_FACTORY: Lazy<HashMap<&'static str, LoadFn>> = Lazy::new(|| {
     let mut m = HashMap::new();
     m.insert("Conv", load_conv as LoadFn);
     m.insert("Gemm.ab", load_gemm as LoadFn);
+    m.insert("MatMul", load_gemm as LoadFn);
     m.insert("Relu", load_relu as LoadFn);
     m.insert("Flatten", load_flatten as LoadFn);
     m.insert("Pool", load_maxpool as LoadFn);
     m
-});
+});*/
 
-fn parse_node(
-    model: &OnnxModel,
-    iter: &mut dyn Iterator<Item = &usize>,
-    first_node: bool,
-) -> Result<(NodeId, CustomNode), ProvableOpError> {
-    let curr_node_id = iter.next().ok_or(anyhow::anyhow!("No nodes left"))?;
-    let curr_node = model.node(*curr_node_id);
-    debug!(
-        "curr_node id {}: {:?} : {:?} <- inputs: {:?}",
-        curr_node_id, curr_node.name, curr_node.name, curr_node.inputs
-    );
-    #[allow(unused_variables)]
-    let op_name = &curr_node.name;
-    if let Some(layer_name) = PARSER_FACTORY
-        .keys()
-        .find(|&&layer_name| op_name.contains(layer_name))
-    {
-        let parser = PARSER_FACTORY.get(layer_name).unwrap();
-        let (node_id, mut node) = parser(model, *curr_node_id, curr_node, iter)?;
-        if first_node {
-            // if the node is the first one, we need to add the input edge as an input to the node
-            node.inputs = node
-                .inputs
-                .into_iter()
-                .map(|x| Edge::new_at_edge(x.index))
-                .collect();
-        }
+struct ParserFactory<'a, I: Iterator<Item = &'a usize> + Sized>(HashMap<&'static str, LoadFn<'a, I>>);
+
+impl<'a, I: Iterator<Item = &'a usize> + Sized> ParserFactory<'a, I> {
+    fn init() -> Self {
+        let mut m = HashMap::new();
+        m.insert("Conv", load_conv as LoadFn<'a, I>);
+        m.insert("Gemm.ab", load_gemm as LoadFn<'a, I>);
+        m.insert("MatMul", load_gemm as LoadFn<'a, I>); //ToDo: currently MatMul is only used for dense layers without bias; 
+            // we would probably need an ad-hoc method when introducing general purpose matrix multiplication layer 
+        m.insert("Relu", load_relu as LoadFn<'a, I>);
+        m.insert("Flatten", load_flatten as LoadFn<'a, I>);
+        m.insert("Pool", load_maxpool as LoadFn<'a, I>);
+        ParserFactory(m)
+    }
+
+    fn parse_node(
+        &self,
+        model: &OnnxModel,
+        iter: &mut Peekable<I>,
+        first_node: bool,
+    ) -> Result<(NodeId, CustomNode), ProvableOpError> {
+        let curr_node_id = iter.next().ok_or(anyhow::anyhow!("No nodes left"))?;
+        let curr_node = model.node(*curr_node_id);
         debug!(
-            "parsed node id: {:?} : {:?} <- inputs: {:?}",
-            curr_node_id,
-            node.operation.describe(),
-            node.inputs
+            "curr_node id {}: {:?} : {:?} <- inputs: {:?}",
+            curr_node_id, curr_node.name, curr_node.name, curr_node.inputs
         );
-        Ok((node_id, node))
-    } else {
-        err(format!("Unknown node type: {}", op_name))
+        #[allow(unused_variables)]
+        let op_name = &curr_node.name;
+        if let Some(layer_name) = self.0
+            .keys()
+            .find(|&&layer_name| op_name.contains(layer_name))
+        {
+            let parser = self.0.get(layer_name).unwrap();
+            let (node_id, mut node) = parser(model, *curr_node_id, curr_node, iter)?;
+            if first_node {
+                // if the node is the first one, we need to add the input edge as an input to the node
+                node.inputs = node
+                    .inputs
+                    .into_iter()
+                    .map(|x| Edge::new_at_edge(x.index))
+                    .collect();
+            }
+            debug!(
+                "parsed node id: {:?} : {:?} <- inputs: {:?}",
+                curr_node_id,
+                node.operation.describe(),
+                node.inputs
+            );
+            Ok((node_id, node))
+        } else {
+            err(format!("Unknown node type: {}", op_name))
+        }
     }
 }
 
-fn load_flatten(
+fn load_flatten<'a, I: Iterator<Item = &'a usize> + Sized>(
     _model: &OnnxModel,
     node_id: NodeId,
     node: &OnnxNode,
-    _iter: &mut dyn Iterator<Item = &usize>,
+    _iter: &mut Peekable<I>,
 ) -> Result<(NodeId, CustomNode), ProvableOpError> {
     ensure_onnx!(
         node.inputs.len() == 1,
@@ -203,11 +216,11 @@ fn load_flatten(
     Ok((node_id, node))
 }
 
-fn load_maxpool(
+fn load_maxpool<'a, I: Iterator<Item = &'a usize> + Sized>(
     _model: &OnnxModel,
     node_id: NodeId,
     node: &OnnxNode,
-    _iter: &mut dyn Iterator<Item = &usize>,
+    _iter: &mut Peekable<I>,
 ) -> Result<(NodeId, CustomNode), ProvableOpError> {
     ensure_onnx!(
         node.inputs.len() == 1,
@@ -264,11 +277,11 @@ fn load_maxpool(
     Ok((node_id, node))
 }
 
-fn load_relu(
+fn load_relu<'a, I: Iterator<Item = &'a usize> + Sized>(
     model: &OnnxModel,
     node_id: NodeId,
     node: &OnnxNode,
-    _iter: &mut dyn Iterator<Item = &usize>,
+    _iter: &mut Peekable<I>,
 ) -> Result<(NodeId, CustomNode), ProvableOpError> {
     let relu = crate::layers::activation::Relu::new();
     // find the input node that corresponds to the const input of Relu - since tract_onnx transforms
@@ -297,11 +310,11 @@ fn load_relu(
     Ok((node_id, provable_node))
 }
 
-fn load_gemm(
+fn load_gemm<'a, I: Iterator<Item = &'a usize> + Sized>(
     model: &OnnxModel,
     node_id: NodeId,
     node: &OnnxNode,
-    iter: &mut dyn Iterator<Item = &usize>,
+    iter: &mut Peekable<I>,
 ) -> Result<(NodeId, CustomNode), ProvableOpError> {
     let _matrix = downcast_to::<EinSum>(node)?;
     // TODO: we only support matvec for now for onnx models
@@ -319,17 +332,37 @@ fn load_gemm(
     else {
         return err(format!("Gemm {} has no constant input", node.name));
     };
-    let weight = extract_const_tensor(model.node(weight_link.node))?;
+    let mut weight = extract_const_tensor(model.node(weight_link.node))?;
     // find the input node
     let Some(input_link) = node.inputs.iter().find(|&x| x.node != weight_link.node) else {
         return err(format!("Gemm {} has no input", node.name));
     };
 
+    // check if the weight matrix needs to be transposed
+    let input_node = model.node(input_link.node);
+    let mut input_shape = get_node_output_shape(input_node, input_link.slot)?;
+    assert!(
+        input_shape[0] == 1,
+        "First dimension of Gemm layer input should be 1."
+    );
+    input_shape.remove(0);
+    ensure_onnx!(input_shape.len() == 1, "Input shape for Gemm must be a vector");
+    ensure_onnx!(weight.is_matrix(), "Weight for Gemm must be a matrix");
+    let mut weight_shape = weight.get_shape();
+    if weight_shape[1] != input_shape[0] {
+        weight = weight.transpose();
+        weight_shape = weight.get_shape();
+    }
+    ensure_onnx!(weight_shape[1] == input_shape[0], 
+        "Incompatible shapes found for Gemm node: input shape is {:?}, weight shape is {:?}",
+        input_shape,
+        weight_shape,
+    );
+
     // also extract the bias if any. If there is one, that means the next node is a Add node and we
     // must make sure one of the inputs is the current matrix node. Otherwise that's just a normal add that we don't support.
     // TODO: support general case with Add layer.
-    let mut piter = iter.peekable();
-    let (edge_id, bias_node_id) = match piter.peek() {
+    let (edge_id, bias_node_id) = match iter.peek() {
         // no next node, no bias
         None => (node_id, None),
         Some(&&next_node_id) =>  {
@@ -358,7 +391,7 @@ fn load_gemm(
                             // let bias_node = model.node(bias_input.node);
                             // in that case, we move on the iterator, since we already saw the bias node and the Add is part of the dense layer
                             // unwrap is safe here since we peeked already
-                            piter.next().unwrap();
+                            iter.next().unwrap();
                             (next_node_id,Some(bias_input.node))
                         }
                         None => {
@@ -409,11 +442,11 @@ fn load_gemm(
     Ok((edge_id, provable_node))
 }
 
-fn load_conv(
+fn load_conv<'a, I: Iterator<Item = &'a usize> + Sized>(
     model: &OnnxModel,
     node_id: NodeId,
     node: &OnnxNode,
-    _iter: &mut dyn Iterator<Item = &usize>,
+    _iter: &mut Peekable<I>,
 ) -> Result<(NodeId, CustomNode), ProvableOpError> {
     let conv_node = downcast_to::<Conv>(node)?;
     // TODO: once we support different padding and strides, extract the data in this function
@@ -432,7 +465,12 @@ fn load_conv(
     let bias_node = model.node(bias_link.node);
     let filter_const = extract_const_tensor(filter_node)?;
     let bias_const = extract_const_tensor(bias_node)?;
-    let conv = Convolution::new(filter_const, bias_const);
+    let conv = if bias_const.is_empty() {
+        // it's a convolution layer without bias
+        Convolution::new_without_bias(filter_const)
+    } else {
+        Convolution::new(filter_const, bias_const)
+    };
     let provable_node = crate::layers::provable::ProvableNode::new(
         vec![Edge::new(input_link.node, input_link.slot)],
         Layer::Convolution(conv),
@@ -452,6 +490,19 @@ fn extract_const_tensor(node: &OnnxNode) -> Result<crate::Tensor<f32>, ProvableO
         return err(format!("Filter shape {} is not concrete", node.name));
     };
     Ok(crate::Tensor::new(shape.to_vec(), slice.to_vec()))
+}
+
+fn get_node_output_shape(node: &OnnxNode, output_idx: usize) -> Result<Vec<usize>, ProvableOpError> {
+    ensure_onnx!(output_idx < node.outputs.len(), 
+        "Trying to get output {} of node {}, but there are only {} outputs",
+        output_idx,
+        node.name,
+        node.outputs.len(),
+    );
+    let Some(shape) = node.outputs[output_idx].fact.shape.as_concrete() else {
+        return err(format!("shape of node {} is not concrete", node.name));
+    };
+    Ok(shape.to_vec())
 }
 
 /// Get the conv2d attributes and assert if supported by DeepProve
@@ -531,6 +582,8 @@ fn downcast_to<T: Op>(node: &OnnxNode) -> Result<&T, ProvableOpError> {
 
 #[cfg(test)]
 mod tests {
+
+    use goldilocks::GoldilocksExt2;
 
     use super::*;
 

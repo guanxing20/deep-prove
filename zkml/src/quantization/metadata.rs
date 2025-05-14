@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, HashMap};
 use anyhow::{Result, anyhow, ensure};
 
 use crate::{
-    layers::provable::{Edge, NodeId, ProvableModel, ProvableNode}, model::Model, Element
+    layers::provable::{Edge, NodeId, ProvableModel, ProvableNode}, Element
 };
 
 use super::ScalingFactor;

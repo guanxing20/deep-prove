@@ -151,13 +151,13 @@ where
         &self,
         id: NodeId,
         ctx: &Self::Ctx,
-        last_claims: Vec<Claim<E>>,
+        last_claims: Vec<&Claim<E>>,
         step_data: &super::provable::StepData<E, E>,
         prover: &mut Prover<E, T>,
     ) -> Result<Vec<Claim<E>>, ProvableOpError> {
         Ok(vec![self.prove_step(
             prover,
-            &last_claims[0],
+            last_claims[0],
             step_data.outputs.outputs()[0].get_data(),
             ctx,
             id,
@@ -245,7 +245,7 @@ where
     fn verify<T: Transcript<E>>(
         &self,
         proof: &Self::Proof,
-        last_claims: &[Claim<E>],
+        last_claims: &[&Claim<E>],
         verifier: &mut Verifier<E, T>,
         _shape_step: &ShapeStep,
     ) -> Result<Vec<Claim<E>>, ProvableOpError> {
@@ -260,7 +260,7 @@ where
             ))?;
         Ok(vec![self.verify_activation(
             verifier,
-            last_claims[0].clone(),
+            last_claims[0],
             proof,
             constant_challenge,
             column_separation_challenge,
@@ -325,7 +325,7 @@ impl ActivationCtx {
     pub(crate) fn verify_activation<E: ExtensionField, T: Transcript<E>>(
         &self,
         verifier: &mut Verifier<E, T>,
-        last_claim: Claim<E>,
+        last_claim: &Claim<E>,
         proof: &ActivationProof<E>,
         constant_challenge: E,
         column_separation_challenge: E,
@@ -346,7 +346,7 @@ impl ActivationCtx {
         // 2. Verify the accumulation proof from last_claim + lookup claim into the new claim
         let sp_ctx = same_poly::Context::<E>::new(self.num_vars);
         let mut sp_verifier = same_poly::Verifier::<E>::new(&sp_ctx);
-        sp_verifier.add_claim(last_claim)?;
+        sp_verifier.add_claim(last_claim.clone())?;
         verifier_claims.claims()[1..]
             .iter()
             .try_for_each(|claim| sp_verifier.add_claim(claim.clone()))?;

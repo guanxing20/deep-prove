@@ -85,14 +85,13 @@ mod test {
     use goldilocks::GoldilocksExt2;
 
     use crate::{
-        default_transcript, init_test_logging, layers::provable::ProvableModel, model::Model,
-        quantization::TensorFielder,
+        default_transcript, init_test_logging, layers::provable::ProvableModel,
     };
 
     use super::{
         Context,
         prover::Prover,
-        verifier::{IO, verify},
+        verifier::verify,
     };
 
     type F = GoldilocksExt2;

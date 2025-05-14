@@ -1,8 +1,4 @@
 //! Contains the Error enum for things to do with an implementor of [`super::ProvableOp`].
-use std::{
-    error::Error,
-    fmt::{Display, Formatter, Result as FmtResult},
-};
 
 #[derive(thiserror::Error, Debug)]
 pub enum ProvableOpError {

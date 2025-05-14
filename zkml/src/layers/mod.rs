@@ -1,5 +1,4 @@
 pub mod activation;
-pub mod common;
 pub mod convolution;
 pub mod dense;
 pub mod flatten;
@@ -14,15 +13,11 @@ use std::fmt::Debug;
 use anyhow::Result;
 use ff_ext::ExtensionField;
 use flatten::Flatten;
-use goldilocks::GoldilocksExt2;
-use itertools::Itertools;
 use pooling::{PoolingCtx, PoolingProof};
 use provable::{
-    evaluate_layer, quantize_op, Evaluate, LayerOut, Op, OpInfo, PadOp, ProvableNode, ProvableOp, ProvableOpError, ProveInfo, QuantizationStrategy, QuantizeOp, QuantizeOutput, StepData
+    quantize_op, Evaluate, LayerOut, Op, OpInfo, PadOp, ProvableNode, ProvableOp, ProvableOpError, ProveInfo, QuantizationStrategy, QuantizeOp, QuantizeOutput, StepData
 };
 use requant::RequantCtx;
-use statrs::statistics::{Data, Distribution};
-use tracing::debug;
 use transcript::Transcript;
 
 use crate::{
@@ -38,8 +33,8 @@ use crate::{
     },
     lookup::context::LookupWitnessGen,
     padding::{PaddingMode, ShapeInfo},
-    quantization::{InferenceObserver, InferenceTracker, ScalingFactor},
-    tensor::{ConvData, Number, Tensor},
+    quantization::ScalingFactor,
+    tensor::{Number, Tensor},
 };
 use activation::ActivationCtx;
 use convolution::{ConvCtx, ConvProof, SchoolBookConv, SchoolBookConvCtx};
@@ -96,14 +91,6 @@ where
     Pooling(PoolingProof<E>),
     Dummy, // To be used for non-provable layers
 }
-#[derive(Clone, Debug)]
-pub enum LayerOutput<F>
-where
-    F: ExtensionField,
-{
-    NormalOut(Tensor<Element>),
-    ConvOut((Tensor<Element>, ConvData<F>)),
-}
 
 impl<E> LayerCtx<E>
 where
@@ -120,15 +107,6 @@ where
             Self::Pooling(_) => "Pooling".to_string(),
             Self::Table(..) => "Table".to_string(),
             Self::Flatten => "Reshape".to_string(),
-        }
-    }
-
-    // TODO: is this used and correct ??
-    pub fn requires_lookup(&self) -> bool {
-        match self {
-            Self::Dense(..) => false,
-            Self::Flatten => false,
-            _ => true,
         }
     }
 
@@ -403,7 +381,7 @@ where
         &self,
         node_id: provable::NodeId,
         ctx: &Self::Ctx,
-        last_claims: Vec<crate::Claim<E>>,
+        last_claims: Vec<&crate::Claim<E>>,
         step_data: &provable::StepData<E, E>,
         prover: &mut crate::Prover<E, T>,
     ) -> Result<Vec<crate::Claim<E>>, ProvableOpError> {
@@ -546,152 +524,6 @@ where
                 requant_layer: None,
             },
         })
-    }
-}
-
-impl<T: Number> Layer<T> {
-    pub fn output_shape(&self, input_shape: &[usize], padding_mode: PaddingMode) -> Vec<usize> {
-        match self {
-            Layer::Dense(ref dense) => dense.output_shape(input_shape, padding_mode),
-            Layer::Convolution(ref filter) => filter.output_shape(input_shape, padding_mode),
-            Layer::SchoolBookConvolution(ref filter) => {
-                filter.0.output_shape(input_shape, padding_mode)
-            }
-            Layer::Activation(Activation::Relu(_)) => input_shape.to_vec(),
-            Layer::Requant(_) => input_shape.to_vec(),
-            Layer::Pooling(Pooling::Maxpool2D(info)) => info.output_shape(input_shape),
-            Layer::Flatten(ref r) => {
-                r.output_shapes(&vec![input_shape.to_vec()], padding_mode)[0].clone()
-            }
-        }
-    }
-
-    pub fn needs_requant(&self) -> bool {
-        match self {
-            Layer::Dense(..) | Layer::Convolution(..) => true,
-            _ => false,
-        }
-    }
-}
-
-impl Layer<f32> {
-    /// TODO: limitation of enum is we can't have same names as in Element run
-    pub(crate) fn run(&self, input: &Tensor<f32>) -> Tensor<f32> {
-        match self {
-            Layer::Dense(ref dense) => {
-                evaluate_layer::<GoldilocksExt2, _, _>(dense, &vec![input], None)
-                    .unwrap()
-                    .outputs()[0]
-                    .clone()
-            }
-            Layer::Activation(activation) => {
-                evaluate_layer::<GoldilocksExt2, _, _>(activation, &vec![input], None)
-                    .unwrap()
-                    .outputs()[0]
-                    .clone()
-            }
-            Layer::Convolution(ref conv_pair) => {
-                input.conv2d(&conv_pair.filter, &conv_pair.bias, 1)
-            }
-            Layer::Pooling(info) => info.op(input),
-            // Traditional convolution is used for debug purposes. That is because the actual convolution
-            // we use relies on the FFT algorithm. This convolution does not have a snark implementation.
-            Layer::SchoolBookConvolution(ref conv_pair) => {
-                input.conv2d(&conv_pair.0.filter, &conv_pair.0.bias, 1)
-            }
-            Layer::Flatten(ref reshape) => {
-                evaluate_layer::<GoldilocksExt2, _, _>(reshape, &vec![input], None)
-                    .unwrap()
-                    .outputs()[0]
-                    .clone()
-            }
-            Layer::Requant(_) => {
-                panic!(
-                    "InferenceObserver: requantization layer found while observing inference on float !?"
-                );
-            }
-        }
-    }
-}
-
-impl Layer<Element> {
-    /// Run the operation associated with that layer with the given input
-    // TODO: move to tensor library : right now it works because we assume there is only Dense
-    // layer which is matmul
-    pub fn op<F: ExtensionField>(
-        &self,
-        input: &Tensor<Element>,
-        unpadded_shape: &[usize],
-    ) -> Result<LayerOutput<F>> {
-        let output = match &self {
-            Layer::Dense(ref dense) => Ok(LayerOutput::NormalOut(
-                evaluate_layer::<GoldilocksExt2, _, _>(
-                    dense,
-                    &vec![input],
-                    Some(vec![unpadded_shape.to_vec()]),
-                )
-                .unwrap()
-                .outputs()[0]
-                    .clone(),
-            )),
-            Layer::Activation(activation) => Ok(LayerOutput::NormalOut(
-                evaluate_layer::<GoldilocksExt2, _, _>(
-                    activation,
-                    &vec![input],
-                    Some(vec![unpadded_shape.to_vec()]),
-                )
-                .unwrap()
-                .outputs()[0]
-                    .clone(),
-            )),
-            Layer::Convolution(ref filter) => {
-                Ok(LayerOutput::ConvOut(filter.op(input, unpadded_shape)))
-            }
-            // Traditional convolution is used for debug purposes. That is because the actual convolution
-            // we use relies on the FFT algorithm. This convolution does not have a snark implementation.
-            Layer::SchoolBookConvolution(ref conv_pair) => Ok(LayerOutput::NormalOut(
-                input.conv2d(&conv_pair.0.filter, &conv_pair.0.bias, 1),
-            )),
-
-            Layer::Requant(info) => info.op(input).map(|r| LayerOutput::NormalOut(r)),
-            Layer::Pooling(info) => Ok(LayerOutput::NormalOut(info.op(input))),
-            Layer::Flatten(reshape) => Ok(LayerOutput::NormalOut(
-                evaluate_layer::<GoldilocksExt2, _, _>(
-                    reshape,
-                    &vec![input],
-                    Some(vec![unpadded_shape.to_vec()]),
-                )
-                .unwrap()
-                .outputs()[0]
-                    .clone(),
-            )),
-        }?;
-        match output {
-            LayerOutput::NormalOut(ref output) => {
-                debug!(
-                    "Layer::{:?}: shape {:?} op: {:?} - min {:?}, max {:?}",
-                    self.describe(),
-                    output.get_shape(),
-                    &output.get_data()[..output.get_data().len().min(10)],
-                    output.get_data().iter().min().unwrap(),
-                    output.get_data().iter().max().unwrap()
-                );
-            }
-            LayerOutput::ConvOut((ref output, _)) => {
-                let d = Data::new(output.get_data().iter().map(|e| *e as f64).collect_vec());
-                debug!(
-                    "Layer::{:?}: shape {:?} op: {:?} - min {:?}, max {:?}, mean {:?}, std {:?}",
-                    self.describe(),
-                    output.get_shape(),
-                    &output.get_data()[..output.get_data().len().min(10)],
-                    output.get_data().iter().min().unwrap(),
-                    output.get_data().iter().max().unwrap(),
-                    d.mean().unwrap(),
-                    d.std_dev().unwrap()
-                );
-            }
-        }
-        Ok(output)
     }
 }
 

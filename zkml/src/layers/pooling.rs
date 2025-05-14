@@ -26,7 +26,6 @@ use multilinear_extensions::{
 };
 use serde::de::DeserializeOwned;
 use sumcheck::structs::{IOPProof, IOPVerifierState};
-use tract_onnx::prelude::tract_linalg::frame::reduce::max;
 use transcript::Transcript;
 
 use rayon::prelude::*;
@@ -189,13 +188,13 @@ where
         &self,
         id: NodeId,
         ctx: &Self::Ctx,
-        last_claims: Vec<Claim<E>>,
+        last_claims: Vec<&Claim<E>>,
         step_data: &super::provable::StepData<E, E>,
         prover: &mut Prover<E, T>,
     ) -> Result<Vec<Claim<E>>, super::provable::ProvableOpError> {
         Ok(vec![self.prove_pooling(
             prover,
-            last_claims[0].clone(),
+            last_claims[0],
             &step_data.inputs[0],
             &step_data.outputs.outputs()[0],
             ctx,
@@ -268,7 +267,7 @@ where
     fn verify<T: Transcript<E>>(
         &self,
         proof: &Self::Proof,
-        last_claims: &[Claim<E>],
+        last_claims: &[&Claim<E>],
         verifier: &mut Verifier<E, T>,
         _shape_step: &ShapeStep,
     ) -> Result<Vec<Claim<E>>, ProvableOpError> {
@@ -283,7 +282,7 @@ where
             ))?;
         Ok(vec![self.verify_pooling(
             verifier,
-            last_claims[0].clone(),
+            last_claims[0],
             proof,
             constant_challenge,
             column_separation_challenge,
@@ -293,7 +292,7 @@ where
     fn output_shapes(
         &self,
         input_shapes: &[Vec<usize>],
-        padding_mode: PaddingMode,
+        _padding_mode: PaddingMode,
     ) -> Vec<Vec<usize>> {
         input_shapes
             .into_iter()
@@ -336,7 +335,7 @@ impl Pooling {
         &self,
         prover: &mut Prover<E, T>,
         // last random claim made
-        last_claim: Claim<E>,
+        last_claim: &Claim<E>,
         // input to the dense layer
         input: &Tensor<E>,
         // output of dense layer evaluation
@@ -497,7 +496,7 @@ impl PoolingCtx {
     pub(crate) fn verify_pooling<E: ExtensionField, T: Transcript<E>>(
         &self,
         verifier: &mut Verifier<E, T>,
-        last_claim: Claim<E>,
+        last_claim: &Claim<E>,
         proof: &PoolingProof<E>,
         constant_challenge: E,
         column_separation_challenge: E,
@@ -539,7 +538,7 @@ impl PoolingCtx {
         let sp_ctx = same_poly::Context::<E>::new(self.num_vars);
         let mut sp_verifier = same_poly::Verifier::<E>::new(&sp_ctx);
 
-        sp_verifier.add_claim(last_claim)?;
+        sp_verifier.add_claim(last_claim.clone())?;
 
         let output_claims = &proof.output_claims;
         output_claims

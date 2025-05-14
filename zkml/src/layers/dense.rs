@@ -316,13 +316,13 @@ where
         &self,
         id: NodeId,
         ctx: &Self::Ctx,
-        last_claims: Vec<Claim<E>>,
+        last_claims: Vec<&Claim<E>>,
         step_data: &super::provable::StepData<E, E>,
         prover: &mut Prover<E, T>,
     ) -> Result<Vec<Claim<E>>, ProvableOpError> {
         Ok(vec![self.prove_step(
             prover,
-            last_claims[0].clone(), // ToDo: remove clone
+            last_claims[0], // ToDo: remove clone
             &step_data.inputs[0],
             &step_data.outputs.outputs()[0],
             ctx,
@@ -350,13 +350,13 @@ where
     fn verify<T: Transcript<E>>(
         &self,
         proof: &Self::Proof,
-        last_claims: &[Claim<E>],
+        last_claims: &[&Claim<E>],
         verifier: &mut Verifier<E, T>,
         _shape_step: &ShapeStep,
     ) -> Result<Vec<Claim<E>>, ProvableOpError> {
         Ok(vec![self.verify_dense(
             verifier,
-            last_claims[0].clone(),
+            last_claims[0],
             proof,
         )?])
     }
@@ -424,7 +424,7 @@ impl Dense<Element> {
     pub fn prove_step<'b, E, T>(
         &self,
         prover: &mut Prover<E, T>,
-        last_claim: Claim<E>,
+        last_claim: &Claim<E>,
         input: &Tensor<E>,
         output: &Tensor<E>,
         info: &DenseCtx<E>,
@@ -537,7 +537,7 @@ impl Dense<Element> {
         // to only verify the matrix2vec product via the sumcheck proof.
         prover
             .commit_prover
-            .add_claim(info.bias_poly_id, Claim::new(last_claim.point, bias_eval))
+            .add_claim(info.bias_poly_id, Claim::new(last_claim.point.clone(), bias_eval))
             .context("unable to add bias claim")?;
 
         // the claim that this proving step outputs is the claim about not the matrix but the vector poly.
@@ -573,7 +573,7 @@ where
     pub(crate) fn verify_dense<T: Transcript<E>>(
         &self,
         verifier: &mut Verifier<E, T>,
-        last_claim: Claim<E>,
+        last_claim: &Claim<E>,
         proof: &DenseProof<E>,
     ) -> anyhow::Result<Claim<E>> {
         let info = self;
@@ -605,7 +605,7 @@ where
         )?;
         verifier.commit_verifier.add_claim(
             info.bias_poly_id,
-            Claim::new(last_claim.point, proof.bias_eval),
+            Claim::new(last_claim.point.clone(), proof.bias_eval),
         )?;
 
         // SUMCHECK verification part

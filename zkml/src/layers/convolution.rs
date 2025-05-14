@@ -118,6 +118,11 @@ impl<T: Number> Convolution<T> {
         Self::new_padded(filter, bias, &filter_shape)
     }
 
+    pub(crate) fn new_without_bias(filter: Tensor<T>) -> Self {
+        let bias = Tensor::zeros(vec![filter.kw()]);
+        Self::new(filter, bias)
+    }
+
     pub fn new_padded(filter: Tensor<T>, bias: Tensor<T>, unpadded_shape: &[usize]) -> Self {
         assert_eq!(filter.kw(), bias.get_shape()[0]);
         Self {
@@ -619,13 +624,13 @@ where
         &self,
         id: NodeId,
         ctx: &Self::Ctx,
-        last_claims: Vec<Claim<E>>,
+        last_claims: Vec<&Claim<E>>,
         step_data: &super::provable::StepData<E, E>,
         prover: &mut Prover<E, T>,
     ) -> Result<Vec<Claim<E>>, ProvableOpError> {
         Ok(vec![self.prove_convolution_step(
             prover,
-            last_claims[0].clone(),
+            last_claims[0],
             &step_data.outputs.outputs()[0],
             &step_data.unpadded_output_shapes[0],
             &step_data.outputs.proving_data.as_ref().unwrap(),
@@ -654,13 +659,13 @@ where
     fn verify<T: Transcript<E>>(
         &self,
         proof: &Self::Proof,
-        last_claims: &[Claim<E>],
+        last_claims: &[&Claim<E>],
         verifier: &mut Verifier<E, T>,
         shape_step: &ShapeStep,
     ) -> Result<Vec<Claim<E>>, ProvableOpError> {
         Ok(vec![self.verify_convolution(
             verifier,
-            last_claims[0].clone(),
+            last_claims[0],
             proof,
             shape_step,
         )?])
@@ -689,7 +694,7 @@ impl Convolution<Element> {
         &self,
         prover: &mut Prover<E, T>,
         // last random claim made
-        last_claim: Claim<E>,
+        last_claim: &Claim<E>,
         // Struct containing all necessary information
         // to generate a convolution proof
         output: &Tensor<E>,
@@ -1121,7 +1126,7 @@ where
     pub(crate) fn verify_convolution<T: Transcript<E>>(
         &self,
         verifier: &mut Verifier<E, T>,
-        last_claim: Claim<E>,
+        last_claim: &Claim<E>,
         proof: &ConvProof<E>,
         shape_step: &ShapeStep,
     ) -> anyhow::Result<Claim<E>> {
@@ -1594,13 +1599,11 @@ pub fn padded_conv2d_shape(input_shape: &[usize], filter_shape: &[usize]) -> Vec
 #[cfg(test)]
 mod test {
     use crate::{
-        NextPowerOfTwo,
         layers::{
             activation::{Activation, Relu},
             dense::{self, Dense},
-            pooling::{Maxpool2D, Pooling, maxpool2d_shape},
-            provable::evaluate_layer,
-        },
+            pooling::{maxpool2d_shape, Maxpool2D, Pooling}, provable::evaluate_layer,
+        }, NextPowerOfTwo
     };
 
     use super::*;

@@ -14,7 +14,7 @@ use crate::{
     },
     tensor::get_root_of_unity,
 };
-use anyhow::{Result, anyhow};
+use anyhow::anyhow;
 use ff_ext::ExtensionField;
 
 use itertools::Itertools;
@@ -424,7 +424,7 @@ where
             } else {
                 // we only propagate the claims, without changing them, as a non-provable layer
                 // shouldn't change the input values
-                claims_for_prove
+                claims_for_prove.into_iter().cloned().collect()
             };
             claims_by_layer.insert(node_id, claims);
         }

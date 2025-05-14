@@ -2,7 +2,7 @@ use crate::{
     ScalingFactor,
     quantization::{self, MAX_FLOAT, MIN_FLOAT},
 };
-use anyhow::{anyhow, bail, ensure};
+use anyhow::{bail, ensure};
 use ark_std::rand::{self, Rng, SeedableRng, rngs::StdRng};
 use ff::Field;
 use ff_ext::ExtensionField;
@@ -581,6 +581,11 @@ impl<T> Tensor<T> {
         }
     }
 
+    /// Is an empty tensor
+    pub fn is_empty(&self) -> bool {
+        self.shape.len() == 0
+    }
+
     /// Is vector
     pub fn is_vector(&self) -> bool {
         self.get_shape().len() == 1
@@ -631,13 +636,13 @@ impl<T> Tensor<T> {
     }
     /// Get the dimensions of the tensor
     pub fn get_shape(&self) -> Vec<usize> {
-        assert!(self.shape.len() > 0, "Empty tensor");
+        assert!(!self.is_empty(), "Empty tensor");
         self.shape.clone()
     }
     /// Get the input shape of the tensor
     /// TODO: Remove it
     pub fn get_input_shape(&self) -> Vec<usize> {
-        assert!(self.shape.len() > 0, "Empty tensor");
+        assert!(!self.is_empty(), "Empty tensor");
         self.og_shape.clone()
     }
     ///

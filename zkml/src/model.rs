@@ -1,315 +1,3 @@
-use crate::{
-    Element,
-    layers::{Layer, LayerOutput, provable::OpInfo},
-    padding::PaddingMode,
-    quantization::{ModelMetadata, TensorFielder},
-    tensor::{ConvData, Number, Tensor},
-};
-use anyhow::Result;
-use ff_ext::ExtensionField;
-use itertools::Itertools;
-use rayon::iter::{IntoParallelIterator, ParallelIterator};
-use tracing::info;
-
-// The index of the step, starting from the input layer. (proving is done in the opposite flow)
-pub type StepIdx = usize;
-
-/// NOTE: this doesn't handle dynamism in the model with loops for example for LLMs where it
-/// produces each token one by one.
-#[derive(Clone, Debug)]
-pub struct Model<T> {
-    pub unpadded_input: Vec<usize>,
-    pub(crate) padded_input: Vec<usize>,
-    pub(crate) layers: Vec<Layer<T>>,
-}
-
-impl<T: Number> Model<T> {
-    pub fn new_from(
-        layers: Vec<Layer<T>>,
-        input_not_padded_shape: Vec<usize>,
-        input_padded_shape: Vec<usize>,
-    ) -> Self {
-        Self {
-            unpadded_input: input_not_padded_shape,
-            padded_input: input_padded_shape,
-            layers,
-        }
-    }
-    pub fn new(unpadded_input_shape: &[usize]) -> Self {
-        info!(
-            "Creating model with {} BIT_LEN quantization",
-            *crate::quantization::BIT_LEN
-        );
-        let mut model = Self {
-            unpadded_input: Vec::new(),
-            padded_input: Vec::new(),
-            layers: Default::default(),
-        };
-        model.set_input_shape(unpadded_input_shape.to_vec());
-        model
-    }
-
-    /// Adds a layer to the model. The model may add additional layers by itself, e.g. requantization
-    /// layers.
-    pub fn add_layer(&mut self, l: Layer<T>) {
-        self.layers.push(l);
-    }
-
-    pub fn set_input_shape(&mut self, not_padded: Vec<usize>) {
-        self.padded_input = not_padded
-            .iter()
-            .map(|dim| dim.next_power_of_two())
-            .collect_vec();
-        self.unpadded_input = not_padded;
-    }
-    pub fn load_input_flat(&self, input: Vec<T>) -> Tensor<T> {
-        let input_tensor = Tensor::<T>::new(self.unpadded_input.clone(), input);
-        self.prepare_input(input_tensor)
-    }
-
-    pub fn prepare_input(&self, input: Tensor<T>) -> Tensor<T> {
-        match self.layers[0] {
-            Layer::Dense(ref dense) => input.pad_1d(dense.ncols()),
-            Layer::Convolution(_) | Layer::SchoolBookConvolution(_) => {
-                assert!(
-                    self.padded_input.len() > 0,
-                    "Set the input shape using `set_input_shape`"
-                );
-                let mut input = input;
-                input.pad_to_shape(self.padded_input.clone());
-                input
-            }
-            _ => {
-                panic!("unable to deal with non-vector input yet");
-            }
-        }
-    }
-
-    pub fn layers(&self) -> impl DoubleEndedIterator<Item = (StepIdx, &Layer<T>)> {
-        self.layers.iter().enumerate()
-    }
-    pub fn provable_layers(&self) -> impl DoubleEndedIterator<Item = (StepIdx, &Layer<T>)> {
-        self.layers
-            .iter()
-            .enumerate()
-            .filter(|(_, l)| (*l).is_provable())
-    }
-
-    pub fn unpadded_input_shape(&self) -> Vec<usize> {
-        self.unpadded_input.clone()
-    }
-    pub fn input_shape(&self) -> Vec<usize> {
-        if let Layer::Dense(mat) = &self.layers[0] {
-            vec![mat.matrix.ncols_2d()]
-        } else if matches!(
-            &self.layers[0],
-            Layer::Convolution(_) | Layer::SchoolBookConvolution(_)
-        ) {
-            assert!(
-                self.padded_input.len() > 0,
-                "Set the input shape using `set_input_shape`"
-            );
-            self.padded_input.clone()
-        } else {
-            panic!("layer is not starting with a dense or conv layer?")
-        }
-    }
-
-    pub fn first_output_shape(&self) -> Vec<usize> {
-        if let Layer::Dense(mat) = &self.layers[0] {
-            vec![mat.matrix.nrows_2d()]
-        } else if let Layer::Convolution(filter) = &self.layers[0] {
-            vec![filter.nrows_2d()]
-        } else {
-            panic!("layer is not starting with a dense layer?")
-        }
-    }
-    /// Prints to stdout
-    pub fn describe(&self) {
-        info!("Model description:");
-        for (idx, layer) in self.layers() {
-            info!("\t- {}: {}", idx, layer.describe());
-        }
-    }
-
-    pub fn layer_count(&self) -> usize {
-        self.layers.len()
-    }
-}
-
-impl Model<Element> {
-    pub fn run<'a, E: ExtensionField>(
-        &'a self,
-        input: Tensor<Element>,
-    ) -> Result<InferenceTrace<'a, Element, E>> {
-        #[cfg(test)]
-        let unpadded_input_shape = {
-            if self.unpadded_input.len() == 0 {
-                input.get_shape()
-            } else {
-                self.unpadded_input.clone()
-            }
-        };
-        #[cfg(not(test))]
-        let unpadded_input_shape = self.unpadded_input.clone();
-        let mut trace = InferenceTrace::<Element, E>::new(input, unpadded_input_shape.clone());
-        let mut unpadded_input_shape = unpadded_input_shape;
-        for (id, layer) in self.layers() {
-            let input = trace.last_input();
-            let output = layer.op(input, &unpadded_input_shape)?;
-            unpadded_input_shape =
-                layer.output_shape(&unpadded_input_shape, PaddingMode::NoPadding);
-            match output {
-                LayerOutput::NormalOut(output) => {
-                    let conv_data = ConvData::default();
-                    let step = InferenceStep {
-                        layer,
-                        output,
-                        id,
-                        conv_data,
-                        unpadded_shape: unpadded_input_shape.clone(),
-                    };
-                    trace.push_step(step);
-                }
-                LayerOutput::ConvOut((output, conv_data)) => {
-                    let step = InferenceStep {
-                        layer,
-                        output,
-                        id,
-                        conv_data,
-                        unpadded_shape: unpadded_input_shape.clone(),
-                    };
-                    trace.push_step(step);
-                }
-            }
-        }
-        Ok(trace)
-    }
-}
-
-/// Keeps track of all input and outputs of each layer, with a reference to the layer.
-pub struct InferenceTrace<'a, E, F: ExtensionField> {
-    pub steps: Vec<InferenceStep<'a, E, F>>,
-    /// The initial input to the model
-    input: Tensor<E>,
-    unpadded_shape: Vec<usize>,
-}
-
-impl<'a, F: ExtensionField> InferenceTrace<'a, Element, F> {
-    pub fn provable_steps(&self) -> Self {
-        let mut filtered_steps = Vec::new();
-        for step in self.steps.iter() {
-            if step.layer.is_provable() {
-                filtered_steps.push(step.clone());
-            } else {
-                // we want the output of this step to be the output of the previous step
-                let last_idx = filtered_steps.len() - 1;
-                filtered_steps[last_idx].output = step.output.clone();
-            }
-        }
-        InferenceTrace {
-            steps: filtered_steps,
-            input: self.input.clone(),
-            unpadded_shape: self.unpadded_shape.clone(),
-        }
-    }
-
-    pub fn to_field(self) -> InferenceTrace<'a, F, F> {
-        let input = self.input.to_fields();
-        let field_steps = self
-            .steps
-            .into_par_iter()
-            .map(|step| InferenceStep {
-                id: step.id,
-                layer: step.layer,
-                output: step.output.to_fields(),
-                conv_data: step.conv_data.clone(),
-                unpadded_shape: step.unpadded_shape.clone(),
-            })
-            .collect::<Vec<_>>();
-        InferenceTrace {
-            steps: field_steps,
-            input,
-            unpadded_shape: self.unpadded_shape.clone(),
-        }
-    }
-}
-
-impl<'a, E, F: ExtensionField> InferenceTrace<'a, E, F> {
-    /// The input must be the already padded input tensor via `Model::prepare_input`
-    fn new(input: Tensor<E>, unpadded_shape: Vec<usize>) -> Self {
-        Self {
-            steps: Default::default(),
-            input,
-            unpadded_shape,
-        }
-    }
-
-    pub fn last_step(&self) -> &InferenceStep<'a, E, F> {
-        self.steps
-            .last()
-            .expect("can't call last_step on empty inferece")
-    }
-
-    /// Useful when building the trace. The next input is either the first input or the last
-    /// output.
-    fn last_input(&self) -> &Tensor<E> {
-        if self.steps.is_empty() {
-            &self.input
-        } else {
-            // safe unwrap since it's not empty
-            &self.steps.last().unwrap().output
-        }
-    }
-
-    /// Returns the final output of the whole trace
-    pub fn final_output(&self) -> &Tensor<E> {
-        &self
-            .steps
-            .last()
-            .expect("can't call final_output on empty trace")
-            .output
-    }
-
-    fn push_step(&mut self, step: InferenceStep<'a, E, F>) {
-        self.steps.push(step);
-    }
-}
-
-#[derive(Clone)]
-pub struct InferenceStep<'a, E, F: ExtensionField> {
-    pub id: StepIdx,
-    /// Reference to the layer that produced this step
-    /// Note the layer is of type `Element` since we only run the trace
-    /// in the quantized domain.
-    pub layer: &'a Layer<Element>,
-    /// Output produced by this layer
-    pub output: Tensor<E>,
-    /// Shape of the output in the unpadded domain. This is useful for proving
-    /// and eliminating some side effects of padding during proving.
-    pub unpadded_shape: Vec<usize>,
-    /// Convolution data - is set to default if not a convolution layer
-    /// TODO: move that to an Option
-    pub conv_data: ConvData<F>,
-}
-
-impl<'a, E, F: ExtensionField> InferenceStep<'a, E, F> {
-    pub fn is_provable(&self) -> bool {
-        self.layer.is_provable()
-    }
-}
-
-// Add a specific implementation for f32 models
-impl Model<f32> {
-    /// Runs the model in float format and returns the output tensor
-    pub fn run_float(&self, input: Vec<f32>) -> Tensor<f32> {
-        let mut last_output = Tensor::new(self.unpadded_input.clone(), input);
-        for layer in self.layers.iter() {
-            last_output = layer.run(&last_output);
-        }
-        last_output
-    }
-}
 
 #[cfg(test)]
 pub(crate) mod test {
@@ -321,7 +9,7 @@ pub(crate) mod test {
             convolution::{Convolution, SchoolBookConv},
             dense::Dense,
             pooling::{MAXPOOL2D_KERNEL_SIZE, Maxpool2D, Pooling},
-            provable::{Edge, ProvableModel, ToIterator, evaluate_layer},
+            provable::{ProvableModel, evaluate_layer},
             requant::Requant,
         },
         padding::PaddingMode,
@@ -338,7 +26,6 @@ pub(crate) mod test {
         virtual_poly::VirtualPolynomial,
     };
     use sumcheck::structs::{IOPProverState, IOPVerifierState};
-    use tract_onnx::tract_core::ops::matmul::quant;
 
     use crate::{Element, default_transcript, quantization::TensorFielder, tensor::Tensor};
 
@@ -573,7 +260,7 @@ pub(crate) mod test {
                 Some(first_id),
             )
             .unwrap();
-        let third_id = model
+        let _third_id = model
             .add_consecutive_layer(
                 Layer::Convolution(
                     Convolution::new(trad_conv3.clone(), bias3.clone())
@@ -601,7 +288,7 @@ pub(crate) mod test {
                 Some(first_id),
             )
             .unwrap();
-        let third_id = model2
+        let _third_id = model2
             .add_consecutive_layer(
                 Layer::SchoolBookConvolution(SchoolBookConv(Convolution::new(trad_conv3, bias3))),
                 Some(second_id),
@@ -634,7 +321,7 @@ pub(crate) mod test {
                 None,
             )
             .unwrap();
-        let pool_layer = model
+        let _pool_layer = model
             .add_consecutive_layer(
                 Layer::Pooling(Pooling::Maxpool2D(Maxpool2D::default())),
                 Some(conv_layer),

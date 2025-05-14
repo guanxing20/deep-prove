@@ -6,7 +6,7 @@ use ff_ext::ExtensionField;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
     collections::{BTreeMap, HashMap},
-    fmt::{Debug, format},
+    fmt::Debug,
 };
 use transcript::Transcript;
 
@@ -157,11 +157,13 @@ where
     E: ExtensionField + DeserializeOwned,
     E::BaseField: Serialize + DeserializeOwned,
 {
-    pub(crate) fn get_claims_for_node(
+    pub(crate) fn get_claims_for_node<'a,'b>(
         &self,
-        claims_by_node: &HashMap<NodeId, Vec<Claim<E>>>,
-        output_claims: &[Claim<E>],
-    ) -> Result<Vec<Claim<E>>> {
+        claims_by_node: &'a HashMap<NodeId, Vec<Claim<E>>>,
+        output_claims: &'b [Claim<E>],
+    ) -> Result<Vec<&'a Claim<E>>> 
+    where 'b: 'a
+    {
         self.outputs.iter().map(|out| {
             // For now, we support in proving only one edge per output wire,
             // as if an output is used as input in different nodes, we need
@@ -178,7 +180,7 @@ where
                     edge.index,
                     claims_for_node.len()
                 );
-                claims_for_node[edge.index].clone() // ToDo: avoid clone
+                &claims_for_node[edge.index]
             } else {
                 // it's an output node, so we use directly the claim for the corresponding output
                 ensure!(edge.index < output_claims.len(),
@@ -186,7 +188,7 @@ where
                  edge.index,
                  output_claims.len(),
                 );
-                output_claims[edge.index].clone()
+                &output_claims[edge.index]
             })
         }).collect()
     }
@@ -245,7 +247,9 @@ pub trait Evaluate<T: Number> {
     ) -> Result<LayerOut<T, E>, ProvableOpError>;
 }
 
-pub(crate) fn evaluate_layer<E: ExtensionField, T: Number, O: Evaluate<T>>(
+/// Helper method employed to call `Evaluate::evaluate` when there are no `unpadded_input_shapes`
+/// or when the `E` type cannot be inferred automatically by the compiler
+pub fn evaluate_layer<E: ExtensionField, T: Number, O: Evaluate<T>>(
     layer: &O,
     inputs: &[&Tensor<T>],
     unpadded_input_shapes: Option<Vec<Vec<usize>>>,
@@ -294,6 +298,8 @@ pub trait QuantizeOp<Q: QuantizationStrategy> {
     ) -> anyhow::Result<QuantizeOutput<Self::QuantizedOp>>;
 }
 
+/// Helper method employed to call `QuantizeOp::quantize_op` when the `QuantizationStrategy` type
+/// canno be inferred automatically
 pub fn quantize_op<Q: QuantizationStrategy, O: QuantizeOp<Q>>(
     op: O,
     data: &Q::AuxData,
@@ -304,6 +310,8 @@ pub fn quantize_op<Q: QuantizationStrategy, O: QuantizeOp<Q>>(
 }
 
 pub trait PadOp {
+    // Pad the dimensions of the tensors in node `self`, updating the `ShapeInfo` with the output shapes
+    // of the node 
     fn pad_node(self, _si: &mut ShapeInfo) -> Result<Self, ProvableOpError>
     where
         Self: Sized,
@@ -323,11 +331,11 @@ where
     /// Produces a proof of correct execution for this operation.
     fn prove<T: Transcript<E>>(
         &self,
-        node_id: NodeId,
-        ctx: &Self::Ctx,
-        last_claims: Vec<Claim<E>>,
-        step_data: &StepData<E, E>,
-        prover: &mut Prover<E, T>,
+        _node_id: NodeId,
+        _ctx: &Self::Ctx,
+        _last_claims: Vec<&Claim<E>>,
+        _step_data: &StepData<E, E>,
+        _prover: &mut Prover<E, T>,
     ) -> Result<Vec<Claim<E>>, ProvableOpError> {
         // Default implementation, to avoid having to implement this method in case `is_provable` is false
         assert!(
@@ -337,12 +345,14 @@ where
         Ok(vec![Claim::default()])
     }
 
+    /// Generate witness for a node where a lookup table is employed in proving
     fn gen_lookup_witness(
         &self,
-        id: NodeId,
-        gen: &mut LookupWitnessGen<E>,
-        step_data: &StepData<Element, E>,
+        _id: NodeId,
+        _gen: &mut LookupWitnessGen<E>,
+        _step_data: &StepData<Element, E>,
     ) -> Result<(), ProvableOpError> {
+        // Default implementation for nodes that don't employ a lookup table
         Ok(())
     }
 }
@@ -367,7 +377,7 @@ where
     fn verify<T: Transcript<E>>(
         &self,
         proof: &Self::Proof,
-        last_claims: &[Claim<E>],
+        last_claims: &[&Claim<E>],
         verifier: &mut Verifier<E, T>,
         shape_step: &ShapeStep,
     ) -> Result<Vec<Claim<E>>, ProvableOpError>;
@@ -401,7 +411,7 @@ where
     fn verify<T: Transcript<E>>(
         &self,
         proof: &LayerProof<E>,
-        last_claims: &[Claim<E>],
+        last_claims: &[&Claim<E>],
         verifier: &mut Verifier<E, T>,
         shape_step: &ShapeStep,
     ) -> Result<Vec<Claim<E>>, ProvableOpError> {

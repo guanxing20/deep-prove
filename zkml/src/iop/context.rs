@@ -91,7 +91,7 @@ impl ShapeStep {
 
 /// Auxiliary information for the context creation
 #[derive(Clone, Debug)]
-pub(crate) struct ContextAux {
+pub struct ContextAux {
     pub tables: BTreeSet<TableType>,
     pub last_output_shape: Vec<Vec<usize>>,
 }

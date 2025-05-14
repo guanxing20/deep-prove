@@ -177,7 +177,7 @@ where
                 if let Err(ProvableOpError::NotProvableLayer(_)) = res {
                     // we only propagate the claims, without changing them, as a non-provable layer
                     // shouldn't change the input values
-                    claims_for_verify
+                    claims_for_verify.into_iter().cloned().collect()
                 } else {
                     res?
                 }
