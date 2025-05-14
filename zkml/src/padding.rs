@@ -7,9 +7,9 @@ use crate::{
     layers::{
         convolution::Convolution,
         dense::Dense,
+        flatten::Flatten,
         pooling::Pooling,
         provable::{NodeId, ProvableModel, ProvableNode, ToIterator},
-        reshape::Reshape,
     },
     onnx_parse::{check_filter, safe_conv2d_shape, safe_maxpool2d_shape},
 };
@@ -115,11 +115,11 @@ pub fn pad_model(mut model: ProvableModel<Element>) -> Result<ProvableModel<Elem
     Ok(model)
 }
 
-pub(crate) fn reshape(si: &mut ShapeInfo) -> Result<Reshape> {
+pub(crate) fn reshape(si: &mut ShapeInfo) -> Result<Flatten> {
     si.shapes.iter_mut().for_each(|sd| {
         sd.ignore_garbage_pad = Some((sd.input_shape_og.clone(), sd.input_shape_padded.clone()))
     });
-    Ok(Reshape)
+    Ok(Flatten)
 }
 
 pub(crate) fn pooling(p: Pooling, si: &mut ShapeInfo) -> Result<Pooling> {

@@ -244,7 +244,22 @@ where
     }
 
     pub(crate) fn add_node(&mut self, node: ProvableNode<N>) -> anyhow::Result<NodeId> {
-        let node_id = self.nodes.len() as NodeId;
+        let node_id = (0..self.nodes.len()+1).find_map(|i| 
+            if !self.nodes.contains_key(&i) {
+                Some(i)
+            } else {
+                None
+            }
+        ).ok_or(anyhow!("No valid node id found for new node"))?;
+        self.add_node_with_id(node_id, node)?;
+        Ok(node_id)
+    }
+
+    pub(crate) fn add_node_with_id(
+        &mut self,
+        node_id: NodeId,
+        node: ProvableNode<N>,
+    ) -> anyhow::Result<()> {
         // iterate over the inputs of the node and add the edges to the outputs of
         // corresponding nodes already in the model
         for (i, input) in node.inputs.iter().enumerate() {
@@ -270,7 +285,7 @@ where
 
         self.nodes.insert(node_id, node);
 
-        Ok(node_id)
+        Ok(())
     }
 
     // Label the edges provided as input as the output edges of the model. If no edge is provided,

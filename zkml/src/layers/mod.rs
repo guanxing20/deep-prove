@@ -2,17 +2,18 @@ pub mod activation;
 pub mod common;
 pub mod convolution;
 pub mod dense;
+pub mod flatten;
 pub mod hadamard;
 pub mod matvec;
 pub mod pooling;
 pub mod provable;
 pub mod requant;
-pub mod reshape;
 
 use std::fmt::Debug;
 
 use anyhow::Result;
 use ff_ext::ExtensionField;
+use flatten::Flatten;
 use goldilocks::GoldilocksExt2;
 use itertools::Itertools;
 use pooling::{PoolingCtx, PoolingProof};
@@ -21,7 +22,6 @@ use provable::{
     QuantizeOp, QuantizeOutput, StepData, evaluate_layer,
 };
 use requant::RequantCtx;
-use reshape::Reshape;
 use statrs::statistics::{Data, Distribution};
 use tracing::debug;
 use transcript::Transcript;
@@ -31,7 +31,7 @@ use crate::{
     commit::precommit::PolyID,
     iop::context::{ContextAux, ShapeStep, TableCtx},
     layers::{
-        activation::{Activation, ActivationProof, Relu},
+        activation::{Activation, ActivationProof},
         convolution::Convolution,
         dense::Dense,
         pooling::Pooling,
@@ -61,7 +61,7 @@ pub enum Layer<T> {
     Requant(Requant),
     Pooling(Pooling),
     // TODO: so far it's only flattening the input tensor, e.g. new_shape = vec![shape.iter().product()]
-    Reshape(Reshape),
+    Flatten(Flatten),
 }
 
 /// Describes a steps wrt the polynomial to be proven/looked at. Verifier needs to know
@@ -82,7 +82,7 @@ where
     Requant(RequantCtx),
     Pooling(PoolingCtx),
     Table(TableCtx<E>),
-    Reshape,
+    Flatten,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -95,7 +95,7 @@ where
     Activation(ActivationProof<E>),
     Requant(RequantProof<E>),
     Pooling(PoolingProof<E>),
-    Reshape,
+    Dummy, // To be used for non-provable layers
 }
 #[derive(Clone, Debug)]
 pub enum LayerOutput<F>
@@ -120,7 +120,7 @@ where
             Self::Requant(_) => "Requant".to_string(),
             Self::Pooling(_) => "Pooling".to_string(),
             Self::Table(..) => "Table".to_string(),
-            Self::Reshape => "Reshape".to_string(),
+            Self::Flatten => "Reshape".to_string(),
         }
     }
 
@@ -128,10 +128,18 @@ where
     pub fn requires_lookup(&self) -> bool {
         match self {
             Self::Dense(..) => false,
-            Self::Reshape => false,
+            Self::Flatten => false,
             _ => true,
         }
     }
+
+    pub fn has_proof(&self) -> bool {
+        match self {
+            Self::Flatten | Self::Table(_) | Self::SchoolBookConvolution(_) => false,
+            _ => true, 
+        }
+    }
+
     pub fn output_shape(&self, input_shape: &[usize], padding_mode: PaddingMode) -> Vec<usize> {
         match self {
             Self::Dense(ref dense) => dense.output_shape(input_shape, padding_mode),
@@ -142,8 +150,8 @@ where
             Self::Activation(..) => input_shape.to_vec(),
             Self::Requant(..) => input_shape.to_vec(),
             Self::Pooling(ref pooling) => pooling.output_shape(input_shape),
-            Self::Reshape => <Reshape as OpInfo>::output_shapes(
-                &Reshape,
+            Self::Flatten => <Flatten as OpInfo>::output_shapes(
+                &Flatten,
                 &vec![input_shape.to_vec()],
                 padding_mode,
             )[0]
@@ -251,7 +259,7 @@ impl<N: Number> OpInfo for Layer<N> {
             Layer::Activation(activation) => activation.output_shapes(input_shapes, padding_mode),
             Layer::Requant(requant) => requant.output_shapes(input_shapes, padding_mode),
             Layer::Pooling(pooling) => pooling.output_shapes(input_shapes, padding_mode),
-            Layer::Reshape(reshape) => reshape.output_shapes(input_shapes, padding_mode),
+            Layer::Flatten(reshape) => reshape.output_shapes(input_shapes, padding_mode),
         }
     }
 
@@ -263,7 +271,7 @@ impl<N: Number> OpInfo for Layer<N> {
             Layer::Activation(activation) => activation.num_outputs(num_inputs),
             Layer::Requant(requant) => requant.num_outputs(num_inputs),
             Layer::Pooling(pooling) => pooling.num_outputs(num_inputs),
-            Layer::Reshape(reshape) => reshape.num_outputs(num_inputs),
+            Layer::Flatten(reshape) => reshape.num_outputs(num_inputs),
         }
     }
 
@@ -275,7 +283,7 @@ impl<N: Number> OpInfo for Layer<N> {
             Layer::Activation(activation) => activation.describe(),
             Layer::Requant(requant) => requant.describe(),
             Layer::Pooling(pooling) => pooling.describe(),
-            Layer::Reshape(reshape) => reshape.describe(),
+            Layer::Flatten(reshape) => reshape.describe(),
         }
     }
 
@@ -287,7 +295,7 @@ impl<N: Number> OpInfo for Layer<N> {
             Layer::Activation(activation) => activation.is_provable(),
             Layer::Requant(requant) => requant.is_provable(),
             Layer::Pooling(pooling) => pooling.is_provable(),
-            Layer::Reshape(reshape) => reshape.is_provable(),
+            Layer::Flatten(reshape) => reshape.is_provable(),
         }
     }
 }
@@ -307,7 +315,7 @@ impl Evaluate<f32> for Layer<f32> {
             Layer::Activation(activation) => activation.evaluate(inputs, unpadded_input_shapes),
             Layer::Requant(_) => unreachable!("Requant layer found when evaluating over float"),
             Layer::Pooling(pooling) => pooling.evaluate(inputs, unpadded_input_shapes),
-            Layer::Reshape(reshape) => reshape.evaluate(inputs, unpadded_input_shapes),
+            Layer::Flatten(reshape) => reshape.evaluate(inputs, unpadded_input_shapes),
         }
     }
 }
@@ -327,7 +335,7 @@ impl Evaluate<Element> for Layer<Element> {
             Layer::Activation(activation) => activation.evaluate(inputs, unpadded_input_shapes),
             Layer::Requant(requant) => requant.evaluate(inputs, unpadded_input_shapes),
             Layer::Pooling(pooling) => pooling.evaluate(inputs, unpadded_input_shapes),
-            Layer::Reshape(reshape) => reshape.evaluate(inputs, unpadded_input_shapes),
+            Layer::Flatten(reshape) => reshape.evaluate(inputs, unpadded_input_shapes),
         }
     }
 }
@@ -349,7 +357,7 @@ where
             Layer::Activation(activation) => activation.step_info(id, aux),
             Layer::Requant(requant) => requant.step_info(id, aux),
             Layer::Pooling(pooling) => pooling.step_info(id, aux),
-            Layer::Reshape(reshape) => reshape.step_info(id, aux),
+            Layer::Flatten(reshape) => reshape.step_info(id, aux),
         }
     }
 
@@ -361,7 +369,7 @@ where
             Layer::Activation(activation) => activation.commit_info(id),
             Layer::Requant(requant) => requant.commit_info(id),
             Layer::Pooling(pooling) => pooling.commit_info(id),
-            Layer::Reshape(reshape) => reshape.commit_info(id),
+            Layer::Flatten(reshape) => reshape.commit_info(id),
         }
     }
 }
@@ -380,7 +388,7 @@ impl PadOp for Layer<Element> {
             Layer::Activation(activation) => Layer::Activation(activation.pad_node(si)?),
             Layer::Requant(requant) => Layer::Requant(requant.pad_node(si)?),
             Layer::Pooling(pooling) => Layer::Pooling(pooling.pad_node(si)?),
-            Layer::Reshape(reshape) => Layer::Reshape(reshape.pad_node(si)?),
+            Layer::Flatten(flatten) => Layer::Flatten(flatten.pad_node(si)?),
         })
     }
 }
@@ -449,7 +457,7 @@ where
                     ))
                 }
             }
-            Layer::Reshape(_) => unreachable!("prove cannot be called for reshape"),
+            Layer::Flatten(_) => unreachable!("prove cannot be called for reshape"),
         }
     }
 
@@ -468,7 +476,7 @@ where
             Layer::Activation(activation) => activation.gen_lookup_witness(id, gen, step_data),
             Layer::Requant(requant) => requant.gen_lookup_witness(id, gen, step_data),
             Layer::Pooling(pooling) => pooling.gen_lookup_witness(id, gen, step_data),
-            Layer::Reshape(reshape) => reshape.gen_lookup_witness(id, gen, step_data),
+            Layer::Flatten(reshape) => reshape.gen_lookup_witness(id, gen, step_data),
         }
     }
 }
@@ -532,8 +540,8 @@ impl QuantizeOp<InferenceObserver> for Layer<f32> {
                 output_scalings: input_scaling.to_vec(),
                 requant_layer: None,
             },
-            Layer::Reshape(reshape) => QuantizeOutput {
-                quanzited_op: Layer::Reshape(reshape),
+            Layer::Flatten(flatten) => QuantizeOutput {
+                quanzited_op: Layer::Flatten(flatten),
                 output_scalings: input_scaling.to_vec(),
                 requant_layer: None,
             },
@@ -552,7 +560,7 @@ impl<T: Number> Layer<T> {
             Layer::Activation(Activation::Relu(_)) => input_shape.to_vec(),
             Layer::Requant(_) => input_shape.to_vec(),
             Layer::Pooling(Pooling::Maxpool2D(info)) => info.output_shape(input_shape),
-            Layer::Reshape(ref r) => {
+            Layer::Flatten(ref r) => {
                 r.output_shapes(&vec![input_shape.to_vec()], padding_mode)[0].clone()
             }
         }
@@ -591,7 +599,7 @@ impl Layer<f32> {
             Layer::SchoolBookConvolution(ref conv_pair) => {
                 input.conv2d(&conv_pair.0.filter, &conv_pair.0.bias, 1)
             }
-            Layer::Reshape(ref reshape) => {
+            Layer::Flatten(ref reshape) => {
                 evaluate_layer::<GoldilocksExt2, _, _>(reshape, &vec![input], None)
                     .unwrap()
                     .outputs()[0]
@@ -647,7 +655,7 @@ impl Layer<Element> {
 
             Layer::Requant(info) => info.op(input).map(|r| LayerOutput::NormalOut(r)),
             Layer::Pooling(info) => Ok(LayerOutput::NormalOut(info.op(input))),
-            Layer::Reshape(reshape) => Ok(LayerOutput::NormalOut(
+            Layer::Flatten(reshape) => Ok(LayerOutput::NormalOut(
                 evaluate_layer::<GoldilocksExt2, _, _>(
                     reshape,
                     &vec![input],
@@ -698,7 +706,7 @@ where
             Self::Activation(_) => "Activation".to_string(),
             Self::Requant(_) => "Requant".to_string(),
             Self::Pooling(_) => "Pooling".to_string(),
-            Self::Reshape => "Reshape".to_string(),
+            Self::Dummy => "Dummy".to_string(),
         }
     }
 
@@ -706,10 +714,11 @@ where
         match self {
             LayerProof::Dense(..) => None,
             LayerProof::Convolution(..) => None,
-            LayerProof::Reshape => None,
+            LayerProof::Dummy => None,
             LayerProof::Activation(ActivationProof { lookup, .. })
-            | LayerProof::Requant(RequantProof { lookup, .. })
-            | LayerProof::Pooling(PoolingProof { lookup, .. }) => Some(lookup.fractional_outputs()),
+                    | LayerProof::Requant(RequantProof { lookup, .. })
+                    | LayerProof::Pooling(PoolingProof { lookup, .. }) => Some(lookup.fractional_outputs()),
+
         }
     }
 }

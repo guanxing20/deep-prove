@@ -16,9 +16,9 @@ use super::{
     provable::{Evaluate, LayerOut, Op, OpInfo, PadOp, ProvableOp, ProvableOpError, ProveInfo},
 };
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Reshape;
+pub struct Flatten;
 
-impl OpInfo for Reshape {
+impl OpInfo for Flatten {
     fn output_shapes(
         &self,
         input_shapes: &[Vec<usize>],
@@ -43,7 +43,7 @@ impl OpInfo for Reshape {
     }
 }
 
-impl<N: Number> Evaluate<N> for Reshape {
+impl<N: Number> Evaluate<N> for Flatten {
     fn evaluate<E: ExtensionField>(
         &self,
         inputs: &[&Tensor<N>],
@@ -59,7 +59,7 @@ impl<N: Number> Evaluate<N> for Reshape {
     }
 }
 
-impl<E> ProveInfo<E> for Reshape
+impl<E> ProveInfo<E> for Flatten
 where
     E: ExtensionField + DeserializeOwned,
     E::BaseField: Serialize + DeserializeOwned,
@@ -72,11 +72,11 @@ where
         aux.last_output_shape
             .iter_mut()
             .for_each(|s| *s = s.next_power_of_two());
-        Ok((LayerCtx::Reshape, aux))
+        Ok((LayerCtx::Flatten, aux))
     }
 }
 
-impl PadOp for Reshape {
+impl PadOp for Flatten {
     fn pad_node(self, si: &mut ShapeInfo) -> Result<Self, super::provable::ProvableOpError>
     where
         Self: Sized,
@@ -85,7 +85,7 @@ impl PadOp for Reshape {
     }
 }
 
-impl<E> ProvableOp<E> for Reshape
+impl<E> ProvableOp<E> for Flatten
 where
     E: ExtensionField,
     E::BaseField: Serialize + DeserializeOwned,
@@ -94,21 +94,11 @@ where
     type Ctx = LayerCtx<E>; // Unused
 }
 
-impl<E, N> Op<E, N> for Reshape
+impl<E, N> Op<E, N> for Flatten
 where
     E: ExtensionField,
     E::BaseField: Serialize + DeserializeOwned,
     E: Serialize + DeserializeOwned,
     N: Number,
 {
-}
-
-impl Reshape {
-    pub(crate) fn quantize(
-        &self,
-        _s: &ScalingFactor,
-        _bias_s: Option<&ScalingFactor>,
-    ) -> Layer<Element> {
-        Layer::Reshape(Reshape)
-    }
 }
