@@ -1,17 +1,13 @@
 use crate::{
     layers::{
-        Layer,
-        activation::Activation,
-        convolution::Convolution,
-        pooling::{MAXPOOL2D_KERNEL_SIZE, Maxpool2D, Pooling},
-        provable::{
+        activation::Activation, convolution::Convolution, pooling::{Maxpool2D, Pooling, MAXPOOL2D_KERNEL_SIZE}, provable::{
             Edge, NodeId, Op as DOP, OpInfo, ProvableModel, ProvableNode, ProvableOp,
             ProvableOpError,
-        },
+        }, Layer
     },
     model::Model,
     padding::PaddingMode,
-    quantization::Fieldizer,
+    quantization::Fieldizer, ModelType,
 };
 use anyhow::{Context, bail, ensure};
 use ff_ext::ExtensionField;
@@ -57,6 +53,7 @@ macro_rules! ensure_onnx {
     }
 
 pub fn from_path(path: &str) -> Result<ProvableModel<f32>, ProvableOpError> {
+    let model_type = ModelType::from_onnx(path).context("can't prove unknown model:")?;
     let model = {
         let pmodel = tract_onnx::onnx()
             .model_for_path(path)?
@@ -75,7 +72,7 @@ pub fn from_path(path: &str) -> Result<ProvableModel<f32>, ProvableOpError> {
     let input_node = onnx_model.node(inference_order[0]);
     let input_source = downcast_to::<TypedSource>(input_node)?;
     debug!("onnx input_source: {:?}", input_source.fact.shape.to_tvec());
-    let input_shape = input_source
+    let mut input_shape = input_source
         .fact
         .shape
         .to_tvec()
@@ -88,6 +85,17 @@ pub fn from_path(path: &str) -> Result<ProvableModel<f32>, ProvableOpError> {
             )),
         })
         .collect::<Result<Vec<_>, _>>()?;
+    match model_type {
+        ModelType::CNN | ModelType::MLP => {
+            assert!(
+                input_shape[0] == 1,
+                "First dimension of the CNNs or MLP's input should 1."
+            );
+            // We force the input shape to be for a single inference and not a batch inference.
+            input_shape.remove(0);
+        }
+    }
+    
     let mut pmodel =
         ProvableModel::new_from_input_shapes(vec![input_shape.to_vec()], PaddingMode::NoPadding);
     let mut it = inference_order[1..].iter();

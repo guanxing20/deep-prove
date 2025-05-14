@@ -1,13 +1,7 @@
 use std::collections::HashMap;
 
 use crate::{
-    Claim, VectorTranscript,
-    commit::{self, precommit},
-    iop::{ChallengeStorage, context::ShapeStep},
-    layers::provable::{NodeCtx, NodeId, ProvableOpError, ToIterator, VerifiableCtx},
-    lookup::{context::TableType, logup_gkr::verifier::verify_logup_proof},
-    tensor::Tensor,
-    try_unzip,
+    commit::{self, precommit}, iop::{context::ShapeStep, ChallengeStorage}, layers::{provable::{NodeCtx, NodeId, ProvableOpError, ToIterator, VerifiableCtx}, LayerProof}, lookup::{context::TableType, logup_gkr::verifier::verify_logup_proof}, tensor::Tensor, try_unzip, Claim, VectorTranscript
 };
 use anyhow::{anyhow, ensure};
 use ff_ext::ExtensionField;
@@ -16,7 +10,6 @@ use itertools::Itertools;
 use multilinear_extensions::mle::{IntoMLE, MultilinearExtension};
 
 use serde::{Serialize, de::DeserializeOwned};
-use tracing::info;
 use transcript::Transcript;
 
 use super::{Context, Proof, TableProof};
@@ -78,7 +71,11 @@ where
         });
 
         // iterate over the step proofs in reverse order w.r.t. proving
-        for (node_id, _) in ctx.steps_info.to_forward_iterator() {
+        for (node_id, node) in ctx.steps_info.to_forward_iterator() {
+            if !node.ctx.has_proof() {
+                // if the current node is not provable, there is no proof, so we can skip it
+                continue;
+            }
             let node_proof = proof
                 .steps
                 .get(&node_id)
@@ -150,7 +147,6 @@ where
             let shape_step = node_ctx
                 .ctx
                 .shape_step(&unpadded_input_shapes, &padded_input_shapes);
-            dbg!(node_id, &shape_step);
             shape_steps.insert(node_id, shape_step);
         }
 
@@ -158,10 +154,14 @@ where
         // We have two `HashSet`s, one for the type of table used and one for the lookup challenges used
         let mut claims_by_layer: HashMap<NodeId, Vec<Claim<E>>> = HashMap::new();
         for (node_id, step) in ctx.steps_info.to_backward_iterator() {
-            let node_proof = proof
+            let node_proof = if step.ctx.has_proof() {
+                proof
                 .steps
                 .get(&node_id)
-                .ok_or(anyhow!("Proof for node {} not found", node_id))?;
+                .ok_or(anyhow!("Proof for node {} not found", node_id))?
+            } else {
+                &LayerProof::Dummy
+            };
             let shape_step = shape_steps
                 .get(&node_id)
                 .ok_or(anyhow!("Shape for node {node_id} not found"))?;

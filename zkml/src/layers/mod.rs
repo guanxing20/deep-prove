@@ -31,7 +31,7 @@ use crate::{
     commit::precommit::PolyID,
     iop::context::{ContextAux, ShapeStep, TableCtx},
     layers::{
-        activation::{Activation, ActivationProof, Relu},
+        activation::{Activation, ActivationProof},
         convolution::Convolution,
         dense::Dense,
         pooling::Pooling,
@@ -95,7 +95,7 @@ where
     Activation(ActivationProof<E>),
     Requant(RequantProof<E>),
     Pooling(PoolingProof<E>),
-    Flatten,
+    Dummy, // To be used for non-provable layers
 }
 #[derive(Clone, Debug)]
 pub enum LayerOutput<F>
@@ -132,6 +132,14 @@ where
             _ => true,
         }
     }
+
+    pub fn has_proof(&self) -> bool {
+        match self {
+            Self::Flatten | Self::Table(_) | Self::SchoolBookConvolution(_) => false,
+            _ => true, 
+        }
+    }
+
     pub fn output_shape(&self, input_shape: &[usize], padding_mode: PaddingMode) -> Vec<usize> {
         match self {
             Self::Dense(ref dense) => dense.output_shape(input_shape, padding_mode),
@@ -698,7 +706,7 @@ where
             Self::Activation(_) => "Activation".to_string(),
             Self::Requant(_) => "Requant".to_string(),
             Self::Pooling(_) => "Pooling".to_string(),
-            Self::Flatten => "Reshape".to_string(),
+            Self::Dummy => "Dummy".to_string(),
         }
     }
 
@@ -706,10 +714,11 @@ where
         match self {
             LayerProof::Dense(..) => None,
             LayerProof::Convolution(..) => None,
-            LayerProof::Flatten => None,
+            LayerProof::Dummy => None,
             LayerProof::Activation(ActivationProof { lookup, .. })
-            | LayerProof::Requant(RequantProof { lookup, .. })
-            | LayerProof::Pooling(PoolingProof { lookup, .. }) => Some(lookup.fractional_outputs()),
+                    | LayerProof::Requant(RequantProof { lookup, .. })
+                    | LayerProof::Pooling(PoolingProof { lookup, .. }) => Some(lookup.fractional_outputs()),
+
         }
     }
 }

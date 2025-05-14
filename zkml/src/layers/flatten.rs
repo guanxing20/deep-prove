@@ -102,13 +102,3 @@ where
     N: Number,
 {
 }
-
-impl Flatten {
-    pub(crate) fn quantize(
-        &self,
-        _s: &ScalingFactor,
-        _bias_s: Option<&ScalingFactor>,
-    ) -> Layer<Element> {
-        Layer::Flatten(Flatten)
-    }
-}

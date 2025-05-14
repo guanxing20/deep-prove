@@ -244,7 +244,13 @@ where
     }
 
     pub(crate) fn add_node(&mut self, node: ProvableNode<N>) -> anyhow::Result<NodeId> {
-        let node_id = self.nodes.len() as NodeId;
+        let node_id = (0..self.nodes.len()+1).find_map(|i| 
+            if !self.nodes.contains_key(&i) {
+                Some(i)
+            } else {
+                None
+            }
+        ).ok_or(anyhow!("No valid node id found for new node"))?;
         self.add_node_with_id(node_id, node)?;
         Ok(node_id)
     }

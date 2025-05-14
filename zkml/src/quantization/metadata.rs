@@ -19,7 +19,7 @@ pub struct ModelMetadata {
     pub(crate) input_layers_scaling: HashMap<NodeId, Vec<ScalingFactor>>,
     pub(crate) output_layers_scaling: HashMap<NodeId, Vec<ScalingFactor>>,
     pub(crate) output: Vec<ScalingFactor>,
-    pub float_model: Option<Model<f32>>,
+    pub float_model: Option<ProvableModel<f32>>,
 }
 
 impl ModelMetadata {

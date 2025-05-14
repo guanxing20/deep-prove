@@ -137,6 +137,7 @@ impl ScalingStrategy for InferenceObserver {
         let mut requant_layers = vec![];
         let mut catch_err: Result<()> = Ok(());
         let nodes = model.into_forward_iterator().map(|(node_id, node)| {
+            println!("Quantizing node {node_id}");
             let input_scaling = node.inputs.iter().map(|edge| {
                 if let Some(n) = &edge.node {
                     let scalings = md.get_output_layer_scaling(n).ok_or(
