@@ -1,20 +1,13 @@
 use std::collections::HashMap;
 
 use crate::{
-    Claim, Element, Prover,
-    commit::{compute_betas_eval, identity_eval, precommit::PolyID, same_poly},
-    iop::{context::ShapeStep, verifier::Verifier},
-    layers::{ContextAux, LayerProof},
-    lookup::{
+    commit::{compute_betas_eval, identity_eval, precommit::PolyID, same_poly}, iop::{context::ShapeStep, verifier::Verifier}, layers::{ContextAux, LayerProof}, lookup::{
         context::{LookupWitnessGen, TableType},
         logup_gkr::{
             prover::batch_prove as logup_batch_prove, structs::LogUpProof,
             verifier::verify_logup_proof,
         },
-    },
-    padding::{PaddingMode, ShapeInfo, pooling},
-    quantization::{Fieldizer, IntoElement},
-    tensor::{Number, Tensor},
+    }, model::StepData, padding::{pooling, PaddingMode, ShapeInfo}, quantization::{Fieldizer, IntoElement}, tensor::{Number, Tensor}, Claim, Element, Prover
 };
 use anyhow::{Context, anyhow, ensure};
 use ff_ext::ExtensionField;
@@ -36,7 +29,7 @@ use super::{
     LayerCtx,
     provable::{
         Evaluate, LayerOut, NodeId, Op, OpInfo, PadOp, ProvableOp, ProvableOpError, ProveInfo,
-        StepData, VerifiableCtx,
+        VerifiableCtx,
     },
 };
 
@@ -189,7 +182,7 @@ where
         id: NodeId,
         ctx: &Self::Ctx,
         last_claims: Vec<&Claim<E>>,
-        step_data: &super::provable::StepData<E, E>,
+        step_data: &StepData<E, E>,
         prover: &mut Prover<E, T>,
     ) -> Result<Vec<Claim<E>>, super::provable::ProvableOpError> {
         Ok(vec![self.prove_pooling(

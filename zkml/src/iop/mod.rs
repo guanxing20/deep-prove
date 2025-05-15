@@ -85,7 +85,7 @@ mod test {
     use goldilocks::GoldilocksExt2;
 
     use crate::{
-        default_transcript, init_test_logging, layers::provable::ProvableModel,
+        default_transcript, init_test_logging, model::ProvableModel,
     };
 
     use super::{

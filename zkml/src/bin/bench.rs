@@ -5,10 +5,7 @@ use std::{
     path::Path,
     time,
 };
-use zkml::{
-    quantization::{AbsoluteMax, InferenceObserver, ModelMetadata, ScalingStrategy},
-    layers::provable::ProvableModel,
-};
+use zkml::{model::ProvableModel, quantization::{AbsoluteMax, InferenceObserver, ModelMetadata}};
 
 use anyhow::{Context as CC, ensure, Result};
 use clap::Parser;
@@ -223,21 +220,40 @@ fn run_float_model(raw_inputs: &InputJSON, model: &ProvableModel<f32>) -> Result
     Ok(calculate_average_accuracy(&accuracies))
 }
 
+fn read_model(args: &Args, inputs: &InputJSON) -> Result<(ProvableModel<Element>, ModelMetadata)> {
+    let calibration_inputs = inputs.filter(args.calibration_indices.as_ref());
+    match args.quantization.as_ref() {
+        "inference" => {
+            let strategy = InferenceObserver::new_with_representative_input(
+                calibration_inputs
+                    .input_data
+                    .iter()
+                    .map(|inp| vec![inp.clone()])
+                    .collect(),
+            );
+            FloatOnnxLoader::new_with_scaling_strategy(&args.onnx, strategy)
+                .with_keep_float(true)
+                .build()
+        },
+        "maxabs" => {
+            let strategy = AbsoluteMax::new();
+            FloatOnnxLoader::new_with_scaling_strategy(&args.onnx, strategy)
+                .with_keep_float(true)
+                .build()
+        },
+        _ => panic!("Unsupported quantization strategy: {}", args.quantization),
+    }
+}
+
 fn run(args: Args) -> anyhow::Result<()> {
     info!("[+] Reading raw input/output from {}", args.io);
     let run_inputs = InputJSON::from(&args.io, args.num_samples).context("loading input:")?;
-    let calibration_inputs = run_inputs.filter(args.calibration_indices.as_ref());
-    let run_inputs = run_inputs.filter(args.run_indices.as_ref());
-    let strategy = quantization_strategy_from(&args, &calibration_inputs);
-    let strat_name = strategy.name().to_string();
-    info!("[+] Reading onnx model");
-    let (model, md) = FloatOnnxLoader::new(&args.onnx)
-        .with_scaling_strategy(strategy)
-        .with_keep_float(true)
-        .build()?;
+    let (model, md) = read_model(&args, &run_inputs)?;
     info!("[+] Model loaded");
     model.describe();
-
+    
+    let run_inputs = run_inputs.filter(args.run_indices.as_ref());
+    
     // Get float accuracy if float model is available
     let float_accuracy = if let Some(ref float_model) = md.float_model {
         info!("[+] Running float model");
@@ -250,7 +266,7 @@ fn run(args: Args) -> anyhow::Result<()> {
     info!("[+] Computing PyTorch accuracy");
     let num_samples = run_inputs.output_data.len();
     let pytorch_accuracy = run_inputs.compute_pytorch_accuracy();
-    info!("[+] Quantizing inputs with strategy: {}", strat_name);
+    info!("[+] Quantizing inputs with strategy: {}", args.quantization);
     let (inputs, given_outputs) = run_inputs.to_elements(&md);
 
     // Generate context once and measure the time
@@ -474,18 +490,4 @@ fn calculate_average_accuracy(accuracies: &[usize]) -> f32 {
     }
     let sum: usize = accuracies.iter().sum();
     sum as f32 / accuracies.len() as f32
-}
-
-fn quantization_strategy_from(args: &Args, inputs: &InputJSON) -> Box<dyn ScalingStrategy> {
-    match args.quantization.as_ref() {
-        "inference" => Box::new(InferenceObserver::new_with_representative_input(
-            inputs
-                .input_data
-                .iter()
-                .map(|inp| vec![inp.clone()])
-                .collect(),
-        )),
-        "maxabs" => Box::new(AbsoluteMax::new()),
-        _ => panic!("Unsupported quantization strategy: {}", args.quantization),
-    }
 }

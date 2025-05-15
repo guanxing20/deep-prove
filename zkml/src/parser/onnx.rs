@@ -1,12 +1,10 @@
 use crate::{
     layers::{
         activation::Activation, convolution::Convolution, pooling::{Maxpool2D, Pooling, MAXPOOL2D_KERNEL_SIZE}, provable::{
-            Edge, NodeId, OpInfo, ProvableModel, ProvableNode,
+            Edge, NodeId, OpInfo, ProvableNode,
             ProvableOpError,
         }, Layer
-    },
-    padding::PaddingMode,
-    ModelType,
+    }, model::ProvableModel, padding::PaddingMode, ModelType
 };
 use anyhow::Context;
 use std::{collections::HashMap, iter::Peekable};

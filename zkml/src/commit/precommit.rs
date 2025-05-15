@@ -6,9 +6,7 @@
 use std::collections::HashMap;
 
 use crate::{
-    Claim, Element, VectorTranscript,
-    commit::{aggregated_rlc, compute_beta_eval_poly, compute_betas_eval},
-    layers::provable::{ProvableModel, ProveInfo},
+    commit::{aggregated_rlc, compute_beta_eval_poly, compute_betas_eval}, layers::provable::ProveInfo, model::ProvableModel, Claim, Element, VectorTranscript
 };
 use anyhow::{Context as CC, ensure};
 use ff_ext::ExtensionField;

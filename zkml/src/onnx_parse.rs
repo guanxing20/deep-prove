@@ -1,7 +1,7 @@
 use crate::{
     layers::{
-        convolution::conv2d_shape, pooling::{maxpool2d_shape}, provable::ProvableModel,
-    }, padding::pad_model, parser::onnx::from_path, quantization::{AbsoluteMax, ModelMetadata, ScalingStrategy}, Element
+        convolution::conv2d_shape, pooling::maxpool2d_shape,
+    }, model::ProvableModel, padding::pad_model, parser::onnx::from_path, quantization::{AbsoluteMax, ModelMetadata, ScalingStrategy}, Element
 };
 use anyhow::{Context, Error, Result, bail, ensure};
 use tract_onnx::prelude::*;
@@ -9,23 +9,31 @@ use tract_onnx::prelude::*;
 /// Utility struct for loading a onnx model with float weights and producing a quantized model
 /// that can be used for inference and proving.
 #[derive(Debug)]
-pub struct FloatOnnxLoader {
+pub struct FloatOnnxLoader<S: ScalingStrategy> {
     model_path: String,
-    scaling_strategy: Box<dyn ScalingStrategy>,
+    scaling_strategy: S,
     model_type: Option<ModelType>,
     keep_float: bool,
 }
 
-impl FloatOnnxLoader {
+pub type DefaultFloatOnnxLoader = FloatOnnxLoader<AbsoluteMax>;
+
+impl DefaultFloatOnnxLoader {
     pub fn new(model_path: &str) -> Self {
+        Self::new_with_scaling_strategy(model_path, AbsoluteMax::new())
+    }
+}
+
+impl<S: ScalingStrategy> FloatOnnxLoader<S> {
+    pub fn new_with_scaling_strategy(model_path: &str, scaling_strategy: S) -> Self {
         Self {
             model_path: model_path.to_string(),
-            scaling_strategy: Box::new(AbsoluteMax::new()),
+            scaling_strategy,
             model_type: None,
             keep_float: false,
         }
     }
-    pub fn with_scaling_strategy(mut self, scaling_strategy: Box<dyn ScalingStrategy>) -> Self {
+    pub fn with_scaling_strategy(mut self, scaling_strategy: S) -> Self {
         self.scaling_strategy = scaling_strategy;
         self
     }
@@ -330,9 +338,11 @@ mod tests {
         init_test_logging();
         let filepath = "assets/scripts/CNN/cnn-cifar-01.onnx";
         ModelType::CNN.validate(filepath).unwrap();
-        let result = FloatOnnxLoader::new(&filepath)
+        let result = FloatOnnxLoader::new_with_scaling_strategy(
+            &filepath,
+        InferenceObserver::new(),
+        )
         .with_model_type(ModelType::CNN)
-        .with_scaling_strategy(Box::new(InferenceObserver::new()))
         .build();
         
         assert!(result.is_ok(), "Failed: {:?}", result.unwrap_err());

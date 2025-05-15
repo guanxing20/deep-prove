@@ -15,26 +15,19 @@ use ff_ext::ExtensionField;
 use flatten::Flatten;
 use pooling::{PoolingCtx, PoolingProof};
 use provable::{
-    quantize_op, Evaluate, LayerOut, Op, OpInfo, PadOp, ProvableNode, ProvableOp, ProvableOpError, ProveInfo, QuantizationStrategy, QuantizeOp, QuantizeOutput, StepData
+    quantize_op, Evaluate, LayerOut, Op, OpInfo, PadOp, ProvableNode, ProvableOp, ProvableOpError, ProveInfo, QuantizeOp, QuantizeOutput,
 };
 use requant::RequantCtx;
 use transcript::Transcript;
 
 use crate::{
-    Element,
-    commit::precommit::PolyID,
-    iop::context::{ContextAux, ShapeStep, TableCtx},
-    layers::{
+    commit::precommit::PolyID, iop::context::{ContextAux, ShapeStep, TableCtx}, layers::{
         activation::{Activation, ActivationProof},
         convolution::Convolution,
         dense::Dense,
         pooling::Pooling,
         requant::{Requant, RequantProof},
-    },
-    lookup::context::LookupWitnessGen,
-    padding::{PaddingMode, ShapeInfo},
-    quantization::ScalingFactor,
-    tensor::{Number, Tensor},
+    }, lookup::context::LookupWitnessGen, model::StepData, padding::{PaddingMode, ShapeInfo}, quantization::ScalingFactor, tensor::{Number, Tensor}, Element, ScalingStrategy
 };
 use activation::ActivationCtx;
 use convolution::{ConvCtx, ConvProof, SchoolBookConv, SchoolBookConvCtx};
@@ -382,7 +375,7 @@ where
         node_id: provable::NodeId,
         ctx: &Self::Ctx,
         last_claims: Vec<&crate::Claim<E>>,
-        step_data: &provable::StepData<E, E>,
+        step_data: &StepData<E, E>,
         prover: &mut crate::Prover<E, T>,
     ) -> Result<Vec<crate::Claim<E>>, ProvableOpError> {
         match self {
@@ -465,22 +458,22 @@ where
 {
 }
 
-impl<Q: QuantizationStrategy> QuantizeOp<Q> for Layer<f32> 
+impl<S: ScalingStrategy> QuantizeOp<S> for Layer<f32> 
 where 
-    Dense<f32>: QuantizeOp<Q, QuantizedOp = Dense<Element>>,
-    Convolution<f32>: QuantizeOp<Q, QuantizedOp = Convolution<Element>>,
+    Dense<f32>: QuantizeOp<S, QuantizedOp = Dense<Element>>,
+    Convolution<f32>: QuantizeOp<S, QuantizedOp = Convolution<Element>>,
 {
     type QuantizedOp = Layer<Element>;
 
     fn quantize_op(
         self,
-        tracker: &Q::AuxData,
+        tracker: &S::AuxData,
         node_id: provable::NodeId,
         input_scaling: &[ScalingFactor],
     ) -> anyhow::Result<QuantizeOutput<Self::QuantizedOp>> {
         Ok(match self {
             Layer::Dense(dense) => {
-                let output = quantize_op::<Q, _>(dense, tracker, node_id, input_scaling)?;
+                let output = quantize_op::<S, _>(dense, tracker, node_id, input_scaling)?;
                 QuantizeOutput {
                     quanzited_op: Layer::Dense(output.quanzited_op),
                     output_scalings: output.output_scalings,
@@ -488,7 +481,7 @@ where
                 }
             }
             Layer::Convolution(convolution) => {
-                let output = quantize_op::<Q, _>(convolution, tracker, node_id, input_scaling)?;
+                let output = quantize_op::<S, _>(convolution, tracker, node_id, input_scaling)?;
                 QuantizeOutput {
                     quanzited_op: Layer::Convolution(output.quanzited_op),
                     output_scalings: output.output_scalings,
@@ -496,7 +489,7 @@ where
                 }
             }
             Layer::SchoolBookConvolution(school_book_conv) => {
-                let output = quantize_op::<Q, _>(school_book_conv, tracker, node_id, input_scaling)?;
+                let output = quantize_op::<S, _>(school_book_conv, tracker, node_id, input_scaling)?;
                 QuantizeOutput {
                     quanzited_op: Layer::SchoolBookConvolution(output.quanzited_op),
                     output_scalings: output.output_scalings,

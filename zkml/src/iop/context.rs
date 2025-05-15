@@ -1,11 +1,7 @@
 use crate::{
-    Element,
-    iop::precommit::{self, PolyID},
-    layers::{
-        LayerCtx,
-        provable::{ModelCtx, NodeCtx, NodeId, OpInfo, ProvableModel, ToIterator},
-    },
-    lookup::context::{LookupContext, TableType},
+    iop::precommit::{self, PolyID}, layers::{
+        provable::{NodeCtx, NodeId, OpInfo}, LayerCtx
+    }, lookup::context::{LookupContext, TableType}, model::{ModelCtx, ProvableModel, ToIterator}, Element
 };
 use anyhow::{Context as CC, anyhow, ensure};
 use ff_ext::ExtensionField;

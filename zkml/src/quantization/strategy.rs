@@ -1,11 +1,7 @@
 use crate::{
     layers::{convolution::Convolution, dense::Dense, provable::{
-        quantize_op, NodeId, ProvableModel, ProvableNode, QuantizationStrategy, QuantizeOp, ToIterator
-    }},
-    quantization::{
-        metadata::{MetadataBuilder, ModelMetadata},
-    },
-    tensor::Number,
+        quantize_op, NodeId, ProvableNode, QuantizeOp,
+    }}, model::{ProvableModel, ToIterator}, quantization::metadata::{MetadataBuilder, ModelMetadata}, tensor::Number
 };
 use std::collections::HashMap;
 
@@ -26,17 +22,12 @@ use super::ScalingFactor;
 /// simply looks at the absolute maximum value of the model and uses that as the scaling factor
 /// to quantize the model, one scaling factor per layer.
 pub trait ScalingStrategy: std::fmt::Debug {
+    type AuxData: Sized;
+
     fn quantize(
         &self,
         model: ProvableModel<f32>,
     ) -> Result<(ProvableModel<Element>, ModelMetadata)>;
-    // {
-    // ToDo: replace this implementation with an actual one
-    // let input_not_padded_shape = model.unpadded_input_shape();
-    // let model = ProvableModel::new_from_input_shapes(vec![input_not_padded_shape], PaddingMode::NoPadding);
-    // let md = MetadataBuilder::new(ScalingFactor::default());
-    // Ok((model, md.build()))
-    // }
 
     fn name(&self) -> String;
 }
@@ -58,12 +49,10 @@ impl InferenceObserver {
     }
 }
 
-impl QuantizationStrategy for InferenceObserver {
-    type AuxData = InferenceTracker;
-}
-
 const INPUT_TRACKING_ID: usize = 10_000;
 impl ScalingStrategy for InferenceObserver {
+    type AuxData = InferenceTracker;
+
     fn name(&self) -> String {
         format!("inference [{},{}]", *quantization::MIN, *quantization::MAX)
     }
@@ -177,11 +166,9 @@ impl AbsoluteMax {
     }
 }
 
-impl QuantizationStrategy for AbsoluteMax {
-    type AuxData = ();
-}
-
 impl ScalingStrategy for AbsoluteMax {
+    type AuxData = ();
+
     fn name(&self) -> String {
         "absolute_max".to_string()
     }
@@ -213,14 +200,14 @@ impl ScalingStrategy for AbsoluteMax {
      }
 }
 
-fn quantize_model<Q: QuantizationStrategy>(
+fn quantize_model<S: ScalingStrategy>(
     model: ProvableModel<f32>,
-    data: Q::AuxData,
+    data: S::AuxData,
     input_scaling: Vec<ScalingFactor>,
 ) -> anyhow::Result<(ProvableModel<Element>, ModelMetadata)> 
 where 
-    Dense<f32>: QuantizeOp<Q, QuantizedOp = Dense<Element>>,
-    Convolution<f32>: QuantizeOp<Q, QuantizedOp = Convolution<Element>>,
+    Dense<f32>: QuantizeOp<S, QuantizedOp = Dense<Element>>,
+    Convolution<f32>: QuantizeOp<S, QuantizedOp = Convolution<Element>>,
 {
     let input_shapes = model.input_shapes();
     let input_not_padded_shapes = model.unpadded_input_shapes();
@@ -230,7 +217,7 @@ where
     let mut catch_err: Result<()> = Ok(());
     let nodes = model.into_forward_iterator().map(|(node_id, node)| {
         let input_scaling = md.compute_input_scaling(&node.inputs)?;
-        let quantized_out = quantize_op::<Q, _>(node.operation, &data, node_id, &input_scaling)?;
+        let quantized_out = quantize_op::<S, _>(node.operation, &data, node_id, &input_scaling)?;
         md.set_layers_scaling(node_id, quantized_out.output_scalings, input_scaling);
         if let Some(requant) = quantized_out.requant_layer {
             requant_layers.push((node_id, requant));

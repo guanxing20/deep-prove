@@ -4,7 +4,7 @@ use crate::{
     iop::{
         context::{ContextAux, ShapeStep},
         verifier::Verifier,
-    }, layers::{requant::Requant, LayerCtx, LayerProof, PolyID}, padding::{pad_dense, PaddingMode, ShapeInfo}, quantization::{self, AbsoluteMax, InferenceObserver, InferenceTracker, ScalingFactor, BIT_LEN}, tensor::Number, Claim, NextPowerOfTwo, Prover
+    }, layers::{requant::Requant, LayerCtx, LayerProof, PolyID}, model::StepData, padding::{pad_dense, PaddingMode, ShapeInfo}, quantization::{self, AbsoluteMax, InferenceObserver, InferenceTracker, ScalingFactor, BIT_LEN}, tensor::Number, Claim, NextPowerOfTwo, Prover
 };
 use anyhow::{Context, ensure};
 use ff_ext::ExtensionField;
@@ -317,7 +317,7 @@ where
         id: NodeId,
         ctx: &Self::Ctx,
         last_claims: Vec<&Claim<E>>,
-        step_data: &super::provable::StepData<E, E>,
+        step_data: &StepData<E, E>,
         prover: &mut Prover<E, T>,
     ) -> Result<Vec<Claim<E>>, ProvableOpError> {
         Ok(vec![self.prove_step(

@@ -1,14 +1,8 @@
 use crate::{
-    Claim, Prover, Tensor,
-    commit::same_poly,
-    iop::{context::ShapeStep, verifier::Verifier},
-    layers::LayerProof,
-    lookup::{
+    commit::same_poly, iop::{context::ShapeStep, verifier::Verifier}, layers::LayerProof, lookup::{
         context::LookupWitnessGen,
         logup_gkr::{prover::batch_prove as logup_batch_prove, verifier::verify_logup_proof},
-    },
-    padding::PaddingMode,
-    quantization,
+    }, model::StepData, padding::PaddingMode, quantization, Claim, Prover, Tensor
 };
 use anyhow::{Result, anyhow, ensure};
 use ff::Field;
@@ -37,7 +31,7 @@ use super::{
     LayerCtx,
     provable::{
         Evaluate, LayerOut, NodeId, Op, OpInfo, PadOp, ProvableOp, ProvableOpError, ProveInfo,
-        StepData, VerifiableCtx,
+        VerifiableCtx,
     },
 };
 
@@ -179,7 +173,7 @@ where
         id: NodeId,
         ctx: &Self::Ctx,
         last_claims: Vec<&Claim<E>>,
-        step_data: &super::provable::StepData<E, E>,
+        step_data: &StepData<E, E>,
         prover: &mut Prover<E, T>,
     ) -> std::result::Result<Vec<Claim<E>>, ProvableOpError> {
         Ok(vec![self.prove_step(

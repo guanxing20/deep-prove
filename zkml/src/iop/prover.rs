@@ -2,17 +2,12 @@ use std::collections::HashMap;
 
 use super::{ChallengeStorage, Context, Proof, TableProof};
 use crate::{
-    Claim, Element, VectorTranscript,
-    commit::{compute_betas_eval, precommit},
-    layers::{
-        LayerProof,
-        provable::{InferenceStep, InferenceTrace, NodeId, OpInfo, ProvableOp, ToIterator},
-    },
-    lookup::{
-        context::{TABLE_POLY_ID_OFFSET, generate_lookup_witnesses},
+    commit::{compute_betas_eval, precommit}, layers::{
+        provable::{NodeId, OpInfo, ProvableOp}, LayerProof
+    }, lookup::{
+        context::{generate_lookup_witnesses, TABLE_POLY_ID_OFFSET},
         logup_gkr::{prover::batch_prove as logup_batch_prove, structs::LogUpInput},
-    },
-    tensor::get_root_of_unity,
+    }, model::{InferenceStep, InferenceTrace, ToIterator}, tensor::get_root_of_unity, Claim, Element, VectorTranscript
 };
 use anyhow::anyhow;
 use ff_ext::ExtensionField;

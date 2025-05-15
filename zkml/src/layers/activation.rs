@@ -1,23 +1,16 @@
 use std::collections::HashMap;
 
 use crate::{
-    Claim, Element, Prover,
-    commit::same_poly,
-    iop::{
+    commit::same_poly, iop::{
         context::{ContextAux, ShapeStep},
         verifier::Verifier,
-    },
-    layers::{LayerCtx, LayerProof, PolyID},
-    lookup::{
-        context::{COLUMN_SEPARATOR, LookupWitnessGen, TableType},
+    }, layers::{LayerCtx, LayerProof, PolyID}, lookup::{
+        context::{LookupWitnessGen, TableType, COLUMN_SEPARATOR},
         logup_gkr::{
             prover::batch_prove as logup_batch_prove, structs::LogUpProof,
             verifier::verify_logup_proof,
         },
-    },
-    padding::PaddingMode,
-    quantization::Fieldizer,
-    tensor::Number,
+    }, model::StepData, padding::PaddingMode, quantization::Fieldizer, tensor::Number, Claim, Element, Prover
 };
 use ff_ext::ExtensionField;
 use gkr::util::ceil_log2;
@@ -30,7 +23,7 @@ use crate::{quantization::BIT_LEN, tensor::Tensor};
 
 use super::provable::{
     Evaluate, LayerOut, NodeId, Op, OpInfo, PadOp, ProvableOp, ProvableOpError, ProveInfo,
-    StepData, VerifiableCtx,
+    VerifiableCtx,
 };
 
 use anyhow::{anyhow, ensure};
@@ -152,7 +145,7 @@ where
         id: NodeId,
         ctx: &Self::Ctx,
         last_claims: Vec<&Claim<E>>,
-        step_data: &super::provable::StepData<E, E>,
+        step_data: &StepData<E, E>,
         prover: &mut Prover<E, T>,
     ) -> Result<Vec<Claim<E>>, ProvableOpError> {
         Ok(vec![self.prove_step(

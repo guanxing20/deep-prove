@@ -1,5 +1,5 @@
 use crate::{
-    iop::context::ShapeStep, layers::{hadamard, requant::Requant}, padding::{pad_conv, PaddingMode, ShapeInfo}, quantization::{AbsoluteMax, InferenceObserver, InferenceTracker, TensorFielder, BIT_LEN}, VectorTranscript
+    iop::context::ShapeStep, layers::{hadamard, requant::Requant}, model::StepData, padding::{pad_conv, PaddingMode, ShapeInfo}, quantization::{AbsoluteMax, InferenceObserver, InferenceTracker, TensorFielder, BIT_LEN}, ScalingStrategy, VectorTranscript
 };
 use core::f32;
 
@@ -32,7 +32,7 @@ use transcript::Transcript;
 
 use super::{
     provable::{
-        Evaluate, LayerOut, NodeId, Op, OpInfo, PadOp, ProvableOp, ProvableOpError, ProveInfo, QuantizationStrategy, QuantizeOp, QuantizeOutput, VerifiableCtx
+        Evaluate, LayerOut, NodeId, Op, OpInfo, PadOp, ProvableOp, ProvableOpError, ProveInfo, QuantizeOp, QuantizeOutput, VerifiableCtx
     }, LayerCtx
 };
 
@@ -593,7 +593,7 @@ impl QuantizeOp<AbsoluteMax> for Convolution<f32> {
 
     fn quantize_op(
         self,
-        _: &<AbsoluteMax as super::provable::QuantizationStrategy>::AuxData,
+        _: &<AbsoluteMax as ScalingStrategy>::AuxData,
         _node_id: NodeId,
         input_scaling: &[ScalingFactor],
     ) -> anyhow::Result<QuantizeOutput<Self::QuantizedOp>> {
@@ -625,7 +625,7 @@ where
         id: NodeId,
         ctx: &Self::Ctx,
         last_claims: Vec<&Claim<E>>,
-        step_data: &super::provable::StepData<E, E>,
+        step_data: &StepData<E, E>,
         prover: &mut Prover<E, T>,
     ) -> Result<Vec<Claim<E>>, ProvableOpError> {
         Ok(vec![self.prove_convolution_step(
@@ -1416,12 +1416,12 @@ where
 }
 
 
-impl<Q: QuantizationStrategy> QuantizeOp<Q> for SchoolBookConv<f32> {
+impl<S: ScalingStrategy> QuantizeOp<S> for SchoolBookConv<f32> {
     type QuantizedOp = SchoolBookConv<Element>;
 
     fn quantize_op(
         self,
-        _: &<Q as QuantizationStrategy>::AuxData,
+        _: &<S as ScalingStrategy>::AuxData,
         _node_id: NodeId,
         input_scaling: &[ScalingFactor],
     ) -> anyhow::Result<QuantizeOutput<Self::QuantizedOp>> {

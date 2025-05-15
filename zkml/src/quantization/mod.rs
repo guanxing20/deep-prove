@@ -129,7 +129,7 @@ impl Default for ScalingFactor {
     }
 }
 
-pub(crate) trait Fieldizer<F> {
+pub trait Fieldizer<F> {
     fn to_field(&self) -> F;
 }
 

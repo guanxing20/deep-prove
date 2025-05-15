@@ -1,5 +1,4 @@
 mod error;
-mod model;
 
 use anyhow::{Result, anyhow, ensure};
 use ff_ext::ExtensionField;
@@ -11,15 +10,10 @@ use std::{
 use transcript::Transcript;
 
 use crate::{
-    Claim, Element, Prover, ScalingFactor, Tensor,
-    commit::precommit::PolyID,
-    iop::{
+    commit::precommit::PolyID, iop::{
         context::{ContextAux, ShapeStep},
         verifier::Verifier,
-    },
-    lookup::context::LookupWitnessGen,
-    padding::{PaddingMode, ShapeInfo},
-    tensor::{ConvData, Number},
+    }, lookup::context::LookupWitnessGen, model::trace::StepData, padding::{PaddingMode, ShapeInfo}, tensor::{ConvData, Number}, Claim, Element, Prover, ScalingFactor, ScalingStrategy, Tensor
 };
 
 use super::{Layer, LayerCtx, LayerProof, flatten::Flatten, requant::Requant};
@@ -27,7 +21,6 @@ use super::{Layer, LayerCtx, LayerProof, flatten::Flatten, requant::Requant};
 pub(crate) type NodeId = usize;
 
 pub use error::ProvableOpError;
-pub use model::{InferenceTrace, ModelCtx, ProvableModel, ToIterator};
 
 /// Represents a link between an input/output wire of a node with an input/output wire of
 /// another node.
@@ -61,6 +54,7 @@ pub struct OutputWire {
     pub(crate) edges: Vec<Edge>,
 }
 
+/// Represents a node in a model
 #[derive(Clone, Debug)]
 pub struct ProvableNode<N> {
     pub(crate) inputs: Vec<Edge>,
@@ -68,8 +62,10 @@ pub struct ProvableNode<N> {
     pub(crate) operation: Layer<N>,
 }
 
-pub(crate) trait NodeEgdes {
+pub trait NodeEgdes {
+    // Get input edges for a node
     fn inputs(&self) -> &[Edge];
+    // Get output edges of a node
     fn outputs(&self) -> &[OutputWire];
 }
 
@@ -97,7 +93,8 @@ where
 }
 
 impl<N: Number> ProvableNode<N> {
-    pub(crate) fn new(inputs: Vec<Edge>, operation: Layer<N>) -> Self {
+    // Create a new node, from the set of inputs edges and the operation performed by the node
+    pub fn new(inputs: Vec<Edge>, operation: Layer<N>) -> Self {
         let num_outputs = operation.num_outputs(inputs.len());
         Self::new_with_outputs(inputs, operation, vec![Default::default(); num_outputs])
     }
@@ -115,14 +112,8 @@ impl<N: Number> ProvableNode<N> {
     }
 }
 
-// pub struct ProvableNode<E, T, D> {
-// inputs: Vec<Edge>,
-// input_shape: Vec<usize>,
-// outputs: Vec<OutputWire>,
-// output_shape: Vec<usize>,
-// pub(crate) operation: Box<dyn ProvableOp<E, T, D>>,
-// }
-
+/// Represents the output of the evaluation of a node operation
+#[derive(Clone, Debug)]
 pub struct LayerOut<T, E: ExtensionField> {
     pub(crate) outputs: Vec<Tensor<T>>,
     pub(crate) proving_data: Option<ConvData<E>>,
@@ -140,6 +131,8 @@ impl<T, E: ExtensionField> LayerOut<T, E> {
         self.outputs.iter().collect()
     }
 }
+/// Represents the proving context for a given node, altogether with the input
+/// and output edges of the node
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(bound(serialize = "E: Serialize", deserialize = "E: DeserializeOwned"))]
 pub struct NodeCtx<E>
@@ -157,6 +150,10 @@ where
     E: ExtensionField + DeserializeOwned,
     E::BaseField: Serialize + DeserializeOwned,
 {
+    /// Get the claims corresponding to the output edges of a node.
+    /// Requires the input claims for the nodes of the model using the
+    /// outputs of the current node, and the claims of the output 
+    /// tensors of the model
     pub(crate) fn get_claims_for_node<'a,'b>(
         &self,
         claims_by_node: &'a HashMap<NodeId, Vec<Claim<E>>>,
@@ -193,6 +190,10 @@ where
         }).collect()
     }
 
+    /// Get the claims corresponding to the input tensors of the model.
+    /// Requires as inputs the contexts for all the nodes in the model
+    /// and the set of claims for the input tensors of all the nodes of
+    /// the model
     pub(crate) fn input_claims<'a, I: Iterator<Item = (&'a NodeId, &'a Self)>>(
         nodes: I,
         claims_by_node: &HashMap<NodeId, Vec<Claim<E>>>,
@@ -231,10 +232,14 @@ pub trait OpInfo {
         padding_mode: PaddingMode,
     ) -> Vec<Vec<usize>>;
 
+    /// Compute the number of output tensors, given the number of input tensors 
+    /// `num_inputs`
     fn num_outputs(&self, num_inputs: usize) -> usize;
 
+    /// Textual description of the operation
     fn describe(&self) -> String;
 
+    /// Specify whether the operation needs to be proven or not
     fn is_provable(&self) -> bool;
 }
 
@@ -262,19 +267,19 @@ where
     E: ExtensionField + DeserializeOwned,
     E::BaseField: Serialize + DeserializeOwned,
 {
+    /// Compute the proving context for the operation
     fn step_info(
         &self,
         id: PolyID,
         aux: ContextAux,
     ) -> Result<(LayerCtx<E>, ContextAux), ProvableOpError>;
 
+    /// Compute the data necessary to commit to the constant polynomials
+    /// associated to the operation. Returns `None` if there are no 
+    /// constant polynomials to be committed for the given operation 
     fn commit_info(&self, _id: NodeId) -> Vec<Option<(PolyID, Vec<E>)>> {
         vec![None]
     }
-}
-
-pub trait QuantizationStrategy {
-    type AuxData: Sized;
 }
 
 /// Output of `QuantizeOp` method over a layer
@@ -287,12 +292,13 @@ pub struct QuantizeOutput<Op> {
     pub(crate) requant_layer: Option<Requant>,
 }
 
-pub trait QuantizeOp<Q: QuantizationStrategy> {
+pub trait QuantizeOp<S: ScalingStrategy> {
     type QuantizedOp: Sized;
 
+    /// Convert an operation into its quantized version
     fn quantize_op(
         self,
-        data: &Q::AuxData,
+        data: &S::AuxData,
         node_id: NodeId,
         input_scaling: &[ScalingFactor],
     ) -> anyhow::Result<QuantizeOutput<Self::QuantizedOp>>;
@@ -300,9 +306,9 @@ pub trait QuantizeOp<Q: QuantizationStrategy> {
 
 /// Helper method employed to call `QuantizeOp::quantize_op` when the `QuantizationStrategy` type
 /// canno be inferred automatically
-pub fn quantize_op<Q: QuantizationStrategy, O: QuantizeOp<Q>>(
+pub fn quantize_op<S: ScalingStrategy, O: QuantizeOp<S>>(
     op: O,
-    data: &Q::AuxData,
+    data: &S::AuxData,
     node_id: NodeId,
     input_scaling: &[ScalingFactor],
 ) -> anyhow::Result<QuantizeOutput<O::QuantizedOp>> {
@@ -374,6 +380,7 @@ where
 {
     type Proof: Sized;
 
+    /// Verify proof for the given operation
     fn verify<T: Transcript<E>>(
         &self,
         proof: &Self::Proof,
@@ -382,6 +389,8 @@ where
         shape_step: &ShapeStep,
     ) -> Result<Vec<Claim<E>>, ProvableOpError>;
 
+    /// Compute the shapes of the output tensors, given the shapes of the input tensors
+    /// and the padding mode
     fn output_shapes(
         &self,
         input_shapes: &[Vec<usize>],
@@ -389,6 +398,8 @@ where
     ) -> Vec<Vec<usize>>;
 }
 
+// Helper method to call `VerifiableCtx::output_shapes` when the type `E`
+// cannot be inferred automatically by the compiler
 pub(crate) fn output_shapes<E: ExtensionField, C: VerifiableCtx<E>>(
     ctx: &C,
     input_shapes: &[Vec<usize>],
@@ -488,21 +499,4 @@ where
             _ => unreachable!(),
         }
     }
-}
-
-pub struct InferenceStep<'a, E: ExtensionField, N, D> {
-    pub(crate) op: &'a Layer<N>,
-    pub(crate) step_data: StepData<D, E>,
-}
-
-impl<'a, E: ExtensionField, N, D> InferenceStep<'a, E, N, D> {
-    pub fn outputs(&self) -> Vec<&Tensor<D>> {
-        self.step_data.outputs.outputs()
-    }
-}
-
-pub struct StepData<D, E: ExtensionField> {
-    pub(crate) inputs: Vec<Tensor<D>>,
-    pub(crate) outputs: LayerOut<D, E>,
-    pub(crate) unpadded_output_shapes: Vec<Vec<usize>>,
 }
