@@ -421,6 +421,7 @@ impl Dense<Element> {
         let max = 2u64.pow(power as u32) as Element;
         return (min, max);
     }
+    #[timed::timed_instrument(name = "Prover::prove_dense")]
     pub fn prove_step<'b, E, T>(
         &self,
         prover: &mut Prover<E, T>,

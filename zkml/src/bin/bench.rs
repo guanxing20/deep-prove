@@ -5,6 +5,7 @@ use std::{
     path::Path,
     time,
 };
+use timed_core::Output;
 use zkml::{model::ProvableModel, quantization::{AbsoluteMax, InferenceObserver, ModelMetadata}};
 
 use anyhow::{Context as CC, ensure, Result};
@@ -68,6 +69,7 @@ pub fn main() -> anyhow::Result<()> {
         .finish();
 
     tracing::subscriber::set_global_default(subscriber).expect("Failed to set global subscriber");
+    timed_core::set_output(Output::CSV("deepprove.csv".to_string()));
     let args = Args::parse();
     run(args).context("error running bench:")?;
 
@@ -248,6 +250,7 @@ fn read_model(args: &Args, inputs: &InputJSON) -> Result<(ProvableModel<Element>
 fn run(args: Args) -> anyhow::Result<()> {
     info!("[+] Reading raw input/output from {}", args.io);
     let run_inputs = InputJSON::from(&args.io, args.num_samples).context("loading input:")?;
+    info!("[+] Found {} IO samples", run_inputs.input_data.len());
     let (model, md) = read_model(&args, &run_inputs)?;
     info!("[+] Model loaded");
     model.describe();

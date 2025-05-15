@@ -569,7 +569,7 @@ impl<T> Tensor<T> {
     pub fn new(shape: Vec<usize>, data: Vec<T>) -> Self {
         assert!(
             shape.iter().product::<usize>() == data.len(),
-            "Shape does not match data length: shape {:?}->{}vs data.len() {}",
+            "Shape does not match data length: shape {:?}->{} vs data.len() {}",
             shape,
             shape.iter().product::<usize>(),
             data.len()

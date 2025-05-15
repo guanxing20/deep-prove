@@ -270,6 +270,7 @@ where
 }
 
 impl Activation {
+    #[timed::timed_instrument(name = "Prover::prove_activation_step")]
     pub(crate) fn prove_step<E: ExtensionField, T: Transcript<E>>(
         &self,
         prover: &mut Prover<E, T>,

@@ -14,7 +14,7 @@ use ark_std::rand;
 use goldilocks::GoldilocksExt2;
 use itertools::Itertools;
 use statrs::statistics::{Data, Max, Min, OrderStatistics};
-use tracing::info;
+use tracing::{debug, info, warn};
 
 use super::ScalingFactor;
 
@@ -65,6 +65,7 @@ impl ScalingStrategy for InferenceObserver {
         let input_shapes = model.input_shapes();
         let input_not_padded_shapes = model.unpadded_input_shapes();
         let inputs = if self.inputs.is_empty() {
+            warn!("No representative inputs provided, generating random ones");
             (0..10)
                 .map(|_| {
                     input_shapes
@@ -79,6 +80,7 @@ impl ScalingStrategy for InferenceObserver {
                 })
                 .collect()
         } else {
+            debug!("Using provided representative inputs");
             self.inputs.clone()
         };
         // 1. Run the inference multiple times with different inputs

@@ -151,6 +151,8 @@ where
     /// Textual description of the model
     pub fn describe(&self) {
         info!("Model description:");
+        info!("Unpadded input shapes: {:?}", self.unpadded_input_shapes);
+        info!("Padded input shapes: {:?}", self.padded_input_shapes());
         for (idx, layer) in self.to_forward_iterator() {
             info!("\t- {}: {:?}", idx, layer.inputs);
             info!("\t- {}: {}", idx, layer.operation.describe());

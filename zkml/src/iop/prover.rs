@@ -447,7 +447,7 @@ where
     }
 
     /// Looks at all the individual polys to accumulate from the witnesses and create the context from that.
-    #[timed_instrument(level = "debug")]
+    #[timed_instrument]
     fn instantiate_witness_ctx<'b>(
         &mut self,
         trace: &InferenceTrace<'b, E, Element>,

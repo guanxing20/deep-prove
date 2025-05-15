@@ -11,12 +11,11 @@ use gkr::util::ceil_log2;
 use itertools::Itertools;
 use multilinear_extensions::mle::IntoMLE;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use statrs::statistics::{Data, Distribution};
 use std::{
     collections::HashMap,
     ops::{Add, Mul, Sub},
 };
-use tracing::{debug, warn};
+use tracing::warn;
 use transcript::Transcript;
 
 use crate::{
@@ -309,25 +308,26 @@ impl Requant {
                 }
             })
             .collect_vec();
-        let d = Data::new(res.iter().map(|e| *e as f64).collect_vec());
         // Debug information to uncomment when debugging scaling factor. Sometimes the right shift is too high
         // and we can observe values being null'd, e.g. set to 0 very quickly. Which messes up the distribution and
         // thus the inference.
-        let stats = (d.mean().unwrap(), d.variance().unwrap());
-        debug!(
-            "AFTER REQUANT: shift {} : {:.2} % OUT OF RANGE (over total {})-> stats mean {:?} var {:?} \n\t->{:?}\n\t->{:?}",
-            self.right_shift,
-            not_ok_count as f32 / res.len() as f32 * 100.0,
-            res.len(),
-            stats.0,
-            stats.1,
-            &input.get_data()[..10.min(input.get_data().len())],
-            &res[..10.min(res.len())],
-        );
-        // ensure!(
-        //    not_ok_count == 0,
-        //    "Requantization led to out of range values"
-        //);
+        #[cfg(test)]
+        {
+            use statrs::statistics::{Data, Distribution};
+            use tracing::debug;
+            let d = Data::new(res.iter().map(|e| *e as f64).collect_vec());
+            let stats = (d.mean().unwrap(), d.variance().unwrap());
+            debug!(
+                "AFTER REQUANT: shift {} : {:.2} % OUT OF RANGE (over total {})-> stats mean {:?} var {:?} \n\t->{:?}\n\t->{:?}",
+                self.right_shift,
+                not_ok_count as f32 / res.len() as f32 * 100.0,
+                res.len(),
+                stats.0,
+                stats.1,
+                &input.get_data()[..10.min(input.get_data().len())],
+                &res[..10.min(res.len())],
+            );
+        }
         Ok(crate::tensor::Tensor::<Element>::new(
             input.get_shape(),
             res,
@@ -546,6 +546,7 @@ impl Requant {
             );
         tmp_eval - E::from(max_bit as u64)
     }
+    #[timed::timed_instrument(name = "Prover::prove_requant")]
     pub(crate) fn prove_step<E: ExtensionField, T: Transcript<E>>(
         &self,
         prover: &mut Prover<E, T>,
