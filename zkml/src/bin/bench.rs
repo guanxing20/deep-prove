@@ -6,9 +6,12 @@ use std::{
     time,
 };
 use timed_core::Output;
-use zkml::{model::ProvableModel, quantization::{AbsoluteMax, InferenceObserver, ModelMetadata}};
+use zkml::{
+    model::Model,
+    quantization::{AbsoluteMax, InferenceObserver, ModelMetadata},
+};
 
-use anyhow::{Context as CC, ensure, Result};
+use anyhow::{Context as CC, Result, ensure};
 use clap::Parser;
 use csv::WriterBuilder;
 use goldilocks::GoldilocksExt2;
@@ -17,9 +20,7 @@ use tracing_subscriber::{EnvFilter, fmt};
 use zkml::FloatOnnxLoader;
 
 use serde::{Deserialize, Serialize};
-use zkml::{
-    Context, Element, Prover, argmax, default_transcript, verify,
-};
+use zkml::{Context, Element, Prover, argmax, default_transcript, verify};
 
 use rmp_serde::encode::to_vec_named;
 
@@ -196,7 +197,7 @@ const CSV_ACCURACY: &str = "accuracy (bool)";
 const CSV_PROOF_SIZE: &str = "proof size (KB)";
 
 /// Runs the model in float format and returns the average accuracy
-fn run_float_model(raw_inputs: &InputJSON, model: &ProvableModel<f32>) -> Result<f32> {
+fn run_float_model(raw_inputs: &InputJSON, model: &Model<f32>) -> Result<f32> {
     let mut accuracies = Vec::new();
     info!("[+] Running model in float format");
 
@@ -222,7 +223,7 @@ fn run_float_model(raw_inputs: &InputJSON, model: &ProvableModel<f32>) -> Result
     Ok(calculate_average_accuracy(&accuracies))
 }
 
-fn read_model(args: &Args, inputs: &InputJSON) -> Result<(ProvableModel<Element>, ModelMetadata)> {
+fn read_model(args: &Args, inputs: &InputJSON) -> Result<(Model<Element>, ModelMetadata)> {
     let calibration_inputs = inputs.filter(args.calibration_indices.as_ref());
     match args.quantization.as_ref() {
         "inference" => {
@@ -236,13 +237,13 @@ fn read_model(args: &Args, inputs: &InputJSON) -> Result<(ProvableModel<Element>
             FloatOnnxLoader::new_with_scaling_strategy(&args.onnx, strategy)
                 .with_keep_float(true)
                 .build()
-        },
+        }
         "maxabs" => {
             let strategy = AbsoluteMax::new();
             FloatOnnxLoader::new_with_scaling_strategy(&args.onnx, strategy)
                 .with_keep_float(true)
                 .build()
-        },
+        }
         _ => panic!("Unsupported quantization strategy: {}", args.quantization),
     }
 }
@@ -254,9 +255,9 @@ fn run(args: Args) -> anyhow::Result<()> {
     let (model, md) = read_model(&args, &run_inputs)?;
     info!("[+] Model loaded");
     model.describe();
-    
+
     let run_inputs = run_inputs.filter(args.run_indices.as_ref());
-    
+
     // Get float accuracy if float model is available
     let float_accuracy = if let Some(ref float_model) = md.float_model {
         info!("[+] Running float model");

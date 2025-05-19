@@ -5,7 +5,9 @@ use std::collections::{BTreeMap, HashMap};
 use anyhow::{Result, anyhow, ensure};
 
 use crate::{
-    layers::provable::{Edge, NodeId, ProvableNode}, model::ProvableModel, Element
+    Element,
+    layers::provable::{Edge, Node, NodeId},
+    model::Model,
 };
 
 use super::ScalingFactor;
@@ -17,7 +19,7 @@ pub struct ModelMetadata {
     pub(crate) input_layers_scaling: HashMap<NodeId, Vec<ScalingFactor>>,
     pub(crate) output_layers_scaling: HashMap<NodeId, Vec<ScalingFactor>>,
     pub(crate) output: Vec<ScalingFactor>,
-    pub float_model: Option<ProvableModel<f32>>,
+    pub float_model: Option<Model<f32>>,
 }
 
 impl ModelMetadata {
@@ -92,10 +94,7 @@ impl MetadataBuilder {
             .map(|s| s.as_slice())
     }
 
-    pub fn build(
-        self,
-        output_nodes: Vec<(NodeId, &ProvableNode<Element>)>,
-    ) -> Result<ModelMetadata> {
+    pub fn build(self, output_nodes: Vec<(NodeId, &Node<Element>)>) -> Result<ModelMetadata> {
         let mut output_scalings = BTreeMap::new();
         for (id, node) in output_nodes.into_iter() {
             let scalings = self

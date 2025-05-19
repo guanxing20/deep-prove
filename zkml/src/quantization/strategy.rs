@@ -1,14 +1,16 @@
 use crate::{
-    layers::{convolution::Convolution, dense::Dense, provable::{
-        quantize_op, NodeId, ProvableNode, QuantizeOp,
-    }}, model::{ProvableModel, ToIterator}, quantization::metadata::{MetadataBuilder, ModelMetadata}, tensor::Number
+    layers::{
+        convolution::Convolution,
+        dense::Dense,
+        provable::{Node, NodeId, QuantizeOp, quantize_op},
+    },
+    model::{Model, ToIterator},
+    quantization::metadata::{MetadataBuilder, ModelMetadata},
+    tensor::Number,
 };
 use std::collections::HashMap;
 
-use crate::{
-    Element, Tensor,
-    quantization,
-};
+use crate::{Element, Tensor, quantization};
 use anyhow::{Result, anyhow, ensure};
 use ark_std::rand;
 use goldilocks::GoldilocksExt2;
@@ -24,10 +26,7 @@ use super::ScalingFactor;
 pub trait ScalingStrategy: std::fmt::Debug {
     type AuxData: Sized;
 
-    fn quantize(
-        &self,
-        model: ProvableModel<f32>,
-    ) -> Result<(ProvableModel<Element>, ModelMetadata)>;
+    fn quantize(&self, model: Model<f32>) -> Result<(Model<Element>, ModelMetadata)>;
 
     fn name(&self) -> String;
 }
@@ -57,10 +56,7 @@ impl ScalingStrategy for InferenceObserver {
         format!("inference [{},{}]", *quantization::MIN, *quantization::MAX)
     }
 
-    fn quantize(
-        &self,
-        model: ProvableModel<f32>,
-    ) -> Result<(ProvableModel<Element>, ModelMetadata)> {
+    fn quantize(&self, model: Model<f32>) -> Result<(Model<Element>, ModelMetadata)> {
         let mut tracker = InferenceTracker::new();
         let input_shapes = model.input_shapes();
         let input_not_padded_shapes = model.unpadded_input_shapes();
@@ -175,39 +171,41 @@ impl ScalingStrategy for AbsoluteMax {
         "absolute_max".to_string()
     }
 
-    fn quantize(
-        &self,
-        model: ProvableModel<f32>,
-    ) -> Result<(ProvableModel<Element>, ModelMetadata)> {
+    fn quantize(&self, model: Model<f32>) -> Result<(Model<Element>, ModelMetadata)> {
         let input_scaling_factor = if let Some(ref input) = self.0 {
             let input_tensor = model.load_input_flat(input.clone())?;
-            model.input_shapes().into_iter().zip(&input_tensor).try_for_each(|(shape, input)| {
-                ensure!(
-                shape == input.get_shape(),
-                "input shape mismatch: expected {:?}, got {:?}",
-                shape,
-                input.get_shape()
-                );
-                Ok(())
-            })?;
-            input_tensor.into_iter().map(|input| 
-                ScalingFactor::from_absolute_max(input.max_abs_output(), None)
-            ).collect_vec()
+            model
+                .input_shapes()
+                .into_iter()
+                .zip(&input_tensor)
+                .try_for_each(|(shape, input)| {
+                    ensure!(
+                        shape == input.get_shape(),
+                        "input shape mismatch: expected {:?}, got {:?}",
+                        shape,
+                        input.get_shape()
+                    );
+                    Ok(())
+                })?;
+            input_tensor
+                .into_iter()
+                .map(|input| ScalingFactor::from_absolute_max(input.max_abs_output(), None))
+                .collect_vec()
         } else {
-            (0..model.num_inputs()).map(|_| 
-                ScalingFactor::default()
-            ).collect_vec()
+            (0..model.num_inputs())
+                .map(|_| ScalingFactor::default())
+                .collect_vec()
         };
         quantize_model::<AbsoluteMax>(model, (), input_scaling_factor)
-     }
+    }
 }
 
 fn quantize_model<S: ScalingStrategy>(
-    model: ProvableModel<f32>,
+    model: Model<f32>,
     data: S::AuxData,
     input_scaling: Vec<ScalingFactor>,
-) -> anyhow::Result<(ProvableModel<Element>, ModelMetadata)> 
-where 
+) -> anyhow::Result<(Model<Element>, ModelMetadata)>
+where
     Dense<f32>: QuantizeOp<S, QuantizedOp = Dense<Element>>,
     Convolution<f32>: QuantizeOp<S, QuantizedOp = Convolution<Element>>,
 {
@@ -217,29 +215,29 @@ where
     // 2. Create the requant layers from the infered data
     let mut requant_layers = vec![];
     let mut catch_err: Result<()> = Ok(());
-    let nodes = model.into_forward_iterator().map(|(node_id, node)| {
-        let input_scaling = md.compute_input_scaling(&node.inputs)?;
-        let quantized_out = quantize_op::<S, _>(node.operation, &data, node_id, &input_scaling)?;
-        md.set_layers_scaling(node_id, quantized_out.output_scalings, input_scaling);
-        if let Some(requant) = quantized_out.requant_layer {
-            requant_layers.push((node_id, requant));
-        }
-        let quantized_node = ProvableNode::new_with_outputs(
-            node.inputs,
-            quantized_out.quanzited_op,
-            node.outputs,
-        );
-        Ok((node_id, quantized_node))
-    }).map_while(|n|
-        if n.is_err() {
-            catch_err = Err(n.unwrap_err());
-            None
-        } else {
-            Some(n.unwrap())
-        }
-    );
-    let mut model =
-        ProvableModel::new_from_shapes(input_not_padded_shapes, input_shapes, nodes);
+    let nodes = model
+        .into_forward_iterator()
+        .map(|(node_id, node)| {
+            let input_scaling = md.compute_input_scaling(&node.inputs)?;
+            let quantized_out =
+                quantize_op::<S, _>(node.operation, &data, node_id, &input_scaling)?;
+            md.set_layers_scaling(node_id, quantized_out.output_scalings, input_scaling);
+            if let Some(requant) = quantized_out.requant_layer {
+                requant_layers.push((node_id, requant));
+            }
+            let quantized_node =
+                Node::new_with_outputs(node.inputs, quantized_out.quanzited_op, node.outputs);
+            Ok((node_id, quantized_node))
+        })
+        .map_while(|n| {
+            if n.is_err() {
+                catch_err = Err(n.unwrap_err());
+                None
+            } else {
+                Some(n.unwrap())
+            }
+        });
+    let mut model = Model::new_from_shapes(input_not_padded_shapes, input_shapes, nodes);
     catch_err?;
     for (input_node_id, requant) in requant_layers {
         let node_id = model.add_requant_node(requant, input_node_id)?;

@@ -1,16 +1,24 @@
 use std::collections::HashMap;
 
 use crate::{
-    commit::same_poly, iop::{
+    Claim, Element, Prover,
+    commit::same_poly,
+    iop::{
         context::{ContextAux, ShapeStep},
         verifier::Verifier,
-    }, layers::{LayerCtx, LayerProof, PolyID}, lookup::{
-        context::{LookupWitnessGen, TableType, COLUMN_SEPARATOR},
+    },
+    layers::{LayerCtx, LayerProof, PolyID},
+    lookup::{
+        context::{COLUMN_SEPARATOR, LookupWitnessGen, TableType},
         logup_gkr::{
             prover::batch_prove as logup_batch_prove, structs::LogUpProof,
             verifier::verify_logup_proof,
         },
-    }, model::StepData, padding::PaddingMode, quantization::Fieldizer, tensor::Number, Claim, Element, Prover
+    },
+    model::StepData,
+    padding::PaddingMode,
+    quantization::Fieldizer,
+    tensor::Number,
 };
 use ff_ext::ExtensionField;
 use gkr::util::ceil_log2;
@@ -22,7 +30,7 @@ use transcript::Transcript;
 use crate::{quantization::BIT_LEN, tensor::Tensor};
 
 use super::provable::{
-    Evaluate, LayerOut, NodeId, Op, OpInfo, PadOp, ProvableOp, ProvableOpError, ProveInfo,
+    Evaluate, LayerOut, NodeId, OpInfo, PadOp, ProvableOp, ProvableOpError, ProveInfo,
     VerifiableCtx,
 };
 
@@ -218,15 +226,6 @@ where
     }
 }
 
-impl<E, N> Op<E, N> for Activation
-where
-    E: ExtensionField,
-    E::BaseField: Serialize + DeserializeOwned,
-    E: Serialize + DeserializeOwned,
-    N: Number,
-{
-}
-
 impl<E> VerifiableCtx<E> for ActivationCtx
 where
     E: ExtensionField,
@@ -283,7 +282,7 @@ impl Activation {
         E: ExtensionField + Serialize + DeserializeOwned,
         E::BaseField: Serialize + DeserializeOwned,
     {
-        let prover_info = prover.get_lookup_witness(node_id)?;
+        let prover_info = prover.lookup_witness(node_id)?;
 
         // Run the lookup protocol and return the lookup proof
         let logup_proof = logup_batch_prove(&prover_info, prover.transcript)?;

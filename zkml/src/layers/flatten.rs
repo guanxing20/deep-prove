@@ -6,11 +6,11 @@ use crate::{
     commit::precommit::PolyID,
     iop::context::ContextAux,
     layers::LayerCtx,
-    padding::{PaddingMode, ShapeInfo, reshape},
+    padding::{PaddingError, PaddingMode, ShapeInfo, reshape},
     tensor::Number,
 };
 
-use super::provable::{Evaluate, LayerOut, Op, OpInfo, PadOp, ProvableOp, ProvableOpError, ProveInfo};
+use super::provable::{Evaluate, LayerOut, OpInfo, PadOp, ProvableOp, ProvableOpError, ProveInfo};
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Flatten;
 
@@ -73,11 +73,11 @@ where
 }
 
 impl PadOp for Flatten {
-    fn pad_node(self, si: &mut ShapeInfo) -> Result<Self, super::provable::ProvableOpError>
+    fn pad_node(self, si: &mut ShapeInfo) -> Result<Self, PaddingError>
     where
         Self: Sized,
     {
-        reshape(si).map_err(|e| ProvableOpError::GenericError(e))
+        reshape(si)
     }
 }
 
@@ -88,13 +88,4 @@ where
     E: Serialize + DeserializeOwned,
 {
     type Ctx = LayerCtx<E>; // Unused
-}
-
-impl<E, N> Op<E, N> for Flatten
-where
-    E: ExtensionField,
-    E::BaseField: Serialize + DeserializeOwned,
-    E: Serialize + DeserializeOwned,
-    N: Number,
-{
 }

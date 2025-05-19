@@ -1,8 +1,15 @@
 use crate::{
-    commit::same_poly, iop::{context::ShapeStep, verifier::Verifier}, layers::LayerProof, lookup::{
+    Claim, Prover, Tensor,
+    commit::same_poly,
+    iop::{context::ShapeStep, verifier::Verifier},
+    layers::LayerProof,
+    lookup::{
         context::LookupWitnessGen,
         logup_gkr::{prover::batch_prove as logup_batch_prove, verifier::verify_logup_proof},
-    }, model::StepData, padding::PaddingMode, quantization, Claim, Prover, Tensor
+    },
+    model::StepData,
+    padding::PaddingMode,
+    quantization,
 };
 use anyhow::{Result, anyhow, ensure};
 use ff::Field;
@@ -29,7 +36,7 @@ use crate::{
 use super::{
     LayerCtx,
     provable::{
-        Evaluate, LayerOut, NodeId, Op, OpInfo, PadOp, ProvableOp, ProvableOpError, ProveInfo,
+        Evaluate, LayerOut, NodeId, OpInfo, PadOp, ProvableOp, ProvableOpError, ProveInfo,
         VerifiableCtx,
     },
 };
@@ -228,14 +235,6 @@ where
 
         Ok(())
     }
-}
-
-impl<E> Op<E, Element> for Requant
-where
-    E: ExtensionField,
-    E::BaseField: Serialize + DeserializeOwned,
-    E: Serialize + DeserializeOwned,
-{
 }
 
 impl<E> VerifiableCtx<E> for RequantCtx
@@ -559,7 +558,7 @@ impl Requant {
         E: ExtensionField + Serialize + DeserializeOwned,
         E::BaseField: Serialize + DeserializeOwned,
     {
-        let prover_info = prover.get_lookup_witness(id)?;
+        let prover_info = prover.lookup_witness(id)?;
 
         // Run the lookup protocol and return the lookup proof
         let logup_proof = logup_batch_prove(&prover_info, prover.transcript)?;

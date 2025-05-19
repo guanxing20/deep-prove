@@ -84,22 +84,16 @@ where
 mod test {
     use goldilocks::GoldilocksExt2;
 
-    use crate::{
-        default_transcript, init_test_logging, model::ProvableModel,
-    };
+    use crate::{default_transcript, init_test_logging, model::Model};
 
-    use super::{
-        Context,
-        prover::Prover,
-        verifier::verify,
-    };
+    use super::{Context, prover::Prover, verifier::verify};
 
     type F = GoldilocksExt2;
 
     #[test]
     fn test_prover_steps_generic() {
         init_test_logging();
-        let (model, input) = ProvableModel::random(4).unwrap();
+        let (model, input) = Model::random(4).unwrap();
         model.describe();
         let trace = model.run(&input).unwrap();
         let io = trace.to_verifier_io();
@@ -114,7 +108,7 @@ mod test {
     #[test]
     fn test_prover_steps_pooling() {
         init_test_logging();
-        let (model, input) = ProvableModel::random_pooling(4).unwrap();
+        let (model, input) = Model::random_pooling(4).unwrap();
         model.describe();
         let trace = model.run(&input).unwrap();
         let io = trace.to_verifier_io();

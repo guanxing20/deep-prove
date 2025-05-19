@@ -1,7 +1,12 @@
 use crate::{
-    iop::precommit::{self, PolyID}, layers::{
-        provable::{NodeCtx, NodeId, OpInfo}, LayerCtx
-    }, lookup::context::{LookupContext, TableType}, model::{ModelCtx, ProvableModel, ToIterator}, Element
+    Element,
+    iop::precommit::{self, PolyID},
+    layers::{
+        LayerCtx,
+        provable::{NodeCtx, NodeId, OpInfo},
+    },
+    lookup::context::{LookupContext, TableType},
+    model::{Model, ModelCtx, ToIterator},
 };
 use anyhow::{Context as CC, anyhow, ensure};
 use ff_ext::ExtensionField;
@@ -100,51 +105,8 @@ where
     /// Generates a context to give to the verifier that contains informations about the polynomials
     /// to prove at each step.
     /// INFO: it _assumes_ the model is already well padded to power of twos.
-    // pub fn generate(
-    // model: &Model<Element>,
-    // input_shape: Option<Vec<usize>>,
-    // ) -> anyhow::Result<Self> {
-    // let tables = BTreeSet::new();
-    // let last_output_shape = if let Some(shape) = input_shape {
-    // shape
-    // } else {
-    // model.input_shape()
-    // };
-    // let mut ctx_aux = ContextAux {
-    // tables,
-    // last_output_shape: vec![last_output_shape],
-    // };
-    // let mut step_infos = Vec::with_capacity(model.layer_count());
-    // debug!("Context : layer info generation ...");
-    // for (id, layer) in model.layers() {
-    // trace!(
-    // "Context : {}-th layer {}info generation ...",
-    // id,
-    // layer.describe()
-    // );
-    // let (info, new_aux) = layer.step_info(id, ctx_aux);
-    // step_infos.push(info);
-    // ctx_aux = new_aux;
-    // }
-    // info!(
-    // "step_infos: {:?}",
-    // step_infos.iter().map(|x| x.variant_name()).join(", ")
-    // );
-    // debug!("Context : commitment generating ...");
-    // let commit_ctx = precommit::Context::generate_from_model(model)
-    // .context("can't generate context for commitment part")?;
-    // debug!("Context : lookup generation ...");
-    // let lookup_ctx = LookupContext::new(&ctx_aux.tables);
-    // Ok(Self {
-    // steps_info: step_infos.into_iter().rev().collect_vec(),
-    // weights: commit_ctx,
-    // lookup: lookup_ctx,
-    // unpadded_input_shape: model.unpadded_input_shape(),
-    // })
-    // }
-
     pub fn generate(
-        model: &ProvableModel<Element>,
+        model: &Model<Element>,
         input_shapes: Option<Vec<Vec<usize>>>,
     ) -> anyhow::Result<Self> {
         let tables = BTreeSet::new();

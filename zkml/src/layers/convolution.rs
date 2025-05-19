@@ -1,5 +1,10 @@
 use crate::{
-    iop::context::ShapeStep, layers::{hadamard, requant::Requant}, model::StepData, padding::{pad_conv, PaddingMode, ShapeInfo}, quantization::{AbsoluteMax, InferenceObserver, InferenceTracker, TensorFielder, BIT_LEN}, ScalingStrategy, VectorTranscript
+    ScalingStrategy, VectorTranscript,
+    iop::context::ShapeStep,
+    layers::{hadamard, requant::Requant},
+    model::StepData,
+    padding::{PaddingError, PaddingMode, ShapeInfo, pad_conv},
+    quantization::{AbsoluteMax, BIT_LEN, InferenceObserver, InferenceTracker, TensorFielder},
 };
 use core::f32;
 
@@ -31,9 +36,11 @@ use tracing::{debug, warn};
 use transcript::Transcript;
 
 use super::{
+    LayerCtx,
     provable::{
-        Evaluate, LayerOut, NodeId, Op, OpInfo, PadOp, ProvableOp, ProvableOpError, ProveInfo, QuantizeOp, QuantizeOutput, VerifiableCtx
-    }, LayerCtx
+        Evaluate, LayerOut, NodeId, OpInfo, PadOp, ProvableOp, ProvableOpError, ProveInfo,
+        QuantizeOp, QuantizeOutput, VerifiableCtx,
+    },
 };
 
 pub(crate) const BIAS_POLY_ID: PolyID = 200_000;
@@ -205,7 +212,8 @@ impl<T: Number> OpInfo for Convolution<T> {
     }
 
     fn num_outputs(&self, num_inputs: usize) -> usize {
-        num_inputs
+        assert_eq!(num_inputs, 1);
+        1
     }
 
     fn describe(&self) -> String {
@@ -597,18 +605,18 @@ impl QuantizeOp<AbsoluteMax> for Convolution<f32> {
         _node_id: NodeId,
         input_scaling: &[ScalingFactor],
     ) -> anyhow::Result<QuantizeOutput<Self::QuantizedOp>> {
-        //TODO: remove this is broken
+        // TODO: remove this is broken
         let output_scaling = ScalingFactor::default();
         self.quantize_from_scalings(input_scaling, output_scaling)
     }
 }
 
 impl PadOp for Convolution<Element> {
-    fn pad_node(self, si: &mut ShapeInfo) -> Result<Self, ProvableOpError>
+    fn pad_node(self, si: &mut ShapeInfo) -> Result<Self, PaddingError>
     where
         Self: Sized,
     {
-        pad_conv(self, si).map_err(|e| ProvableOpError::GenericError(e))
+        pad_conv(self, si)
     }
 }
 
@@ -638,14 +646,6 @@ where
             id,
         )?])
     }
-}
-
-impl<E> Op<E, Element> for Convolution<Element>
-where
-    E: ExtensionField,
-    E::BaseField: Serialize + DeserializeOwned,
-    E: Serialize + DeserializeOwned,
-{
 }
 
 impl<E> VerifiableCtx<E> for ConvCtx<E>
@@ -1406,14 +1406,6 @@ where
     type Ctx = LayerCtx<E>; //unused
 }
 
-impl<E: ExtensionField> Op<E, Element> for SchoolBookConv<Element>
-where
-    E::BaseField: Serialize + DeserializeOwned,
-    E: Serialize + DeserializeOwned,
-{
-}
-
-
 impl<S: ScalingStrategy> QuantizeOp<S> for SchoolBookConv<f32> {
     type QuantizedOp = SchoolBookConv<Element>;
 
@@ -1423,19 +1415,15 @@ impl<S: ScalingStrategy> QuantizeOp<S> for SchoolBookConv<f32> {
         _node_id: NodeId,
         input_scaling: &[ScalingFactor],
     ) -> anyhow::Result<QuantizeOutput<Self::QuantizedOp>> {
-        Ok(
-            QuantizeOutput {
-                quanzited_op: SchoolBookConv(
-                    self.0.quantize(
-                        // we don't care about accurate quantization for schoolbook conv
-                        &input_scaling[0],
-                        &input_scaling[0],
-                    ),
-                ),
-                output_scalings: input_scaling.to_vec(),
-                requant_layer: None,
-            }
-        )
+        Ok(QuantizeOutput {
+            quanzited_op: SchoolBookConv(self.0.quantize(
+                // we don't care about accurate quantization for schoolbook conv
+                &input_scaling[0],
+                &input_scaling[0],
+            )),
+            output_scalings: input_scaling.to_vec(),
+            requant_layer: None,
+        })
     }
 }
 
@@ -1597,11 +1585,13 @@ pub fn padded_conv2d_shape(input_shape: &[usize], filter_shape: &[usize]) -> Vec
 #[cfg(test)]
 mod test {
     use crate::{
+        NextPowerOfTwo,
         layers::{
             activation::{Activation, Relu},
             dense::{self, Dense},
-            pooling::{maxpool2d_shape, Maxpool2D, Pooling}, provable::evaluate_layer,
-        }, NextPowerOfTwo
+            pooling::{Maxpool2D, Pooling, maxpool2d_shape},
+            provable::evaluate_layer,
+        },
     };
 
     use super::*;

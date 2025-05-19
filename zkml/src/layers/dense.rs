@@ -1,10 +1,18 @@
 use std::cmp::Ordering;
 
 use crate::{
+    Claim, NextPowerOfTwo, Prover,
     iop::{
         context::{ContextAux, ShapeStep},
         verifier::Verifier,
-    }, layers::{requant::Requant, LayerCtx, LayerProof, PolyID}, model::StepData, padding::{pad_dense, PaddingMode, ShapeInfo}, quantization::{self, AbsoluteMax, InferenceObserver, InferenceTracker, ScalingFactor, BIT_LEN}, tensor::Number, Claim, NextPowerOfTwo, Prover
+    },
+    layers::{LayerCtx, LayerProof, PolyID, requant::Requant},
+    model::StepData,
+    padding::{PaddingError, PaddingMode, ShapeInfo, pad_dense},
+    quantization::{
+        self, AbsoluteMax, BIT_LEN, InferenceObserver, InferenceTracker, ScalingFactor,
+    },
+    tensor::Number,
 };
 use anyhow::{Context, ensure};
 use ff_ext::ExtensionField;
@@ -21,8 +29,8 @@ use transcript::Transcript;
 use crate::{Element, tensor::Tensor};
 
 use super::provable::{
-    Evaluate, LayerOut, NodeId, Op, OpInfo, PadOp, ProvableOp, ProvableOpError, ProveInfo,
-    QuantizeOp, QuantizeOutput, VerifiableCtx,
+    Evaluate, LayerOut, NodeId, OpInfo, PadOp, ProvableOp, ProvableOpError, ProveInfo, QuantizeOp,
+    QuantizeOutput, VerifiableCtx,
 };
 
 /// Bias to compute the bias ID polynomials. Since originally we take the index of each
@@ -137,7 +145,8 @@ impl<N: Number> OpInfo for Dense<N> {
     }
 
     fn num_outputs(&self, num_inputs: usize) -> usize {
-        num_inputs
+        assert_eq!(num_inputs, 1);
+        1
     }
 
     fn describe(&self) -> String {
@@ -229,18 +238,18 @@ where
 }
 
 impl PadOp for Dense<Element> {
-    fn pad_node(self, si: &mut ShapeInfo) -> Result<Self, ProvableOpError>
+    fn pad_node(self, si: &mut ShapeInfo) -> Result<Self, PaddingError>
     where
         Self: Sized,
     {
-        pad_dense(self, si).map_err(|e| ProvableOpError::GenericError(e))
+        pad_dense(self, si)
     }
 }
 
 impl Dense<f32> {
     // Quantize a dense layer using scaling factor of input and output
     fn quantize_from_scalings(
-        self, 
+        self,
         input_scaling: &[ScalingFactor],
         output_scaling: ScalingFactor,
     ) -> anyhow::Result<QuantizeOutput<Dense<Element>>> {
@@ -322,21 +331,13 @@ where
     ) -> Result<Vec<Claim<E>>, ProvableOpError> {
         Ok(vec![self.prove_step(
             prover,
-            last_claims[0], // ToDo: remove clone
+            last_claims[0],
             &step_data.inputs[0],
             &step_data.outputs.outputs()[0],
             ctx,
             id,
         )?])
     }
-}
-
-impl<E> Op<E, Element> for Dense<Element>
-where
-    E: ExtensionField,
-    E::BaseField: Serialize + DeserializeOwned,
-    E: Serialize + DeserializeOwned,
-{
 }
 
 impl<E> VerifiableCtx<E> for DenseCtx<E>
@@ -354,11 +355,7 @@ where
         verifier: &mut Verifier<E, T>,
         _shape_step: &ShapeStep,
     ) -> Result<Vec<Claim<E>>, ProvableOpError> {
-        Ok(vec![self.verify_dense(
-            verifier,
-            last_claims[0],
-            proof,
-        )?])
+        Ok(vec![self.verify_dense(verifier, last_claims[0], proof)?])
     }
 
     fn output_shapes(
@@ -538,7 +535,10 @@ impl Dense<Element> {
         // to only verify the matrix2vec product via the sumcheck proof.
         prover
             .commit_prover
-            .add_claim(info.bias_poly_id, Claim::new(last_claim.point.clone(), bias_eval))
+            .add_claim(
+                info.bias_poly_id,
+                Claim::new(last_claim.point.clone(), bias_eval),
+            )
             .context("unable to add bias claim")?;
 
         // the claim that this proving step outputs is the claim about not the matrix but the vector poly.

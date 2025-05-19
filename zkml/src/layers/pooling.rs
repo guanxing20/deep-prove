@@ -1,13 +1,21 @@
 use std::collections::HashMap;
 
 use crate::{
-    commit::{compute_betas_eval, identity_eval, precommit::PolyID, same_poly}, iop::{context::ShapeStep, verifier::Verifier}, layers::{ContextAux, LayerProof}, lookup::{
+    Claim, Element, Prover,
+    commit::{compute_betas_eval, identity_eval, precommit::PolyID, same_poly},
+    iop::{context::ShapeStep, verifier::Verifier},
+    layers::{ContextAux, LayerProof},
+    lookup::{
         context::{LookupWitnessGen, TableType},
         logup_gkr::{
             prover::batch_prove as logup_batch_prove, structs::LogUpProof,
             verifier::verify_logup_proof,
         },
-    }, model::StepData, padding::{pooling, PaddingMode, ShapeInfo}, quantization::{Fieldizer, IntoElement}, tensor::{Number, Tensor}, Claim, Element, Prover
+    },
+    model::StepData,
+    padding::{PaddingError, PaddingMode, ShapeInfo, pooling},
+    quantization::{Fieldizer, IntoElement},
+    tensor::{Number, Tensor},
 };
 use anyhow::{Context, anyhow, ensure};
 use ff_ext::ExtensionField;
@@ -28,7 +36,7 @@ use sumcheck::structs::IOPProverState;
 use super::{
     LayerCtx,
     provable::{
-        Evaluate, LayerOut, NodeId, Op, OpInfo, PadOp, ProvableOp, ProvableOpError, ProveInfo,
+        Evaluate, LayerOut, NodeId, OpInfo, PadOp, ProvableOp, ProvableOpError, ProveInfo,
         VerifiableCtx,
     },
 };
@@ -161,11 +169,11 @@ where
 }
 
 impl PadOp for Pooling {
-    fn pad_node(self, si: &mut ShapeInfo) -> Result<Self, ProvableOpError>
+    fn pad_node(self, si: &mut ShapeInfo) -> Result<Self, PaddingError>
     where
         Self: Sized,
     {
-        pooling(self, si).map_err(|e| ProvableOpError::GenericError(e))
+        pooling(self, si)
     }
 }
 
@@ -238,15 +246,6 @@ where
 
         Ok(())
     }
-}
-
-impl<E, N> Op<E, N> for Pooling
-where
-    E: ExtensionField,
-    E::BaseField: Serialize + DeserializeOwned,
-    E: Serialize + DeserializeOwned,
-    N: Number,
-{
 }
 
 impl<E> VerifiableCtx<E> for PoolingCtx
@@ -342,7 +341,7 @@ impl Pooling {
     {
         assert_eq!(input.get_shape().len(), 3, "Maxpool needs 3D inputs.");
         // Create the range check proof for the diff
-        let prover_info = prover.get_lookup_witness(id)?;
+        let prover_info = prover.lookup_witness(id)?;
 
         let logup_proof = logup_batch_prove(&prover_info, prover.transcript)?;
 

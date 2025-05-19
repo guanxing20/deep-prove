@@ -10,10 +10,16 @@ use std::{
 use transcript::Transcript;
 
 use crate::{
-    commit::precommit::PolyID, iop::{
+    Claim, Element, Prover, ScalingFactor, ScalingStrategy, Tensor,
+    commit::precommit::PolyID,
+    iop::{
         context::{ContextAux, ShapeStep},
         verifier::Verifier,
-    }, lookup::context::LookupWitnessGen, model::trace::StepData, padding::{PaddingMode, ShapeInfo}, tensor::{ConvData, Number}, Claim, Element, Prover, ScalingFactor, ScalingStrategy, Tensor
+    },
+    lookup::context::LookupWitnessGen,
+    model::trace::StepData,
+    padding::{PaddingError, PaddingMode, ShapeInfo},
+    tensor::{ConvData, Number},
 };
 
 use super::{Layer, LayerCtx, LayerProof, flatten::Flatten, requant::Requant};
@@ -56,7 +62,7 @@ pub struct OutputWire {
 
 /// Represents a node in a model
 #[derive(Clone, Debug)]
-pub struct ProvableNode<N> {
+pub struct Node<N> {
     pub(crate) inputs: Vec<Edge>,
     pub(crate) outputs: Vec<OutputWire>,
     pub(crate) operation: Layer<N>,
@@ -69,7 +75,7 @@ pub trait NodeEgdes {
     fn outputs(&self) -> &[OutputWire];
 }
 
-impl<N> NodeEgdes for ProvableNode<N> {
+impl<N> NodeEgdes for Node<N> {
     fn inputs(&self) -> &[Edge] {
         &self.inputs
     }
@@ -92,7 +98,7 @@ where
     }
 }
 
-impl<N: Number> ProvableNode<N> {
+impl<N: Number> Node<N> {
     // Create a new node, from the set of inputs edges and the operation performed by the node
     pub fn new(inputs: Vec<Edge>, operation: Layer<N>) -> Self {
         let num_outputs = operation.num_outputs(inputs.len());
@@ -152,14 +158,15 @@ where
 {
     /// Get the claims corresponding to the output edges of a node.
     /// Requires the input claims for the nodes of the model using the
-    /// outputs of the current node, and the claims of the output 
+    /// outputs of the current node, and the claims of the output
     /// tensors of the model
-    pub(crate) fn get_claims_for_node<'a,'b>(
+    pub(crate) fn claims_for_node<'a, 'b>(
         &self,
         claims_by_node: &'a HashMap<NodeId, Vec<Claim<E>>>,
         output_claims: &'b [Claim<E>],
-    ) -> Result<Vec<&'a Claim<E>>> 
-    where 'b: 'a
+    ) -> Result<Vec<&'a Claim<E>>>
+    where
+        'b: 'a,
     {
         self.outputs.iter().map(|out| {
             // For now, we support in proving only one edge per output wire,
@@ -232,7 +239,7 @@ pub trait OpInfo {
         padding_mode: PaddingMode,
     ) -> Vec<Vec<usize>>;
 
-    /// Compute the number of output tensors, given the number of input tensors 
+    /// Compute the number of output tensors, given the number of input tensors
     /// `num_inputs`
     fn num_outputs(&self, num_inputs: usize) -> usize;
 
@@ -275,8 +282,8 @@ where
     ) -> Result<(LayerCtx<E>, ContextAux), ProvableOpError>;
 
     /// Compute the data necessary to commit to the constant polynomials
-    /// associated to the operation. Returns `None` if there are no 
-    /// constant polynomials to be committed for the given operation 
+    /// associated to the operation. Returns `None` if there are no
+    /// constant polynomials to be committed for the given operation
     fn commit_info(&self, _id: NodeId) -> Vec<Option<(PolyID, Vec<E>)>> {
         vec![None]
     }
@@ -317,8 +324,8 @@ pub fn quantize_op<S: ScalingStrategy, O: QuantizeOp<S>>(
 
 pub trait PadOp {
     // Pad the dimensions of the tensors in node `self`, updating the `ShapeInfo` with the output shapes
-    // of the node 
-    fn pad_node(self, _si: &mut ShapeInfo) -> Result<Self, ProvableOpError>
+    // of the node
+    fn pad_node(self, _si: &mut ShapeInfo) -> Result<Self, PaddingError>
     where
         Self: Sized,
     {
@@ -361,15 +368,6 @@ where
         // Default implementation for nodes that don't employ a lookup table
         Ok(())
     }
-}
-
-pub trait Op<E, N>: Evaluate<N> + ProveInfo<E> + Debug + ProvableOp<E>
-where
-    E: ExtensionField,
-    E::BaseField: Serialize + DeserializeOwned,
-    E: Serialize + DeserializeOwned,
-    N: Number,
-{
 }
 
 pub trait VerifiableCtx<E>: Debug

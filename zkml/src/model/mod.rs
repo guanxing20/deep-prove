@@ -1,36 +1,47 @@
 use std::collections::{BTreeMap, HashMap};
 
-use anyhow::{ensure, Result, anyhow};
+use anyhow::{Result, anyhow, ensure};
 use ff_ext::ExtensionField;
 use goldilocks::GoldilocksExt2;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use trace::Trace;
 use tracing::info;
 
-use crate::{layers::{provable::{Edge, Evaluate, NodeCtx, NodeId, OpInfo, ProvableNode}, requant::Requant, Layer}, padding::PaddingMode, quantization::InferenceTracker, tensor::Number, try_unzip, Tensor};
+use crate::{
+    Tensor,
+    layers::{
+        Layer,
+        provable::{Edge, Evaluate, Node, NodeCtx, NodeId, OpInfo},
+        requant::Requant,
+    },
+    padding::PaddingMode,
+    quantization::InferenceTracker,
+    tensor::Number,
+    try_unzip,
+};
 
-pub(crate) mod trace;
 pub(crate) mod iterator;
+pub(crate) mod trace;
 
-pub use trace::{InferenceTrace, StepData, InferenceStep}; 
 pub use iterator::ToIterator;
+pub use trace::{InferenceStep, InferenceTrace, StepData};
 
 /// Represents a model
 #[derive(Debug, Clone)]
-pub struct ProvableModel<N> {
-    pub(crate) nodes: HashMap<NodeId, ProvableNode<N>>,
+pub struct Model<N> {
+    pub(crate) nodes: HashMap<NodeId, Node<N>>,
     pub(crate) input_shapes: Vec<Vec<usize>>,
     pub(crate) unpadded_input_shapes: Vec<Vec<usize>>,
 }
 
-impl<N> ProvableModel<N>
+impl<N> Model<N>
 where
     N: Number,
 {
     /// Returns an iterator over the nodes in the model, in arbitrary order.
     /// It is more efficient then `ForwardIterator` and `BackwardIterator`, so it
     /// can be used to iterate over the nodes when the order does not matter
-    pub fn to_unstable_iterator(&self) -> impl Iterator<Item = (&NodeId, &ProvableNode<N>)> {
+    pub fn to_unstable_iterator(&self) -> impl Iterator<Item = (&NodeId, &Node<N>)> {
         self.nodes.iter()
     }
 
@@ -64,7 +75,7 @@ where
         }
     }
 
-    pub(crate) fn new<I: Iterator<Item = (NodeId, ProvableNode<N>)>>(
+    pub(crate) fn new<I: Iterator<Item = (NodeId, Node<N>)>>(
         unpadded_input_shapes: Vec<Vec<usize>>,
         padding: PaddingMode,
         nodes: I,
@@ -75,12 +86,12 @@ where
         model
     }
 
-    /// Instantiate a model from the set of nodes and the input shapes. 
+    /// Instantiate a model from the set of nodes and the input shapes.
     /// `actual_input_shapes` correspond to the expected shape of the input
-    /// tensors for the model; therefore, `actual_input_shapes` can be the same 
-    /// as `unpadded_input_shapes` if the input tensors of the model are 
-    /// not expected to be padded 
-    pub fn new_from_shapes<I: Iterator<Item = (NodeId, ProvableNode<N>)>>(
+    /// tensors for the model; therefore, `actual_input_shapes` can be the same
+    /// as `unpadded_input_shapes` if the input tensors of the model are
+    /// not expected to be padded
+    pub fn new_from_shapes<I: Iterator<Item = (NodeId, Node<N>)>>(
         unpadded_input_shapes: Vec<Vec<usize>>,
         actual_input_shapes: Vec<Vec<usize>>,
         nodes: I,
@@ -133,7 +144,7 @@ where
     }
 
     /// Build the inputs tensors, according to the expected input shapes,
-    /// from a set of flat data 
+    /// from a set of flat data
     pub fn load_input_flat(&self, input: Vec<Vec<N>>) -> Result<Vec<Tensor<N>>> {
         let input_tensor = input
             .into_iter()
@@ -174,7 +185,7 @@ where
             .get_mut(&input_node_id)
             .ok_or(anyhow!("Node {input_node_id} not found in the model"))?;
         let num_outputs = input_node.outputs.len();
-        let requant_node = ProvableNode::new_with_outputs(
+        let requant_node = Node::new_with_outputs(
             (0..num_outputs)
                 .map(|i| Edge {
                     node: Some(input_node_id),
@@ -239,7 +250,7 @@ where
             self.input_shapes.len()
         };
 
-        let new_node = ProvableNode::new(
+        let new_node = Node::new(
             (0..num_outputs)
                 .map(|i| Edge {
                     node: previous_node_id,
@@ -253,25 +264,23 @@ where
 
     /// Add the node provided as input to the model. The id of the added node is
     /// computed inside this method and returned as output
-    pub fn add_node(&mut self, node: ProvableNode<N>) -> anyhow::Result<NodeId> {
-        let node_id = (0..self.nodes.len()+1).find_map(|i| 
-            if !self.nodes.contains_key(&i) {
-                Some(i)
-            } else {
-                None
-            }
-        ).ok_or(anyhow!("No valid node id found for new node"))?;
+    pub fn add_node(&mut self, node: Node<N>) -> anyhow::Result<NodeId> {
+        let node_id = (0..self.nodes.len() + 1)
+            .find_map(|i| {
+                if !self.nodes.contains_key(&i) {
+                    Some(i)
+                } else {
+                    None
+                }
+            })
+            .ok_or(anyhow!("No valid node id found for new node"))?;
         self.add_node_with_id(node_id, node)?;
         Ok(node_id)
     }
 
-    /// Add the node provided as input to the model, binding it to the `node id` 
+    /// Add the node provided as input to the model, binding it to the `node id`
     /// provided as input
-    pub fn add_node_with_id(
-        &mut self,
-        node_id: NodeId,
-        node: ProvableNode<N>,
-    ) -> anyhow::Result<()> {
+    pub fn add_node_with_id(&mut self, node_id: NodeId, node: Node<N>) -> anyhow::Result<()> {
         // iterate over the inputs of the node and add the edges to the outputs of
         // corresponding nodes already in the model
         for (i, input) in node.inputs.iter().enumerate() {
@@ -346,7 +355,7 @@ where
 
     /// Return the set of output nodes, that are nodes where at least one output
     /// tensor is an output of the model
-    pub(crate) fn output_nodes(&self) -> Vec<(NodeId, &ProvableNode<N>)> {
+    pub(crate) fn output_nodes(&self) -> Vec<(NodeId, &Node<N>)> {
         self.nodes
             .iter()
             .filter_map(|(id, node)| {
@@ -364,18 +373,18 @@ where
     }
 }
 
-impl ProvableModel<f32> {
-    pub fn run_float(
-        &self,
-        input: &[Tensor<f32>],
-    ) -> anyhow::Result<Vec<Tensor<f32>>> {
-        Ok(self.run::<GoldilocksExt2>(input)?.outputs()?.into_iter().map(|out| 
-            out.clone()
-        ).collect())
+impl Model<f32> {
+    pub fn run_float(&self, input: &[Tensor<f32>]) -> anyhow::Result<Vec<Tensor<f32>>> {
+        Ok(self
+            .run::<GoldilocksExt2>(input)?
+            .outputs()?
+            .into_iter()
+            .map(|out| out.clone())
+            .collect())
     }
 }
 
-impl<N: Number> ProvableModel<N> {
+impl<N: Number> Model<N> {
     pub(crate) fn run_with_tracker<E: ExtensionField>(
         &self,
         input: &[Tensor<N>],
@@ -493,7 +502,7 @@ impl<N: Number> ProvableModel<N> {
     }
 
     /// Returns the set of nodes in the model which can be proven
-    pub(crate) fn provable_nodes(&self) -> impl Iterator<Item = (&NodeId, &ProvableNode<N>)> {
+    pub(crate) fn provable_nodes(&self) -> impl Iterator<Item = (&NodeId, &Node<N>)> {
         self.nodes
             .iter()
             .filter(|(_, node)| node.operation.is_provable())
@@ -513,9 +522,20 @@ where
 #[cfg(test)]
 pub(crate) mod test {
     use crate::{
-        init_test_logging, layers::{
-            activation::{Activation, Relu}, convolution::{Convolution, SchoolBookConv}, dense::Dense, pooling::{Maxpool2D, Pooling, MAXPOOL2D_KERNEL_SIZE}, provable::{evaluate_layer, Edge, OpInfo, ProvableNode}, requant::Requant, Layer
-        }, padding::{pad_model, PaddingMode}, quantization::{self, InferenceObserver}, tensor::Number, testing::{random_bool_vector, random_vector}, ScalingFactor, ScalingStrategy
+        ScalingFactor, ScalingStrategy, init_test_logging,
+        layers::{
+            Layer,
+            activation::{Activation, Relu},
+            convolution::{Convolution, SchoolBookConv},
+            dense::Dense,
+            pooling::{MAXPOOL2D_KERNEL_SIZE, Maxpool2D, Pooling},
+            provable::{Edge, Node, OpInfo, evaluate_layer},
+            requant::Requant,
+        },
+        padding::{PaddingMode, pad_model},
+        quantization::{self, InferenceObserver},
+        tensor::Number,
+        testing::{random_bool_vector, random_vector},
     };
     use anyhow::Result;
     use ark_std::rand::{Rng, RngCore, thread_rng};
@@ -536,7 +556,7 @@ pub(crate) mod test {
     const SELECTOR_POOLING: usize = 2;
     const MOD_SELECTOR: usize = 2;
 
-    impl ProvableModel<Element> {
+    impl Model<Element> {
         pub fn random(num_dense_layers: usize) -> Result<(Self, Vec<Tensor<Element>>)> {
             let mut rng = thread_rng();
             Self::random_with_rng(num_dense_layers, &mut rng)
@@ -634,10 +654,8 @@ pub(crate) mod test {
                 })
                 .collect::<Vec<usize>>();
 
-            let mut model = ProvableModel::new_from_input_shapes(
-                vec![input_shape.clone()],
-                PaddingMode::NoPadding,
-            );
+            let mut model =
+                Model::new_from_input_shapes(vec![input_shape.clone()], PaddingMode::NoPadding);
 
             let inputs = model
                 .input_shapes()
@@ -677,7 +695,7 @@ pub(crate) mod test {
 
     #[test]
     fn test_model_long() {
-        let (model, input) = ProvableModel::random(3).unwrap();
+        let (model, input) = Model::random(3).unwrap();
         model.run::<F>(&input).unwrap();
     }
 
@@ -741,7 +759,7 @@ pub(crate) mod test {
         let input_shape = vec![1, 32, 32];
 
         let mut model =
-            ProvableModel::new_from_input_shapes(vec![input_shape.clone()], PaddingMode::Padding);
+            Model::new_from_input_shapes(vec![input_shape.clone()], PaddingMode::Padding);
         let input = Tensor::random(&model.input_shapes()[0]);
         let first_id = model
             .add_consecutive_layer(
@@ -775,8 +793,7 @@ pub(crate) mod test {
         // END TEST
         let trace = model.run::<F>(&vec![input.clone()]).unwrap();
 
-        let mut model2 =
-            ProvableModel::new_from_input_shapes(vec![input_shape], PaddingMode::NoPadding);
+        let mut model2 = Model::new_from_input_shapes(vec![input_shape], PaddingMode::NoPadding);
         let first_id = model2
             .add_consecutive_layer(
                 Layer::SchoolBookConvolution(SchoolBookConv(Convolution::new(trad_conv1, bias1))),
@@ -812,7 +829,7 @@ pub(crate) mod test {
         let bias1 = Tensor::random(&vec![shape1[0]]);
 
         let mut model =
-            ProvableModel::new_from_input_shapes(vec![input_shape.clone()], PaddingMode::Padding);
+            Model::new_from_input_shapes(vec![input_shape.clone()], PaddingMode::Padding);
         let conv_layer = model
             .add_consecutive_layer(
                 Layer::Convolution(
@@ -859,10 +876,8 @@ pub(crate) mod test {
             .outputs()[0]
             .clone();
 
-        let mut model = ProvableModel::<Element>::new_from_input_shapes(
-            vec![input_shape],
-            PaddingMode::NoPadding,
-        );
+        let mut model =
+            Model::<Element>::new_from_input_shapes(vec![input_shape], PaddingMode::NoPadding);
         let first_id = model
             .add_consecutive_layer(Layer::Dense(dense1.clone()), None)
             .unwrap();
@@ -888,7 +903,7 @@ pub(crate) mod test {
     use ff::Field;
     #[test]
     fn test_model_sequential() {
-        let (model, input) = ProvableModel::random(1).unwrap();
+        let (model, input) = Model::random(1).unwrap();
         model.describe();
         let trace = model.run::<F>(&input).unwrap().to_field();
         let dense_layers = model
@@ -950,7 +965,7 @@ pub(crate) mod test {
     use crate::{Context, Prover, verify};
     use transcript::BasicTranscript;
 
-    use super::ProvableModel;
+    use super::Model;
 
     #[test]
     #[ignore = "This test should be deleted since there is no requant and it is not testing much"]
@@ -961,8 +976,7 @@ pub(crate) mod test {
         let conv2 = Tensor::new(vec![1024], w2.clone());
         let input_shape = vec![1024];
 
-        let mut model =
-            ProvableModel::new_from_input_shapes(vec![input_shape], PaddingMode::Padding);
+        let mut model = Model::new_from_input_shapes(vec![input_shape], PaddingMode::Padding);
         let input = Tensor::random(&model.input_shapes()[0]);
         model
             .add_consecutive_layer(Layer::Dense(Dense::new(conv1, conv2)), None)
@@ -995,8 +1009,7 @@ pub(crate) mod test {
         let conv1 = Tensor::random(&vec![k_w, k_x, n_w, n_w]);
         let input_shape = vec![k_x, n_x, n_x];
 
-        let mut model =
-            ProvableModel::new_from_input_shapes(vec![input_shape], PaddingMode::Padding);
+        let mut model = Model::new_from_input_shapes(vec![input_shape], PaddingMode::Padding);
         let input = Tensor::random(&model.input_shapes()[0]);
         let _conv_layer = model
             .add_consecutive_layer(
@@ -1039,7 +1052,7 @@ pub(crate) mod test {
                             vec![vec![k_x, n_x, n_x], vec![16, 29, 29], vec![4, 26, 26]];
                         let input_shape = vec![k_x, n_x, n_x];
                         let conv1 = Tensor::random(&vec![k_w, k_x, n_w, n_w]);
-                        let mut model = ProvableModel::<Element>::new_from_input_shapes(
+                        let mut model = Model::<Element>::new_from_input_shapes(
                             vec![input_shape],
                             PaddingMode::Padding,
                         );
@@ -1080,12 +1093,10 @@ pub(crate) mod test {
     type T = BasicTranscript<GoldilocksExt2>;
     type N = Element;
 
-    fn build_test_model<N: Number, const INPUT_SIZE: usize>() -> ProvableModel<N> {
+    fn build_test_model<N: Number, const INPUT_SIZE: usize>() -> Model<N> {
         let input_shape = vec![INPUT_SIZE];
-        let mut model = ProvableModel::<N>::new_from_input_shapes(
-            vec![input_shape.clone()],
-            PaddingMode::NoPadding,
-        );
+        let mut model =
+            Model::<N>::new_from_input_shapes(vec![input_shape.clone()], PaddingMode::NoPadding);
         // add input dense layer
         // generate random dense matrix
         let ncols = input_shape[0];
@@ -1141,7 +1152,7 @@ pub(crate) mod test {
         assert_eq!(trace.steps.len(), 3);
     }
 
-    fn prove_model(model: ProvableModel<f32>) -> anyhow::Result<()> {
+    fn prove_model(model: Model<f32>) -> anyhow::Result<()> {
         let float_inputs = model
             .input_shapes()
             .into_iter()
@@ -1185,8 +1196,7 @@ pub(crate) mod test {
         const FIRST_INPUT_SIZE: usize = 27;
         const SECOND_INPUT_SIZE: usize = 49;
         let input_shapes = vec![vec![FIRST_INPUT_SIZE], vec![SECOND_INPUT_SIZE]];
-        let mut model =
-            ProvableModel::<f32>::new_from_input_shapes(input_shapes, PaddingMode::NoPadding);
+        let mut model = Model::<f32>::new_from_input_shapes(input_shapes, PaddingMode::NoPadding);
         // add first dense layer
         // generate random dense matrix
         let ncols = FIRST_INPUT_SIZE;
@@ -1197,7 +1207,7 @@ pub(crate) mod test {
             PaddingMode::NoPadding,
         )[0];
         let first_input_dense = model
-            .add_node(ProvableNode::new(
+            .add_node(Node::new(
                 vec![Edge {
                     node: None,
                     index: 0,
@@ -1214,7 +1224,7 @@ pub(crate) mod test {
             PaddingMode::NoPadding,
         )[0];
         let second_input_dense = model
-            .add_node(ProvableNode::new(
+            .add_node(Node::new(
                 vec![Edge {
                     node: None,
                     index: 1,

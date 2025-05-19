@@ -1,20 +1,20 @@
 use std::collections::{BTreeSet, HashMap};
 
 use ff_ext::ExtensionField;
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 
-use crate::layers::provable::{NodeCtx, NodeEgdes, NodeId, ProvableNode};
+use crate::layers::provable::{Node, NodeCtx, NodeEgdes, NodeId};
 
-use super::{ModelCtx, ProvableModel};
+use super::{Model, ModelCtx};
 
 pub trait ToIterator<E: NodeEgdes> {
     /// Produces an iterator over a set of nodes in a model, starting from the inputs
-    /// and yielding nodes in order according to whether their inputs all come from 
+    /// and yielding nodes in order according to whether their inputs all come from
     /// nodes already visited by the iterator  
     fn to_forward_iterator<'a>(&'a self) -> NodeIterator<'a, E, true>;
 
-    /// Produces an iterator over a set of nodes in a model, starting from the outputs 
-    /// and yielding nodes in order according to whether their outputs all come from 
+    /// Produces an iterator over a set of nodes in a model, starting from the outputs
+    /// and yielding nodes in order according to whether their outputs all come from
     /// nodes already visited by the iterator.
     fn to_backward_iterator<'a>(&'a self) -> NodeIterator<'a, E, false>;
 
@@ -25,7 +25,7 @@ pub trait ToIterator<E: NodeEgdes> {
     {
         IntoNodeIterator::new(self)
     }
-    
+
     /// Variant of `to_backward_iterator` which takes ownership of the set of nodes
     fn into_backward_iterator(self) -> IntoNodeIterator<E, false>
     where
@@ -37,10 +37,10 @@ pub trait ToIterator<E: NodeEgdes> {
 
 // Forward iterator for the nodes in a model. This is useful for traversing the model when
 // evaluating it at interence time
-pub type ModelForwardIterator<'a, N> = NodeIterator<'a, ProvableNode<N>, true>;
+pub type ModelForwardIterator<'a, N> = NodeIterator<'a, Node<N>, true>;
 // Backward iterator for the nodes in a model. This is useful for traversing the model when
 // proving
-pub type ModelBackwardIterator<'a, N> = NodeIterator<'a, ProvableNode<N>, false>;
+pub type ModelBackwardIterator<'a, N> = NodeIterator<'a, Node<N>, false>;
 
 impl<E: ExtensionField + DeserializeOwned> ToIterator<NodeCtx<E>> for ModelCtx<E>
 where
@@ -61,7 +61,7 @@ where
     }
 }
 
-impl<N> ToIterator<ProvableNode<N>> for ProvableModel<N> {
+impl<N> ToIterator<Node<N>> for Model<N> {
     fn to_forward_iterator<'a>(&'a self) -> ModelForwardIterator<'a, N> {
         NodeIterator {
             unvisited_nodes: self.nodes.keys().cloned().collect(),
@@ -82,8 +82,8 @@ pub trait NodeCollection<E: NodeEgdes> {
     fn nodes(self) -> HashMap<NodeId, E>;
 }
 
-impl<N> NodeCollection<ProvableNode<N>> for ProvableModel<N> {
-    fn nodes(self) -> HashMap<NodeId, ProvableNode<N>> {
+impl<N> NodeCollection<Node<N>> for Model<N> {
+    fn nodes(self) -> HashMap<NodeId, Node<N>> {
         self.nodes
     }
 }
