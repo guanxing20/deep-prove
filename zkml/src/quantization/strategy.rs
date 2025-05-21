@@ -214,7 +214,6 @@ where
     let mut md = MetadataBuilder::new(input_scaling);
     // 2. Create the requant layers from the infered data
     let mut requant_layers = vec![];
-    let mut catch_err: Result<()> = Ok(());
     let nodes = model
         .into_forward_iterator()
         .map(|(node_id, node)| {
@@ -228,17 +227,8 @@ where
             let quantized_node =
                 Node::new_with_outputs(node.inputs, quantized_out.quanzited_op, node.outputs);
             Ok((node_id, quantized_node))
-        })
-        .map_while(|n| {
-            if n.is_err() {
-                catch_err = Err(n.unwrap_err());
-                None
-            } else {
-                Some(n.unwrap())
-            }
-        });
+        }).collect::<Result<_>>()?;
     let mut model = Model::new_from_shapes(input_not_padded_shapes, input_shapes, nodes);
-    catch_err?;
     for (input_node_id, requant) in requant_layers {
         let node_id = model.add_requant_node(requant, input_node_id)?;
         // add scaling factor to `md` for requant layers: the scaling factors of the inputs correspond to

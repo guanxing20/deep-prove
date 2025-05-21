@@ -10,7 +10,7 @@ use crate::{
     tensor::Number,
 };
 
-use super::provable::{Evaluate, LayerOut, OpInfo, PadOp, ProvableOp, ProvableOpError, ProveInfo};
+use super::provable::{Evaluate, LayerOut, OpInfo, PadOp, ProvableOpError, ProveInfo};
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Flatten;
 
@@ -79,13 +79,4 @@ impl PadOp for Flatten {
     {
         reshape(si)
     }
-}
-
-impl<E> ProvableOp<E> for Flatten
-where
-    E: ExtensionField,
-    E::BaseField: Serialize + DeserializeOwned,
-    E: Serialize + DeserializeOwned,
-{
-    type Ctx = LayerCtx<E>; // Unused
 }

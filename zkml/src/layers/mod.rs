@@ -450,12 +450,18 @@ where
             Layer::Dense(dense) => dense.gen_lookup_witness(id, gen, step_data),
             Layer::Convolution(convolution) => convolution.gen_lookup_witness(id, gen, step_data),
             Layer::SchoolBookConvolution(school_book_conv) => {
-                school_book_conv.gen_lookup_witness(id, gen, step_data)
-            }
+                // check that the layer is not provable, so we don't need to call the method
+                assert!(!school_book_conv.is_provable());
+                Ok(())
+            },
             Layer::Activation(activation) => activation.gen_lookup_witness(id, gen, step_data),
             Layer::Requant(requant) => requant.gen_lookup_witness(id, gen, step_data),
             Layer::Pooling(pooling) => pooling.gen_lookup_witness(id, gen, step_data),
-            Layer::Flatten(reshape) => reshape.gen_lookup_witness(id, gen, step_data),
+            Layer::Flatten(reshape) => {
+                // check that the layer is not provable, so we don't need to call the method
+                assert!(!reshape.is_provable());
+                Ok(())
+            },
         }
     }
 }

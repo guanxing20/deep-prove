@@ -12,7 +12,7 @@ use crate::{
         provable::{Node, NodeId},
     },
     model::{Model, ToIterator},
-    onnx_parse::{check_filter, safe_conv2d_shape, safe_maxpool2d_shape},
+    parser::{check_filter, safe_conv2d_shape, safe_maxpool2d_shape},
 };
 type GarbagePad = Option<(Vec<usize>, Vec<usize>)>;
 type Shape = Vec<usize>;
@@ -64,7 +64,6 @@ pub fn pad_model(mut model: Model<Element>) -> Result<Model<Element>, PaddingErr
     };
     let mut shape_infos: HashMap<NodeId, ShapeInfo> = HashMap::new();
     let unpadded_input_shapes = model.unpadded_input_shapes();
-    let mut catch_err = Ok(());
     let nodes = model
         .into_forward_iterator()
         .map(|(node_id, node)| -> Result<(NodeId, Node<Element>)> {
@@ -98,17 +97,8 @@ pub fn pad_model(mut model: Model<Element>) -> Result<Model<Element>, PaddingErr
             let node = node.pad_node(&mut si)?;
             shape_infos.insert(node_id, si);
             Ok((node_id, node))
-        })
-        .map_while(|n| {
-            if n.is_err() {
-                catch_err = Err(n.unwrap_err());
-                None
-            } else {
-                Some(n.unwrap())
-            }
-        });
+        }).collect::<Result<_>>()?;
     model = Model::<Element>::new(unpadded_input_shapes, PaddingMode::Padding, nodes);
-    catch_err?;
     Ok(model)
 }
 

@@ -1398,14 +1398,6 @@ impl<T: Number> Evaluate<T> for SchoolBookConv<T> {
 
 impl PadOp for SchoolBookConv<Element> {}
 
-impl<E: ExtensionField> ProvableOp<E> for SchoolBookConv<Element>
-where
-    E::BaseField: Serialize + DeserializeOwned,
-    E: Serialize + DeserializeOwned,
-{
-    type Ctx = LayerCtx<E>; //unused
-}
-
 impl<S: ScalingStrategy> QuantizeOp<S> for SchoolBookConv<f32> {
     type QuantizedOp = SchoolBookConv<Element>;
 
