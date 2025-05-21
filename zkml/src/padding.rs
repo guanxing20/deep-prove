@@ -97,7 +97,8 @@ pub fn pad_model(mut model: Model<Element>) -> Result<Model<Element>, PaddingErr
             let node = node.pad_node(&mut si)?;
             shape_infos.insert(node_id, si);
             Ok((node_id, node))
-        }).collect::<Result<_>>()?;
+        })
+        .collect::<Result<_>>()?;
     model = Model::<Element>::new(unpadded_input_shapes, PaddingMode::Padding, nodes);
     Ok(model)
 }

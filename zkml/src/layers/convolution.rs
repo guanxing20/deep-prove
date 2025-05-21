@@ -4,7 +4,7 @@ use crate::{
     layers::{hadamard, requant::Requant},
     model::StepData,
     padding::{PaddingError, PaddingMode, ShapeInfo, pad_conv},
-    quantization::{AbsoluteMax, BIT_LEN, InferenceObserver, InferenceTracker, TensorFielder},
+    quantization::{BIT_LEN, TensorFielder},
 };
 use core::f32;
 
@@ -581,32 +581,22 @@ impl Convolution<f32> {
     }
 }
 
-impl QuantizeOp<InferenceObserver> for Convolution<f32> {
+impl QuantizeOp for Convolution<f32> {
     type QuantizedOp = Convolution<Element>;
 
-    fn quantize_op(
+    fn quantize_op<S: ScalingStrategy>(
         self,
-        tracker: &InferenceTracker,
+        data: &S::AuxData,
         node_id: NodeId,
         input_scaling: &[ScalingFactor],
     ) -> anyhow::Result<QuantizeOutput<Self::QuantizedOp>> {
-        let (min, max) = tracker.distribution_info(node_id, 0);
-        let output_scaling = ScalingFactor::from_absolute_max(min.abs().max(max.abs()), None);
-        self.quantize_from_scalings(input_scaling, output_scaling)
-    }
-}
-
-impl QuantizeOp<AbsoluteMax> for Convolution<f32> {
-    type QuantizedOp = Convolution<Element>;
-
-    fn quantize_op(
-        self,
-        _: &<AbsoluteMax as ScalingStrategy>::AuxData,
-        _node_id: NodeId,
-        input_scaling: &[ScalingFactor],
-    ) -> anyhow::Result<QuantizeOutput<Self::QuantizedOp>> {
-        // TODO: remove this is broken
-        let output_scaling = ScalingFactor::default();
+        let num_outputs = self.num_outputs(input_scaling.len());
+        let mut output_scalings = S::scaling_factors_for_node(data, node_id, num_outputs);
+        ensure!(
+            output_scalings.len() == 1,
+            "Output scaling for convolution layer different from 1"
+        );
+        let output_scaling = output_scalings.pop().unwrap();
         self.quantize_from_scalings(input_scaling, output_scaling)
     }
 }
@@ -1398,12 +1388,12 @@ impl<T: Number> Evaluate<T> for SchoolBookConv<T> {
 
 impl PadOp for SchoolBookConv<Element> {}
 
-impl<S: ScalingStrategy> QuantizeOp<S> for SchoolBookConv<f32> {
+impl QuantizeOp for SchoolBookConv<f32> {
     type QuantizedOp = SchoolBookConv<Element>;
 
-    fn quantize_op(
+    fn quantize_op<S: ScalingStrategy>(
         self,
-        _: &<S as ScalingStrategy>::AuxData,
+        _: &S::AuxData,
         _node_id: NodeId,
         input_scaling: &[ScalingFactor],
     ) -> anyhow::Result<QuantizeOutput<Self::QuantizedOp>> {

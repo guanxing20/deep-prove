@@ -16,7 +16,7 @@ use flatten::Flatten;
 use pooling::{PoolingCtx, PoolingProof};
 use provable::{
     Evaluate, LayerOut, Node, OpInfo, PadOp, ProvableOp, ProvableOpError, ProveInfo, QuantizeOp,
-    QuantizeOutput, quantize_op,
+    QuantizeOutput,
 };
 use requant::RequantCtx;
 use transcript::Transcript;
@@ -453,7 +453,7 @@ where
                 // check that the layer is not provable, so we don't need to call the method
                 assert!(!school_book_conv.is_provable());
                 Ok(())
-            },
+            }
             Layer::Activation(activation) => activation.gen_lookup_witness(id, gen, step_data),
             Layer::Requant(requant) => requant.gen_lookup_witness(id, gen, step_data),
             Layer::Pooling(pooling) => pooling.gen_lookup_witness(id, gen, step_data),
@@ -461,27 +461,23 @@ where
                 // check that the layer is not provable, so we don't need to call the method
                 assert!(!reshape.is_provable());
                 Ok(())
-            },
+            }
         }
     }
 }
 
-impl<S: ScalingStrategy> QuantizeOp<S> for Layer<f32>
-where
-    Dense<f32>: QuantizeOp<S, QuantizedOp = Dense<Element>>,
-    Convolution<f32>: QuantizeOp<S, QuantizedOp = Convolution<Element>>,
-{
+impl QuantizeOp for Layer<f32> {
     type QuantizedOp = Layer<Element>;
 
-    fn quantize_op(
+    fn quantize_op<S: ScalingStrategy>(
         self,
-        tracker: &S::AuxData,
+        data: &S::AuxData,
         node_id: provable::NodeId,
         input_scaling: &[ScalingFactor],
     ) -> anyhow::Result<QuantizeOutput<Self::QuantizedOp>> {
         Ok(match self {
             Layer::Dense(dense) => {
-                let output = quantize_op::<S, _>(dense, tracker, node_id, input_scaling)?;
+                let output = dense.quantize_op::<S>(data, node_id, input_scaling)?;
                 QuantizeOutput {
                     quanzited_op: Layer::Dense(output.quanzited_op),
                     output_scalings: output.output_scalings,
@@ -489,7 +485,7 @@ where
                 }
             }
             Layer::Convolution(convolution) => {
-                let output = quantize_op::<S, _>(convolution, tracker, node_id, input_scaling)?;
+                let output = convolution.quantize_op::<S>(data, node_id, input_scaling)?;
                 QuantizeOutput {
                     quanzited_op: Layer::Convolution(output.quanzited_op),
                     output_scalings: output.output_scalings,
@@ -497,8 +493,7 @@ where
                 }
             }
             Layer::SchoolBookConvolution(school_book_conv) => {
-                let output =
-                    quantize_op::<S, _>(school_book_conv, tracker, node_id, input_scaling)?;
+                let output = school_book_conv.quantize_op::<S>(data, node_id, input_scaling)?;
                 QuantizeOutput {
                     quanzited_op: Layer::SchoolBookConvolution(output.quanzited_op),
                     output_scalings: output.output_scalings,

@@ -299,27 +299,16 @@ pub struct QuantizeOutput<Op> {
     pub(crate) requant_layer: Option<Requant>,
 }
 
-pub trait QuantizeOp<S: ScalingStrategy> {
+pub trait QuantizeOp {
     type QuantizedOp: Sized;
 
     /// Convert an operation into its quantized version
-    fn quantize_op(
+    fn quantize_op<S: ScalingStrategy>(
         self,
         data: &S::AuxData,
         node_id: NodeId,
         input_scaling: &[ScalingFactor],
     ) -> anyhow::Result<QuantizeOutput<Self::QuantizedOp>>;
-}
-
-/// Helper method employed to call `QuantizeOp::quantize_op` when the `QuantizationStrategy` type
-/// canno be inferred automatically
-pub fn quantize_op<S: ScalingStrategy, O: QuantizeOp<S>>(
-    op: O,
-    data: &S::AuxData,
-    node_id: NodeId,
-    input_scaling: &[ScalingFactor],
-) -> anyhow::Result<QuantizeOutput<O::QuantizedOp>> {
-    op.quantize_op(data, node_id, input_scaling)
 }
 
 pub trait PadOp {
