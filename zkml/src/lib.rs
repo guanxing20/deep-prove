@@ -18,7 +18,6 @@ pub use quantization::{ScalingFactor, ScalingStrategy};
 pub mod layers;
 pub mod lookup;
 pub mod model;
-mod onnx_parse;
 pub mod padding;
 mod parser;
 pub use parser::{FloatOnnxLoader, ModelType};

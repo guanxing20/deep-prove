@@ -8,11 +8,11 @@ use crate::{
     },
     layers::{LayerCtx, LayerProof, PolyID, requant::Requant},
     model::StepData,
-    padding::{PaddingError, PaddingMode, ShapeInfo, pad_dense},
+    padding::{PaddingMode, ShapeInfo, pad_dense},
     quantization::{self, BIT_LEN, ScalingFactor},
     tensor::Number,
 };
-use anyhow::{Context, ensure};
+use anyhow::{Context, Result, ensure};
 use ff_ext::ExtensionField;
 use itertools::Itertools;
 use multilinear_extensions::{
@@ -27,8 +27,8 @@ use transcript::Transcript;
 use crate::{Element, tensor::Tensor};
 
 use super::provable::{
-    Evaluate, LayerOut, NodeId, OpInfo, PadOp, ProvableOp, ProvableOpError, ProveInfo, QuantizeOp,
-    QuantizeOutput, VerifiableCtx,
+    Evaluate, LayerOut, NodeId, OpInfo, PadOp, ProvableOp, ProveInfo, QuantizeOp, QuantizeOutput,
+    VerifiableCtx,
 };
 
 /// Bias to compute the bias ID polynomials. Since originally we take the index of each
@@ -128,7 +128,14 @@ impl<T: Number> Dense<T> {
                 .all(|x| x.compare(&T::default()) == Ordering::Equal)
         )
     }
+
+    fn num_outputs(num_inputs: usize) -> usize {
+        assert_eq!(num_inputs, 1);
+        1
+    }
 }
+
+const IS_PROVABLE: bool = true;
 
 impl<N: Number> OpInfo for Dense<N> {
     fn output_shapes(
@@ -143,8 +150,7 @@ impl<N: Number> OpInfo for Dense<N> {
     }
 
     fn num_outputs(&self, num_inputs: usize) -> usize {
-        assert_eq!(num_inputs, 1);
-        1
+        Self::num_outputs(num_inputs)
     }
 
     fn describe(&self) -> String {
@@ -156,7 +162,7 @@ impl<N: Number> OpInfo for Dense<N> {
     }
 
     fn is_provable(&self) -> bool {
-        true
+        IS_PROVABLE
     }
 }
 
@@ -165,12 +171,11 @@ impl<N: Number> Evaluate<N> for Dense<N> {
         &self,
         inputs: &[&Tensor<N>],
         _unpadded_input_shapes: Vec<Vec<usize>>,
-    ) -> Result<LayerOut<N, E>, ProvableOpError> {
-        if inputs.len() != 1 {
-            return Err(ProvableOpError::ParameterError(
-                "Dense layer expects one input".to_string(),
-            ));
-        }
+    ) -> Result<LayerOut<N, E>> {
+        ensure!(
+            inputs.len() == 1,
+            "Found more than 1 input when evaluating dense layer"
+        );
         let input = inputs[0];
         Ok(LayerOut::from_vec(vec![if input.get_shape().len() != 1 {
             let flat_input = input.flatten();
@@ -188,11 +193,7 @@ where
     E::BaseField: Serialize + DeserializeOwned,
     E: Serialize + DeserializeOwned,
 {
-    fn step_info(
-        &self,
-        id: PolyID,
-        mut aux: ContextAux,
-    ) -> Result<(LayerCtx<E>, ContextAux), ProvableOpError> {
+    fn step_info(&self, id: PolyID, mut aux: ContextAux) -> Result<(LayerCtx<E>, ContextAux)> {
         // construct dimension of the polynomial given to the sumcheck
         let ncols = self.matrix.ncols_2d();
         aux.last_output_shape
@@ -236,7 +237,7 @@ where
 }
 
 impl PadOp for Dense<Element> {
-    fn pad_node(self, si: &mut ShapeInfo) -> Result<Self, PaddingError>
+    fn pad_node(self, si: &mut ShapeInfo) -> Result<Self>
     where
         Self: Sized,
     {
@@ -316,7 +317,7 @@ where
         last_claims: Vec<&Claim<E>>,
         step_data: &StepData<E, E>,
         prover: &mut Prover<E, T>,
-    ) -> Result<Vec<Claim<E>>, ProvableOpError> {
+    ) -> Result<Vec<Claim<E>>> {
         Ok(vec![self.prove_step(
             prover,
             last_claims[0],
@@ -325,6 +326,39 @@ where
             ctx,
             id,
         )?])
+    }
+}
+
+impl<E> OpInfo for DenseCtx<E>
+where
+    E: ExtensionField,
+    E::BaseField: Serialize + DeserializeOwned,
+    E: Serialize + DeserializeOwned,
+{
+    fn output_shapes(
+        &self,
+        input_shapes: &[Vec<usize>],
+        padding_mode: PaddingMode,
+    ) -> Vec<Vec<usize>> {
+        input_shapes
+            .into_iter()
+            .map(|shape| self.output_shape(&shape, padding_mode))
+            .collect()
+    }
+
+    fn num_outputs(&self, num_inputs: usize) -> usize {
+        Dense::<Element>::num_outputs(num_inputs)
+    }
+
+    fn describe(&self) -> String {
+        format!(
+            "Dense: ({},{})",
+            self.padded_matrix_shape[0], self.padded_matrix_shape[1],
+        )
+    }
+
+    fn is_provable(&self) -> bool {
+        IS_PROVABLE
     }
 }
 
@@ -342,19 +376,8 @@ where
         last_claims: &[&Claim<E>],
         verifier: &mut Verifier<E, T>,
         _shape_step: &ShapeStep,
-    ) -> Result<Vec<Claim<E>>, ProvableOpError> {
+    ) -> Result<Vec<Claim<E>>> {
         Ok(vec![self.verify_dense(verifier, last_claims[0], proof)?])
-    }
-
-    fn output_shapes(
-        &self,
-        input_shapes: &[Vec<usize>],
-        padding_mode: PaddingMode,
-    ) -> Vec<Vec<usize>> {
-        input_shapes
-            .into_iter()
-            .map(|shape| self.output_shape(&shape, padding_mode))
-            .collect()
     }
 }
 

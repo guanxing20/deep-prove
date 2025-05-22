@@ -10,13 +10,12 @@ pub mod requant;
 
 use std::fmt::Debug;
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use ff_ext::ExtensionField;
 use flatten::Flatten;
 use pooling::{PoolingCtx, PoolingProof};
 use provable::{
-    Evaluate, LayerOut, Node, OpInfo, PadOp, ProvableOp, ProvableOpError, ProveInfo, QuantizeOp,
-    QuantizeOutput,
+    Evaluate, LayerOut, Node, OpInfo, PadOp, ProvableOp, ProveInfo, QuantizeOp, QuantizeOutput,
 };
 use requant::RequantCtx;
 use transcript::Transcript;
@@ -34,7 +33,7 @@ use crate::{
     },
     lookup::context::LookupWitnessGen,
     model::StepData,
-    padding::{PaddingError, PaddingMode, ShapeInfo},
+    padding::{PaddingMode, ShapeInfo},
     quantization::ScalingFactor,
     tensor::{Number, Tensor},
 };
@@ -189,7 +188,7 @@ where
         &self,
         inputs: &[&Tensor<N>],
         unpadded_input_shapes: Vec<Vec<usize>>,
-    ) -> Result<LayerOut<N, E>, ProvableOpError>
+    ) -> Result<LayerOut<N, E>>
     where
         N: Number,
         Layer<N>: Evaluate<N>,
@@ -201,7 +200,7 @@ where
         &self,
         id: PolyID,
         aux: ContextAux,
-    ) -> Result<(LayerCtx<E>, ContextAux), ProvableOpError>
+    ) -> Result<(LayerCtx<E>, ContextAux)>
     where
         E: ExtensionField + DeserializeOwned,
         E::BaseField: Serialize + DeserializeOwned,
@@ -212,7 +211,7 @@ where
 }
 
 impl Node<Element> {
-    pub(crate) fn pad_node(self, si: &mut ShapeInfo) -> Result<Self, PaddingError> {
+    pub(crate) fn pad_node(self, si: &mut ShapeInfo) -> Result<Self> {
         Ok(Self {
             inputs: self.inputs,
             outputs: self.outputs,
@@ -284,7 +283,7 @@ impl Evaluate<f32> for Layer<f32> {
         &self,
         inputs: &[&Tensor<f32>],
         unpadded_input_shapes: Vec<Vec<usize>>,
-    ) -> Result<LayerOut<f32, E>, ProvableOpError> {
+    ) -> Result<LayerOut<f32, E>> {
         match self {
             Layer::Dense(dense) => dense.evaluate(inputs, unpadded_input_shapes),
             Layer::Convolution(convolution) => convolution.evaluate(inputs, unpadded_input_shapes),
@@ -304,7 +303,7 @@ impl Evaluate<Element> for Layer<Element> {
         &self,
         inputs: &[&Tensor<Element>],
         unpadded_input_shapes: Vec<Vec<usize>>,
-    ) -> Result<LayerOut<Element, E>, ProvableOpError> {
+    ) -> Result<LayerOut<Element, E>> {
         match self {
             Layer::Dense(dense) => dense.evaluate(inputs, unpadded_input_shapes),
             Layer::Convolution(convolution) => convolution.evaluate(inputs, unpadded_input_shapes),
@@ -324,11 +323,7 @@ where
     E: ExtensionField + DeserializeOwned,
     E::BaseField: Serialize + DeserializeOwned,
 {
-    fn step_info(
-        &self,
-        id: PolyID,
-        aux: ContextAux,
-    ) -> Result<(LayerCtx<E>, ContextAux), ProvableOpError> {
+    fn step_info(&self, id: PolyID, aux: ContextAux) -> Result<(LayerCtx<E>, ContextAux)> {
         match self {
             Layer::Dense(dense) => dense.step_info(id, aux),
             Layer::Convolution(convolution) => convolution.step_info(id, aux),
@@ -354,7 +349,7 @@ where
 }
 
 impl PadOp for Layer<Element> {
-    fn pad_node(self, si: &mut ShapeInfo) -> Result<Self, PaddingError>
+    fn pad_node(self, si: &mut ShapeInfo) -> Result<Self>
     where
         Self: Sized,
     {
@@ -386,24 +381,20 @@ where
         last_claims: Vec<&crate::Claim<E>>,
         step_data: &StepData<E, E>,
         prover: &mut crate::Prover<E, T>,
-    ) -> Result<Vec<crate::Claim<E>>, ProvableOpError> {
+    ) -> Result<Vec<crate::Claim<E>>> {
         match self {
             Layer::Dense(dense) => {
                 if let LayerCtx::Dense(info) = ctx {
                     dense.prove(node_id, info, last_claims, step_data, prover)
                 } else {
-                    Err(ProvableOpError::ParameterError(
-                        "No dense ctx found for dense layer".to_string(),
-                    ))
+                    bail!("No dense ctx found when proving dense layer")
                 }
             }
             Layer::Convolution(convolution) => {
                 if let LayerCtx::Convolution(info) = ctx {
                     convolution.prove(node_id, info, last_claims, step_data, prover)
                 } else {
-                    Err(ProvableOpError::ParameterError(
-                        "No convolution ctx found for convolution layer".to_string(),
-                    ))
+                    bail!("No convolution ctx found when proving convolution layer")
                 }
             }
             Layer::SchoolBookConvolution(_) => {
@@ -413,27 +404,21 @@ where
                 if let LayerCtx::Activation(info) = ctx {
                     activation.prove(node_id, info, last_claims, step_data, prover)
                 } else {
-                    Err(ProvableOpError::ParameterError(
-                        "No activation ctx found for activation layer".to_string(),
-                    ))
+                    bail!("No activation ctx found when proving activation layer")
                 }
             }
             Layer::Requant(requant) => {
                 if let LayerCtx::Requant(info) = ctx {
                     requant.prove(node_id, info, last_claims, step_data, prover)
                 } else {
-                    Err(ProvableOpError::ParameterError(
-                        "No requant ctx found for requant layer".to_string(),
-                    ))
+                    bail!("No requant ctx found when proving requant layer")
                 }
             }
             Layer::Pooling(pooling) => {
                 if let LayerCtx::Pooling(info) = ctx {
                     pooling.prove(node_id, info, last_claims, step_data, prover)
                 } else {
-                    Err(ProvableOpError::ParameterError(
-                        "No pooling ctx found for pooling layer".to_string(),
-                    ))
+                    bail!("No pooling ctx found when proving pooling layer")
                 }
             }
             Layer::Flatten(_) => unreachable!("prove cannot be called for reshape"),
@@ -445,7 +430,7 @@ where
         id: provable::NodeId,
         gen: &mut LookupWitnessGen<E>,
         step_data: &StepData<Element, E>,
-    ) -> Result<(), ProvableOpError> {
+    ) -> Result<()> {
         match self {
             Layer::Dense(dense) => dense.gen_lookup_witness(id, gen, step_data),
             Layer::Convolution(convolution) => convolution.gen_lookup_witness(id, gen, step_data),

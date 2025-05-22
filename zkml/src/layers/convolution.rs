@@ -3,7 +3,7 @@ use crate::{
     iop::context::ShapeStep,
     layers::{hadamard, requant::Requant},
     model::StepData,
-    padding::{PaddingError, PaddingMode, ShapeInfo, pad_conv},
+    padding::{PaddingMode, ShapeInfo, pad_conv},
     quantization::{BIT_LEN, TensorFielder},
 };
 use core::f32;
@@ -16,7 +16,7 @@ use crate::{
     quantization::{self, ScalingFactor},
     tensor::{ConvData, Number, get_root_of_unity},
 };
-use anyhow::{Context, ensure};
+use anyhow::{Context, Result, ensure};
 use ff_ext::ExtensionField;
 use gkr::util::ceil_log2;
 // use itertools::assert_equal;
@@ -38,12 +38,14 @@ use transcript::Transcript;
 use super::{
     LayerCtx,
     provable::{
-        Evaluate, LayerOut, NodeId, OpInfo, PadOp, ProvableOp, ProvableOpError, ProveInfo,
-        QuantizeOp, QuantizeOutput, VerifiableCtx,
+        Evaluate, LayerOut, NodeId, OpInfo, PadOp, ProvableOp, ProveInfo, QuantizeOp,
+        QuantizeOutput, VerifiableCtx,
     },
 };
 
 pub(crate) const BIAS_POLY_ID: PolyID = 200_000;
+
+const IS_PROVABLE: bool = true;
 /// Convolution layer description (weights)
 #[derive(Clone, Debug)]
 pub struct Convolution<T> {
@@ -197,6 +199,11 @@ impl<T: Number> Convolution<T> {
     pub fn filter_size(&self) -> usize {
         self.filter.filter_size()
     }
+
+    fn num_outputs(num_inputs: usize) -> usize {
+        assert_eq!(num_inputs, 1);
+        1
+    }
 }
 
 impl<T: Number> OpInfo for Convolution<T> {
@@ -212,8 +219,7 @@ impl<T: Number> OpInfo for Convolution<T> {
     }
 
     fn num_outputs(&self, num_inputs: usize) -> usize {
-        assert_eq!(num_inputs, 1);
-        1
+        Self::num_outputs(num_inputs)
     }
 
     fn describe(&self) -> String {
@@ -227,7 +233,7 @@ impl<T: Number> OpInfo for Convolution<T> {
     }
 
     fn is_provable(&self) -> bool {
-        true
+        IS_PROVABLE
     }
 }
 
@@ -236,12 +242,11 @@ impl Evaluate<f32> for Convolution<f32> {
         &self,
         inputs: &[&Tensor<f32>],
         _unpadded_input_shapes: Vec<Vec<usize>>,
-    ) -> Result<LayerOut<f32, E>, super::provable::ProvableOpError> {
-        if inputs.len() != 1 {
-            return Err(super::provable::ProvableOpError::ParameterError(
-                "Convolution layer expects 1 input".to_string(),
-            ));
-        }
+    ) -> Result<LayerOut<f32, E>> {
+        ensure!(
+            inputs.len() == 1,
+            "Found more than 1 input when evaluating convolution layer"
+        );
         let input = inputs[0];
         Ok(LayerOut::from_vec(vec![input.conv2d(
             &self.filter,
@@ -284,18 +289,16 @@ impl Evaluate<Element> for Convolution<Element> {
         &self,
         inputs: &[&Tensor<Element>],
         unpadded_input_shapes: Vec<Vec<usize>>,
-    ) -> Result<LayerOut<Element, E>, ProvableOpError> {
-        if inputs.len() != 1 {
-            return Err(ProvableOpError::ParameterError(
-                "Convolution layer expects 1 input".to_string(),
-            ));
-        }
+    ) -> Result<LayerOut<Element, E>> {
+        ensure!(
+            inputs.len() == 1,
+            "Found more than 1 input when evaluating convolution layer"
+        );
         let input = inputs[0];
-        if unpadded_input_shapes.len() != 1 {
-            return Err(ProvableOpError::ParameterError(
-                "Convolution layer expects 1 input shape".to_string(),
-            ));
-        }
+        ensure!(
+            unpadded_input_shapes.len() == 1,
+            "Found more than 1 input shape when evaluating convolution layer"
+        );
         let (output, proving_data) = self.op(input, unpadded_input_shapes[0].as_slice());
         Ok(LayerOut {
             outputs: vec![output],
@@ -459,11 +462,7 @@ where
     E: ExtensionField + DeserializeOwned,
     E::BaseField: Serialize + DeserializeOwned,
 {
-    fn step_info(
-        &self,
-        id: PolyID,
-        mut aux: ContextAux,
-    ) -> Result<(LayerCtx<E>, ContextAux), ProvableOpError> {
+    fn step_info(&self, id: PolyID, mut aux: ContextAux) -> Result<(LayerCtx<E>, ContextAux)> {
         let mut filter_shape = self.filter.get_shape();
         filter_shape.remove(1);
         aux.last_output_shape
@@ -602,7 +601,7 @@ impl QuantizeOp for Convolution<f32> {
 }
 
 impl PadOp for Convolution<Element> {
-    fn pad_node(self, si: &mut ShapeInfo) -> Result<Self, PaddingError>
+    fn pad_node(self, si: &mut ShapeInfo) -> Result<Self>
     where
         Self: Sized,
     {
@@ -625,7 +624,7 @@ where
         last_claims: Vec<&Claim<E>>,
         step_data: &StepData<E, E>,
         prover: &mut Prover<E, T>,
-    ) -> Result<Vec<Claim<E>>, ProvableOpError> {
+    ) -> Result<Vec<Claim<E>>> {
         Ok(vec![self.prove_convolution_step(
             prover,
             last_claims[0],
@@ -635,6 +634,38 @@ where
             ctx,
             id,
         )?])
+    }
+}
+
+impl<E: ExtensionField> OpInfo for ConvCtx<E>
+where
+    E::BaseField: Serialize + DeserializeOwned,
+    E: Serialize + DeserializeOwned,
+{
+    fn output_shapes(
+        &self,
+        input_shapes: &[Vec<usize>],
+        padding_mode: PaddingMode,
+    ) -> Vec<Vec<usize>> {
+        input_shapes
+            .into_iter()
+            .map(|shape| self.output_shape(&shape, padding_mode))
+            .collect()
+    }
+
+    fn num_outputs(&self, num_inputs: usize) -> usize {
+        Convolution::<Element>::num_outputs(num_inputs)
+    }
+
+    fn describe(&self) -> String {
+        format!(
+            "Conv Ctx: ({},{},{},{})",
+            self.kw, self.kx, self.nw, self.nw,
+        )
+    }
+
+    fn is_provable(&self) -> bool {
+        IS_PROVABLE
     }
 }
 
@@ -652,24 +683,13 @@ where
         last_claims: &[&Claim<E>],
         verifier: &mut Verifier<E, T>,
         shape_step: &ShapeStep,
-    ) -> Result<Vec<Claim<E>>, ProvableOpError> {
+    ) -> Result<Vec<Claim<E>>> {
         Ok(vec![self.verify_convolution(
             verifier,
             last_claims[0],
             proof,
             shape_step,
         )?])
-    }
-
-    fn output_shapes(
-        &self,
-        input_shapes: &[Vec<usize>],
-        padding_mode: PaddingMode,
-    ) -> Vec<Vec<usize>> {
-        input_shapes
-            .into_iter()
-            .map(|shape| self.output_shape(&shape, padding_mode))
-            .collect()
     }
 }
 
@@ -1371,12 +1391,11 @@ impl<T: Number> Evaluate<T> for SchoolBookConv<T> {
         &self,
         inputs: &[&Tensor<T>],
         _unpadded_input_shapes: Vec<Vec<usize>>,
-    ) -> anyhow::Result<LayerOut<T, E>, ProvableOpError> {
-        if inputs.len() != 1 {
-            return Err(super::provable::ProvableOpError::ParameterError(
-                "Convolution layer expects 1 input".to_string(),
-            ));
-        }
+    ) -> anyhow::Result<LayerOut<T, E>> {
+        ensure!(
+            inputs.len() == 1,
+            "Found more than 1 input when evaluating schoolbook convolution layer"
+        );
         let input = inputs[0];
         Ok(LayerOut::from_vec(vec![input.conv2d(
             &self.0.filter,
@@ -1417,11 +1436,7 @@ where
     E::BaseField: Serialize + DeserializeOwned,
     E: ExtensionField + Serialize + DeserializeOwned,
 {
-    fn step_info(
-        &self,
-        _id: PolyID,
-        aux: ContextAux,
-    ) -> Result<(LayerCtx<E>, ContextAux), ProvableOpError> {
+    fn step_info(&self, _id: PolyID, aux: ContextAux) -> Result<(LayerCtx<E>, ContextAux)> {
         let conv_info = LayerCtx::SchoolBookConvolution(SchoolBookConvCtx);
         Ok((conv_info, aux))
     }
