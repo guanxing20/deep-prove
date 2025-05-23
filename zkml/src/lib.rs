@@ -1,4 +1,5 @@
 #![feature(iter_next_chunk)]
+#![feature(exact_size_is_empty)]
 
 use ff_ext::ExtensionField;
 use gkr::structs::PointAndEval;
@@ -17,9 +18,9 @@ pub use quantization::{ScalingFactor, ScalingStrategy};
 pub mod layers;
 pub mod lookup;
 pub mod model;
-mod onnx_parse;
 pub mod padding;
-pub use onnx_parse::{FloatOnnxLoader, ModelType};
+mod parser;
+pub use parser::{FloatOnnxLoader, ModelType};
 pub mod tensor;
 pub use tensor::Tensor;
 #[cfg(test)]
@@ -32,7 +33,7 @@ pub type Element = i128;
 
 /// Claim type to accumulate in this protocol, for a certain polynomial, known in the context.
 /// f(point) = eval
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct Claim<E> {
     point: Vec<E>,
     eval: E,
@@ -103,6 +104,17 @@ pub(crate) fn to_bit_sequence_le(
     (0..bit_length).map(move |i| ((num >> i) & 1) as usize)
 }
 
+pub(crate) fn try_unzip<I, C, T, E>(iter: I) -> Result<C, E>
+where
+    I: IntoIterator<Item = Result<T, E>>,
+    C: Extend<T> + Default,
+{
+    iter.into_iter().try_fold(C::default(), |mut c, r| {
+        c.extend([r?]);
+        Ok(c)
+    })
+}
+
 pub trait VectorTranscript<E: ExtensionField> {
     fn read_challenges(&mut self, n: usize) -> Vec<E>;
 }
@@ -160,13 +172,8 @@ mod test {
 
     use crate::{
         FloatOnnxLoader, default_transcript,
-        iop::{
-            Context,
-            prover::Prover,
-            verifier::{IO, verify},
-        },
-        onnx_parse::ModelType,
-        quantization::TensorFielder,
+        iop::{Context, prover::Prover, verifier::verify},
+        parser::ModelType,
         tensor::Tensor,
         to_bit_sequence_le,
     };
@@ -197,22 +204,24 @@ mod test {
         let ctx = Context::<E>::generate(&model, None).expect("unable to generate context");
         println!("[+] Setup parameters");
 
-        let shape = model.input_shape();
+        let shapes = model.input_shapes();
+        assert_eq!(shapes.len(), 1);
+        let shape = &shapes[0];
         assert_eq!(shape.len(), 1);
         let input = Tensor::random(&vec![shape[0] - 1]);
-        let input = model.prepare_input(input);
+        let input = model.prepare_inputs(vec![input])?;
 
-        let trace = model.run(input.clone()).unwrap();
-        let output = trace.final_output().clone();
+        let trace = model.run(&input).unwrap();
+        let output = trace.outputs()?[0];
         println!("[+] Run inference. Result: {:?}", output);
 
+        let io = trace.to_verifier_io();
         let mut prover_transcript = default_transcript();
         let prover = Prover::<_, _>::new(&ctx, &mut prover_transcript);
         println!("[+] Run prover");
         let proof = prover.prove(trace).expect("unable to generate proof");
 
         let mut verifier_transcript = default_transcript();
-        let io = IO::new(input.to_fields(), output.to_fields());
         verify::<_, _>(ctx, proof, io, &mut verifier_transcript).expect("invalid proof");
         println!("[+] Verify proof: valid");
         Ok(())
