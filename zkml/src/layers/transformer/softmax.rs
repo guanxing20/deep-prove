@@ -29,9 +29,9 @@ impl Evaluate<f32> for Softmax<f32> {
         let output = input
             .slices_last_dim()
             .map(|vec| {
-                let sum = vec.iter().map(|x| x.exp()).sum::<f32>();
+                let sum = vec.iter().map(|x| self.scale * x.exp()).sum::<f32>();
                 vec.iter()
-                    .map(|x| self.scale * x.exp() / sum)
+                    .map(|x| (self.scale * x).exp() / sum)
                     .collect::<Vec<_>>()
             })
             .flatten()
@@ -79,12 +79,12 @@ mod tests {
         assert_eq!(
             output.outputs[0].get_data(),
             vec![
-                2.0 / 3.0,
-                2.0 / 3.0,
-                2.0 / 3.0,
-                2.0 / 3.0,
-                2.0 / 3.0,
-                2.0 / 3.0
+                1.0 / 6.0,
+                1.0 / 6.0,
+                1.0 / 6.0,
+                1.0 / 6.0,
+                1.0 / 6.0,
+                1.0 / 6.0
             ]
         );
     }
