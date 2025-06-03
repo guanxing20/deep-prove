@@ -1,3 +1,4 @@
+//! Deepprove library
 #![feature(iter_next_chunk)]
 #![feature(exact_size_is_empty)]
 
