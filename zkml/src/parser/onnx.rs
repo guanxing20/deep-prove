@@ -368,6 +368,18 @@ fn load_gemm<'a, I: Iterator<Item = &'a usize> + Sized>(
         "Input shape for Gemm must be a vector, found {:?}",
         input_shape
     );
+
+    let mut weight_shape = weight.get_shape();
+    if weight_shape[1] != input_shape[0] {
+        weight = weight.transpose();
+        weight_shape = weight.get_shape();
+    }
+    ensure_onnx!(
+        weight_shape[1] == input_shape[0],
+        "Incompatible shapes found for Gemm node: input shape is {:?}, weight shape is {:?}",
+        input_shape,
+        weight_shape,
+    );
     let mut weight_shape = weight.get_shape();
     // If the weights are a 1D vector we insert a 1 in the shape after checking everything lines up
     if weight_shape.len() == 1 {
@@ -516,7 +528,7 @@ fn is_const(node: &OnnxNode) -> bool {
 
 fn extract_const_tensor(node: &OnnxNode) -> Result<crate::Tensor<f32>> {
     let tensor = downcast_to::<Const>(node)?;
-    let slice = tensor.val().as_slice::<f32>()?;
+    let slice = tensor.0.as_slice::<f32>()?;
     ensure_onnx!(node.outputs.len() == 1, "constant output shape len == 1");
     let Some(shape) = node.outputs[0].fact.shape.as_concrete() else {
         return err(format!("Filter shape {} is not concrete", node.name));
@@ -609,6 +621,7 @@ fn downcast_to<T: Op>(node: &OnnxNode) -> Result<&T> {
 #[cfg(test)]
 mod tests {
 
+    use anyhow::Ok;
     use goldilocks::GoldilocksExt2;
 
     use super::*;
@@ -621,5 +634,33 @@ mod tests {
         let input_tensor = crate::tensor::Tensor::random(&input_shape);
         let trace = model.run::<GoldilocksExt2>(&[input_tensor]).unwrap();
         assert!(trace.steps.len() >= 1);
+    }
+
+    #[test]
+    #[ignore = "this test shows no gpt2 onnx out there are working with tract_onnx"]
+    fn test_parser_onnx_gpt2() -> anyhow::Result<()> {
+        // let path = "assets/scripts/llms/gpt2_simple.onnx";
+        // let path = "gpt2_export/gpt2_simple.onnx";
+        // let path = "assets/scripts/llms/gpt2_download1.onnx";
+        // let path = "assets/scripts/llms/gpt2_onnxcommunity.onnx";
+        let path = "assets/scripts/llms/gpt2_decoder.onnx";
+        let model = {
+            let pmodel = tract_onnx::onnx().model_for_path(path)?.into_typed()?;
+            //.into_decluttered()?;
+            pmodel
+            // so far we dont support batching
+            // let mut values = SymbolValues::default();
+            // let symbol = pmodel.sym("batch_size");
+            // values.set(&symbol, 1);
+            // pmodel.concretize_dims(&values)?
+        };
+
+        // let plan = SimplePlan::new(model)?;
+        // let onnx_model = plan.model();
+        // let inference_order = plan.order_without_consts();
+        for node_id in model.eval_order()? {
+            println!("node {}: {:?}", node_id, model.node(node_id));
+        }
+        Ok(())
     }
 }
