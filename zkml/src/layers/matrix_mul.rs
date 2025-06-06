@@ -546,11 +546,7 @@ impl MatMul<f32> {
         let output_bitsize = quantized.output_bitsize(*quantization::MIN, *quantization::MAX);
         let requant = Requant::from_multiplier(multiplier, output_bitsize);
 
-        Ok(QuantizeOutput {
-            quanzited_op: quantized,
-            output_scalings: vec![output_scaling],
-            requant_layer: Some(requant),
-        })
+        Ok(QuantizeOutput::new(quantized, vec![output_scaling]).with_requant(requant))
     }
 }
 

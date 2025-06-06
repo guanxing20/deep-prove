@@ -573,11 +573,7 @@ impl Convolution<f32> {
             intermediate_bit_size,
         );
 
-        Ok(QuantizeOutput {
-            quanzited_op: quantized_conv,
-            output_scalings: vec![output_scaling],
-            requant_layer: Some(requant),
-        })
+        Ok(QuantizeOutput::new(quantized_conv, vec![output_scaling]).with_requant(requant))
     }
 }
 
@@ -1421,7 +1417,7 @@ impl QuantizeOp for SchoolBookConv<f32> {
         input_scaling: &[ScalingFactor],
     ) -> anyhow::Result<QuantizeOutput<Self::QuantizedOp>> {
         Ok(QuantizeOutput {
-            quanzited_op: SchoolBookConv(self.0.quantize(
+            quantized_op: SchoolBookConv(self.0.quantize(
                 // we don't care about accurate quantization for schoolbook conv
                 &input_scaling[0],
                 &input_scaling[0],

@@ -455,56 +455,42 @@ impl QuantizeOp for Layer<f32> {
         Ok(match self {
             Layer::Dense(dense) => {
                 let output = dense.quantize_op::<S>(data, node_id, input_scaling)?;
-                QuantizeOutput {
-                    quanzited_op: Layer::Dense(output.quanzited_op),
-                    output_scalings: output.output_scalings,
-                    requant_layer: output.requant_layer,
-                }
+                QuantizeOutput::new(Layer::Dense(output.quantized_op), output.output_scalings)
+                    .maybe_requants(output.requant_layer)
             }
             Layer::Convolution(convolution) => {
                 let output = convolution.quantize_op::<S>(data, node_id, input_scaling)?;
-                QuantizeOutput {
-                    quanzited_op: Layer::Convolution(output.quanzited_op),
-                    output_scalings: output.output_scalings,
-                    requant_layer: output.requant_layer,
-                }
+                QuantizeOutput::new(
+                    Layer::Convolution(output.quantized_op),
+                    output.output_scalings,
+                )
+                .maybe_requants(output.requant_layer)
             }
             Layer::MatMul(mat) => {
                 let output = mat.quantize_op::<S>(data, node_id, input_scaling)?;
-                QuantizeOutput {
-                    quanzited_op: Layer::MatMul(output.quanzited_op),
-                    output_scalings: output.output_scalings,
-                    requant_layer: output.requant_layer,
-                }
+                QuantizeOutput::new(Layer::MatMul(output.quantized_op), output.output_scalings)
+                    .maybe_requants(output.requant_layer)
             }
             Layer::SchoolBookConvolution(school_book_conv) => {
                 let output = school_book_conv.quantize_op::<S>(data, node_id, input_scaling)?;
-                QuantizeOutput {
-                    quanzited_op: Layer::SchoolBookConvolution(output.quanzited_op),
-                    output_scalings: output.output_scalings,
-                    requant_layer: output.requant_layer,
-                }
+                QuantizeOutput::new(
+                    Layer::SchoolBookConvolution(output.quantized_op),
+                    output.output_scalings,
+                )
+                .maybe_requants(output.requant_layer)
             }
-            Layer::Activation(activation) => QuantizeOutput {
-                quanzited_op: Layer::Activation(activation),
-                output_scalings: input_scaling.to_vec(),
-                requant_layer: None,
-            },
-            Layer::Requant(requant) => QuantizeOutput {
-                quanzited_op: Layer::Requant(requant),
-                output_scalings: input_scaling.to_vec(),
-                requant_layer: None,
-            },
-            Layer::Pooling(pooling) => QuantizeOutput {
-                quanzited_op: Layer::Pooling(pooling),
-                output_scalings: input_scaling.to_vec(),
-                requant_layer: None,
-            },
-            Layer::Flatten(flatten) => QuantizeOutput {
-                quanzited_op: Layer::Flatten(flatten),
-                output_scalings: input_scaling.to_vec(),
-                requant_layer: None,
-            },
+            Layer::Activation(activation) => {
+                QuantizeOutput::new(Layer::Activation(activation), input_scaling.to_vec())
+            }
+            Layer::Requant(requant) => {
+                QuantizeOutput::new(Layer::Requant(requant), input_scaling.to_vec())
+            }
+            Layer::Pooling(pooling) => {
+                QuantizeOutput::new(Layer::Pooling(pooling), input_scaling.to_vec())
+            }
+            Layer::Flatten(flatten) => {
+                QuantizeOutput::new(Layer::Flatten(flatten), input_scaling.to_vec())
+            }
         })
     }
 }

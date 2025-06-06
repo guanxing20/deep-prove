@@ -63,6 +63,8 @@ pub struct OutputWire {
 #[derive(Clone, Debug)]
 pub struct Node<N> {
     pub(crate) inputs: Vec<Edge>,
+    /// Vector of outgoing wires. The index in this vector means that the corresponding OutputWire
+    /// is linking the i-th output of this node to the designated output node.
     pub(crate) outputs: Vec<OutputWire>,
     pub(crate) operation: Layer<N>,
 }
@@ -284,11 +286,46 @@ where
 /// Output of `QuantizeOp` method over a layer
 pub struct QuantizeOutput<Op> {
     /// The actual layer after quantization
-    pub(crate) quanzited_op: Op,
+    pub(crate) quantized_op: Op,
     /// The scaling factor of the output wires of the operation
     pub(crate) output_scalings: Vec<ScalingFactor>,
     /// The requant layer to be added to the model, if any
-    pub(crate) requant_layer: Option<Requant>,
+    pub(crate) requant_layer: Option<Vec<Requant>>,
+}
+
+impl<Op> QuantizeOutput<Op> {
+    pub fn new(quantized_op: Op, output_scalings: Vec<ScalingFactor>) -> Self {
+        Self {
+            quantized_op,
+            output_scalings,
+            requant_layer: None,
+        }
+    }
+    pub fn with_requant(self, requant: Requant) -> Self {
+        assert!(
+            self.output_scalings.len() == 1,
+            "Number of output scalings must be 1"
+        );
+        Self::with_requants(self, vec![requant])
+    }
+    pub fn with_requants(self, requants: Vec<Requant>) -> Self {
+        assert!(self.requant_layer.is_none(), "Requant layer already exists");
+        assert!(
+            self.output_scalings.len() == requants.len(),
+            "Number of output scalings and requants must be the same"
+        );
+        Self {
+            quantized_op: self.quantized_op,
+            output_scalings: self.output_scalings,
+            requant_layer: Some(requants),
+        }
+    }
+    pub fn maybe_requants(self, requant: Option<Vec<Requant>>) -> Self {
+        match requant {
+            Some(requant) => self.with_requants(requant),
+            None => self,
+        }
+    }
 }
 
 pub trait QuantizeOp {
