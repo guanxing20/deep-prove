@@ -71,7 +71,7 @@ where
         proof: Proof<E, PCS>,
         io: IO<E>,
     ) -> anyhow::Result<()> {
-        // 1. Instatiate everything and append relevant info to the transcript
+        // 1. Instantiate everything and append relevant info to the transcript
         let mut numerators = Vec::<E>::new();
         let mut denominators = Vec::<E>::new();
 

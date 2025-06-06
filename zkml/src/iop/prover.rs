@@ -134,7 +134,7 @@ where
 
     // Protocol for proving the correct computation of the FFT/iFFT matrix.
     // For more details look at the zkCNN paper.
-    // F_middle : all intermidiate evaluations retrieved by the phiGinit algorithm
+    // F_middle : all intermediate evaluations retrieved by the phiGinit algorithm
     // r1: the initial random point used to reduce the matrix into vector
     // r2: the random point produced by the sumcheck
     pub fn delegate_matrix_evaluation(

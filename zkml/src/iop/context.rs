@@ -100,7 +100,7 @@ where
     E::BaseField: Serialize + DeserializeOwned,
     E: Serialize + DeserializeOwned,
 {
-    /// Generates a context to give to the verifier that contains informations about the polynomials
+    /// Generates a context to give to the verifier that contains information about the polynomials
     /// to prove at each step.
     /// INFO: it _assumes_ the model is already well padded to power of twos.
     pub fn generate(

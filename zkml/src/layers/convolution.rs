@@ -877,7 +877,7 @@ impl Convolution<Element> {
 
         // After computing w_reduced, observe that y = \sum_{k \in [n_x^2]} sum_{j \in [k_x]} beta2[k]*x[j][k]*w_reduced[j][k]
         // This is a cubic sumcheck where v1 = [x[0][0],...,x[k_x][n_x^2]], v2 = [w_reduced[0][0],...,w_reduced[k_x][n_x^2]]
-        // and v3 = [beta2,..(k_x times)..,beta2]. So, first initialzie v3 and then invoke the cubic sumceck.
+        // and v3 = [beta2,..(k_x times)..,beta2]. So, first initialize v3 and then invoke the cubic sumceck.
         let mut aggregated_filter =
             vec![vec![E::ZERO; self.filter.real_nw() * self.filter.real_nw()]; self.filter.kx()];
         let filter_size = self.filter.real_nw() * self.filter.real_nw();
@@ -1653,7 +1653,7 @@ mod test {
         assert_eq!(output_shape, vec![7, 21, 21]);
     }
 
-    /// Test that check if just taking shapes from input and conv not padded we can manipualte input
+    /// Test that check if just taking shapes from input and conv not padded we can manipulate input
     /// and filter to run it in padded world with FFT based convolution.
     #[test]
     fn test_conv_unpadded_to_padded() {
@@ -1722,7 +1722,7 @@ mod test {
         let input_shape: Vec<usize> = vec![1, 23, 23];
         let conv_shape_og: Vec<usize> = vec![7, 1, 3, 3];
 
-        // wieght of the filter
+        // weight of the filter
         let w1 = Tensor::random(&conv_shape_og);
         let bias1: Tensor<Element> = Tensor::zeros(vec![conv_shape_og[0]]);
         // creation of the padded and fft'd convolution
@@ -1849,9 +1849,9 @@ mod test {
         // again another conv
         let filter = Tensor::random(&vec![k_w, k_x, n_w, n_w]);
         let bias = Tensor::random(&vec![k_w]);
-        println!("2ND CONV: filter.get_shape() : {:?}", filter.get_shape());
-        println!("2ND CONV: bias.get_shape() : {:?}", bias.get_shape());
-        println!("2ND CONV: input.get_shape() : {:?}", output.get_shape());
+        println!("2AND CONV: filter.get_shape() : {:?}", filter.get_shape());
+        println!("2AND CONV: bias.get_shape() : {:?}", bias.get_shape());
+        println!("2AND CONV: input.get_shape() : {:?}", output.get_shape());
         let output = output.conv2d(&filter, &bias, 1);
         let dims = filter.get_shape();
         let fft_conv =

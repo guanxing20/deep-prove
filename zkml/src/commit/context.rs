@@ -408,7 +408,7 @@ where
         // Check that all the model commitments have been used
         ensure!(
             self.model_comms_map.is_empty(),
-            "Not all mdoel commits have been used, had {} remaining",
+            "Not all model commits have been used, had {} remaining",
             self.model_comms_map.len()
         );
 
@@ -448,7 +448,7 @@ where
                     claim: inner_claim,
                 } = claim;
                 let Claim { point, eval } = inner_claim;
-                // Check that the commitments align, we can use a defualt transcript because trivial openings don't require a transcript
+                // Check that the commitments align, we can use a default transcript because trivial openings don't require a transcript
                 let mut t = default_transcript::<E>();
                 PCS::verify(
                     commitment_context.verifier_params(),
