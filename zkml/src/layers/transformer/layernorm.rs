@@ -1,12 +1,11 @@
 use anyhow::ensure;
+use tracing::warn;
 
 use crate::{
-    Element, Tensor,
+    Element, ScalingFactor, Tensor,
+    layers::provable::{QuantizeOp, QuantizeOutput},
     padding::PaddingMode,
-    parser::{
-        gguf::{FileTensorLoader, LLMConfig},
-        json,
-    },
+    parser::{gguf::FileTensorLoader, json, llm::LLMConfig},
     tensor::Number,
 };
 
@@ -100,7 +99,11 @@ impl Evaluate<f32> for LayerNorm<f32> {
     ) -> anyhow::Result<LayerOut<f32, E>> {
         assert!(inputs.len() == 1);
         let input = inputs[0];
-        assert!(input.get_shape().len() == 2);
+        ensure!(
+            input.get_shape().len() == 2,
+            "layernorm input must have shape [seq_len, embedding_size]: found {:?}",
+            input.get_shape()
+        );
         let embedding_size = input.get_shape()[1];
         let device = Default::default();
         // NOTE: simply use the burn tensor API for now as we want to move towards using more burn features
@@ -141,6 +144,25 @@ impl Evaluate<Element> for LayerNorm<Element> {
         _unpadded_input_shapes: Vec<Vec<usize>>,
     ) -> anyhow::Result<LayerOut<Element, E>> {
         unimplemented!()
+    }
+}
+
+impl QuantizeOp for LayerNorm<f32> {
+    type QuantizedOp = LayerNorm<Element>;
+
+    fn quantize_op<S: crate::ScalingStrategy>(
+        self,
+        _data: &S::AuxData,
+        _node_id: crate::layers::provable::NodeId,
+        input_scaling: &[crate::ScalingFactor],
+    ) -> anyhow::Result<crate::layers::provable::QuantizeOutput<Self::QuantizedOp>> {
+        // TODO: write the layernorm quantization rule depending on proving
+        // Currently still working since we want to test quantization of layers.
+        warn!("LayerNorm quantization not implemented");
+        let gamma = self.gamma.quantize(&ScalingFactor::default());
+        let beta = self.beta.quantize(&ScalingFactor::default());
+        let quantized = LayerNorm::new(gamma, beta, self.eps);
+        Ok(QuantizeOutput::new(quantized, input_scaling.to_vec()))
     }
 }
 
