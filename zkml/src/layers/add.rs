@@ -116,7 +116,7 @@ impl QuantizeOp for Add<f32> {
 
 #[cfg(test)]
 mod test {
-    use goldilocks::GoldilocksExt2;
+    use ff_ext::GoldilocksExt2;
 
     use crate::Element;
 

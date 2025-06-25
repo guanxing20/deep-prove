@@ -16,7 +16,7 @@ use rayon::{
     prelude::{IntoParallelIterator, ParallelIterator},
 };
 use sumcheck_macro::sumcheck_code_gen;
-use transcript::{Challenge, Transcript, TranscriptSyncronized};
+use transcript::{Challenge, Transcript, TranscriptSynchronized};
 
 use crate::{
     macros::{entered_span, exit_span},
@@ -26,6 +26,7 @@ use crate::{
         merge_sumcheck_polys, serial_extrapolate,
     },
 };
+use p3_field::FieldAlgebra;
 
 impl<'a, E: ExtensionField> IOPProverState<'a, E> {
     /// Given a virtual polynomial, generate an IOP proof.
@@ -68,13 +69,15 @@ impl<'a, E: ExtensionField> IOPProverState<'a, E> {
 
         transcript.append_message(&(num_variables + log2_max_thread_id).to_le_bytes());
         transcript.append_message(&max_degree.to_le_bytes());
-        let thread_based_transcript = TranscriptSyncronized::new(max_thread_id);
+        let thread_based_transcript = TranscriptSynchronized::new(max_thread_id);
         let (tx_prover_state, rx_prover_state) = bounded(max_thread_id);
 
         // extrapolation_aux only need to init once
         let extrapolation_aux = (1..max_degree)
             .map(|degree| {
-                let points = (0..1 + degree as u64).map(E::from).collect::<Vec<_>>();
+                let points = (0..1 + degree as u64)
+                    .map(E::from_canonical_u64)
+                    .collect::<Vec<_>>();
                 let weights = barycentric_weights(&points);
                 (points, weights)
             })
@@ -396,8 +399,7 @@ impl<'a, E: ExtensionField> IOPProverState<'a, E> {
                     .flattened_ml_extensions
                     .iter_mut()
                     // benchmark result indicate make_mut achieve better performange than get_mut,
-                    // which can be +5% overhead rust docs doen't explain the
-                    // reason
+                    // which can be +5% overhead rust docs doesn't explain the reason
                     .map(Arc::get_mut)
                     .for_each(|f| {
                         if let Some(f) = f {
@@ -420,7 +422,7 @@ impl<'a, E: ExtensionField> IOPProverState<'a, E> {
         // for it evaluation value we need to times 2^(max_num_vars - num_vars)
         // E.g. Giving multivariate poly f(X) = f_1(X1) + f_2(X), X1 \in {F}^{n'}, X \in {F}^{n}, |X1| := n', |X| = n, n' <= n
         // For i round univariate poly, f^i(x)
-        // f^i[0] = \sum_b f(r, 0, b), b \in {0, 1}^{n-i-1}, r \in {F}^{n-i-1} chanllenge get from prev rounds
+        // f^i[0] = \sum_b f(r, 0, b), b \in {0, 1}^{n-i-1}, r \in {F}^{n-i-1} challenge get from prev rounds
         //        = \sum_b f_1(r, 0, b1) + f_2(r, 0, b), |b| >= |b1|, |b| - |b1| = n - n'
         //        = 2^(|b| - |b1|) * \sum_b1 f_1(r, 0, b1)  + \sum_b f_2(r, 0, b)
         // same applied on f^i[1]
@@ -441,13 +443,13 @@ impl<'a, E: ExtensionField> IOPProverState<'a, E> {
                     _ => unimplemented!("do not support degree {} > 5", products.len()),
                 };
                 exit_span!(span);
-                sum.iter_mut().for_each(|sum| *sum *= coefficient);
+                sum.iter_mut().for_each(|sum| *sum *= *coefficient);
 
                 let span = entered_span!("extrapolation");
                 let extrapolation = (0..self.poly.aux_info.max_degree - products.len())
                     .map(|i| {
                         let (points, weights) = &self.extrapolation_aux[products.len() - 1];
-                        let at = E::from((products.len() + 1 + i) as u64);
+                        let at = E::from_canonical_u64((products.len() + 1 + i) as u64);
                         serial_extrapolate(points, weights, &sum, &at)
                     })
                     .collect::<Vec<_>>();
@@ -598,7 +600,9 @@ impl<'a, E: ExtensionField> IOPProverState<'a, E> {
             poly: polynomial,
             extrapolation_aux: (1..max_degree)
                 .map(|degree| {
-                    let points = (0..1 + degree as u64).map(E::from).collect::<Vec<_>>();
+                    let points = (0..1 + degree as u64)
+                        .map(E::from_canonical_u64)
+                        .collect::<Vec<_>>();
                     let weights = barycentric_weights(&points);
                     (points, weights)
                 })
@@ -668,8 +672,7 @@ impl<'a, E: ExtensionField> IOPProverState<'a, E> {
                     .flattened_ml_extensions
                     .par_iter_mut()
                     // benchmark result indicate make_mut achieve better performange than get_mut,
-                    // which can be +5% overhead rust docs doen't explain the
-                    // reason
+                    // which can be +5% overhead rust docs doesn't explain the reason
                     .map(Arc::get_mut)
                     .for_each(|f| {
                         if let Some(f) = f {
@@ -707,14 +710,14 @@ impl<'a, E: ExtensionField> IOPProverState<'a, E> {
                         _ => unimplemented!("do not support degree {} > 5", products.len()),
                     };
                     exit_span!(span);
-                    sum.iter_mut().for_each(|sum| *sum *= coefficient);
+                    sum.iter_mut().for_each(|sum| *sum *= *coefficient);
 
                     let span = entered_span!("extrapolation");
                     let extrapolation = (0..self.poly.aux_info.max_degree - products.len())
                         .into_par_iter()
                         .map(|i| {
                             let (points, weights) = &self.extrapolation_aux[products.len() - 1];
-                            let at = E::from((products.len() + 1 + i) as u64);
+                            let at = E::from_canonical_u64((products.len() + 1 + i) as u64);
                             extrapolate(points, weights, &sum, &at)
                         })
                         .collect::<Vec<_>>();

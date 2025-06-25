@@ -153,7 +153,7 @@ fn range_end<R: RangeBounds<usize>>(range: &R) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
-    use goldilocks::GoldilocksExt2;
+    use ff_ext::GoldilocksExt2;
 
     use crate::Element;
 

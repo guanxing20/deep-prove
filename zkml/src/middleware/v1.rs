@@ -1,7 +1,7 @@
 use std::{io::BufReader, path::Path};
 
 use anyhow::{Context, ensure};
-use goldilocks::GoldilocksExt2;
+use ff_ext::GoldilocksExt2;
 use mpcs::{Basefold, BasefoldRSParams};
 use serde::{Deserialize, Serialize};
 

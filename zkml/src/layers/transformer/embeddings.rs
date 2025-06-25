@@ -88,7 +88,7 @@ impl<N: Number> Evaluate<N> for Embeddings<N> {
 #[cfg(test)]
 mod tests {
     use ark_std::rand::{Rng, thread_rng};
-    use goldilocks::GoldilocksExt2;
+    use ff_ext::GoldilocksExt2;
 
     use crate::Element;
 

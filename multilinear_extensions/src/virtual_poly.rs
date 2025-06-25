@@ -5,9 +5,9 @@ use crate::{
     util::{bit_decompose, create_uninit_vec, max_usable_threads},
 };
 use ark_std::{end_timer, rand::Rng, start_timer};
-use ff::PrimeField;
 use ff_ext::ExtensionField;
 use itertools::Itertools;
+use p3_field::{Field, FieldAlgebra};
 use rayon::{
     iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator},
     slice::ParallelSliceMut,
@@ -71,8 +71,8 @@ pub struct VPAuxInfo<E> {
 impl<E: ExtensionField> VPAuxInfo<E> {
     pub fn write_to_transcript<T: Transcript<E>>(&self, t: &mut T) {
         t.append_field_elements(&[
-            E::BaseField::from(self.max_degree as u64),
-            E::BaseField::from(self.max_num_variables as u64),
+            E::BaseField::from_canonical_u64(self.max_degree as u64),
+            E::BaseField::from_canonical_u64(self.max_num_variables as u64),
         ]);
     }
 }
@@ -220,13 +220,13 @@ impl<'a, E: ExtensionField> VirtualPolynomial<'a, E> {
     /// in-place merge with another virtual polynomial
     pub fn merge(&mut self, other: &VirtualPolynomial<'a, E>) {
         let start = start_timer!(|| "virtual poly add");
-        for (coeffient, products) in other.products.iter() {
+        for (coefficient, products) in other.products.iter() {
             let cur: Vec<_> = products
                 .iter()
                 .map(|&x| other.flattened_ml_extensions[x].clone())
                 .collect();
 
-            self.add_mle_list(cur, *coeffient);
+            self.add_mle_list(cur, *coefficient);
         }
         end_timer!(start);
     }
@@ -294,7 +294,7 @@ impl<'a, E: ExtensionField> VirtualPolynomial<'a, E> {
         }
         for i in 0..1 << self.aux_info.max_num_variables {
             let point = bit_decompose(i, self.aux_info.max_num_variables);
-            let point_fr: Vec<E> = point.iter().map(|&x| E::from(x as u64)).collect();
+            let point_fr: Vec<E> = point.iter().map(|&x| E::from_bool(x)).collect();
             println!("{} {:?}", i, self.evaluate(point_fr.as_ref()))
         }
         println!()
@@ -302,7 +302,7 @@ impl<'a, E: ExtensionField> VirtualPolynomial<'a, E> {
 }
 
 /// Evaluate eq polynomial.
-pub fn eq_eval<F: PrimeField>(x: &[F], y: &[F]) -> F {
+pub fn eq_eval<F: Field>(x: &[F], y: &[F]) -> F {
     assert_eq!(x.len(), y.len(), "x and y have different length");
 
     let start = start_timer!(|| "eq_eval");
@@ -371,7 +371,7 @@ fn build_eq_x_r_helper_sequential<E: ExtensionField>(r: &[E], buf: &mut [MaybeUn
         let next_size = 1 << (i + 1);
         // suppose at the previous step we processed buf [0..size]
         // for the current step we are populating new buf[0..2*size]
-        // for j travese 0..size
+        // for j traverse 0..size
         // buf[2*j + 1] = r * buf[j]
         // buf[2*j] = (1 - r) * buf[j]
         (0..next_size).step_by(2).rev().for_each(|index| {
@@ -453,8 +453,7 @@ pub fn build_eq_x_r_vec<E: ExtensionField>(r: &[E]) -> Vec<E> {
 mod tests {
     use crate::virtual_poly::{build_eq_x_r_vec, build_eq_x_r_vec_sequential};
     use ark_std::rand::thread_rng;
-    use ff::Field;
-    use goldilocks::GoldilocksExt2;
+    use ff_ext::{FromUniformBytes, GoldilocksExt2};
 
     #[test]
     fn test_build_eq() {

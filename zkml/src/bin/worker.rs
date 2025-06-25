@@ -4,7 +4,7 @@ use alloy::signers::local::LocalSigner;
 use anyhow::{Context as _, Result};
 use clap::Parser;
 use futures::StreamExt;
-use goldilocks::GoldilocksExt2;
+use ff_ext::GoldilocksExt2;
 use mpcs::{Basefold, BasefoldRSParams};
 use tonic::{metadata::MetadataValue, transport::ClientTlsConfig};
 

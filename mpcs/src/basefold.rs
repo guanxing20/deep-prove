@@ -134,7 +134,7 @@ where
         // endian, so the left half of the evaluation vector are evaluated
         // at 0 for the first variable, and the right half are evaluated at
         // 1 for the first variable.
-        // In each step of sum-check, we subsitute the first variable of the
+        // In each step of sum-check, we substitute the first variable of the
         // current polynomial with the random challenge, which is equivalent
         // to a left-right folding of the evaluation vector.
         // However, the algorithms that we will use are applying even-odd
@@ -360,7 +360,7 @@ where
         // assumptions
         // 1. there must be at least one polynomial
         // 2. all polynomials must exist in the same field type
-        //    (TODO: eliminate this assumption by supporting commiting
+        //    (TODO: eliminate this assumption by supporting committing
         //     and opening mixed-type polys)
         // 3. all polynomials must have the same number of variables
 
@@ -600,7 +600,7 @@ where
             evals.iter().map(Evaluation::value),
             &evals
                 .iter()
-                .map(|eval| E::from(1 << (num_vars - points[eval.point()].len())))
+                .map(|eval| E::from_canonical_u64(1 << (num_vars - points[eval.point()].len())))
                 .collect_vec(),
             &poly_iter_ext(&eq_xt).take(evals.len()).collect_vec(),
         );
@@ -651,8 +651,8 @@ where
                     inner_product(
                         &poly_iter_ext(poly).collect_vec(),
                         build_eq_x_r_vec(point).iter(),
-                    ) * scalar
-                        * E::from(1 << (num_vars - poly.num_vars))
+                    ) * *scalar
+                        * E::from_canonical_u64(1 << (num_vars - poly.num_vars))
                     // When this polynomial is smaller, it will be repeatedly summed over the cosets of the hypercube
                 })
                 .sum::<E>();
@@ -870,7 +870,7 @@ where
 
         if proof.is_trivial() {
             let trivial_proof = &proof.trivial_proof;
-            let merkle_tree = MerkleTree::from_batch_leaves(trivial_proof.clone());
+            let merkle_tree = MerkleTree::<E>::from_batch_leaves(trivial_proof.clone());
             if comm.root() == merkle_tree.root() {
                 let computed_eval = DenseMultilinearExtension::<E> {
                     evaluations: trivial_proof[0].clone(),
@@ -1004,7 +1004,7 @@ where
             evals.iter().map(Evaluation::value),
             &evals
                 .iter()
-                .map(|eval| E::from(1 << (num_vars - points[eval.point()].len())))
+                .map(|eval| E::from_canonical_u64(1 << (num_vars - points[eval.point()].len())))
                 .collect_vec(),
             &poly_iter_ext(&eq_xt).take(evals.len()).collect_vec(),
         );
@@ -1107,7 +1107,7 @@ where
 
         if proof.is_trivial() {
             let trivial_proof = &proof.trivial_proof;
-            let merkle_tree = MerkleTree::from_batch_leaves(trivial_proof.clone());
+            let merkle_tree = MerkleTree::<E>::from_batch_leaves(trivial_proof.clone());
             if comm.root() == merkle_tree.root() {
                 return Ok(());
             } else {
@@ -1206,6 +1206,8 @@ where
 
 #[cfg(test)]
 mod test {
+    use ff_ext::GoldilocksExt2;
+
     use crate::{
         basefold::Basefold,
         test_util::{
@@ -1214,7 +1216,6 @@ mod test {
             run_simple_batch_commit_open_verify,
         },
     };
-    use goldilocks::GoldilocksExt2;
 
     use super::{BasefoldRSParams, structure::BasefoldBasecodeParams};
 

@@ -1,14 +1,15 @@
 #![deny(clippy::cargo)]
 //! This repo is not properly implemented
 //! Transcript APIs are placeholders; the actual logic is to be implemented later.
-#![feature(generic_arg_infer)]
 
 pub mod basic;
 mod statistics;
-pub mod syncronized;
+pub mod synchronized;
 pub use basic::BasicTranscript;
+use ff_ext::SmallField;
+use p3_field::FieldAlgebra;
 pub use statistics::{BasicTranscriptWithStat, StatisticRecorder};
-pub use syncronized::TranscriptSyncronized;
+pub use synchronized::TranscriptSynchronized;
 
 #[derive(Default, Copy, Clone, Eq, PartialEq, Debug)]
 pub struct Challenge<F> {
@@ -16,10 +17,9 @@ pub struct Challenge<F> {
 }
 
 use ff_ext::ExtensionField;
-use goldilocks::SmallField;
 /// The Transcript trait
 pub trait Transcript<E: ExtensionField>: Clone {
-    /// Append a slice of base field elemets to the transcript.
+    /// Append a slice of base field elements to the transcript.
     ///
     /// An implementation has to provide at least one of
     /// `append_field_elements` / `append_field_element`
@@ -98,7 +98,7 @@ pub trait ForkableTranscript<E: ExtensionField>: Transcript<E> + Sized + Clone {
         (0..n)
             .map(|i| {
                 let mut fork = self.clone();
-                fork.append_field_element(&(i as u64).into());
+                fork.append_field_element(&E::BaseField::from_canonical_u64(i as u64));
                 fork
             })
             .collect()

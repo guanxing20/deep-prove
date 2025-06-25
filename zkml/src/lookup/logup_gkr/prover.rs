@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use ff_ext::ExtensionField;
+use p3_field::FieldAlgebra;
 
 use multilinear_extensions::{
     mle::{IntoMLE, MultilinearExtension},
@@ -46,16 +47,16 @@ pub fn batch_prove<E: ExtensionField, T: Transcript<E>>(
         .collect::<Vec<_>>();
 
     // Append the number of instances along with their output evals to the transcript and then squeeze our first alpha and lambda
-    transcript.append_field_element(&E::BaseField::from(num_instances as u64));
+    transcript.append_field_element(&E::BaseField::from_canonical_u64(num_instances as u64));
     circuit_outputs
         .iter()
         .for_each(|evals| transcript.append_field_element_exts(evals));
 
     let batching_challenge = transcript
-        .get_and_append_challenge(b"inital_batching")
+        .get_and_append_challenge(b"initial_batching")
         .elements;
     let mut alpha = transcript
-        .get_and_append_challenge(b"inital_alpha")
+        .get_and_append_challenge(b"initial_alpha")
         .elements;
     let mut lambda = transcript
         .get_and_append_challenge(b"initial_lambda")

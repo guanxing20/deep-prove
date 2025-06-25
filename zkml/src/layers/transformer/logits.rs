@@ -72,7 +72,7 @@ impl OpInfo for Logits {
 
 #[cfg(test)]
 mod test {
-    use goldilocks::GoldilocksExt2;
+    use ff_ext::GoldilocksExt2;
 
     use super::*;
     use crate::{layers::provable::Evaluate, tensor::Tensor};

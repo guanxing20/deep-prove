@@ -19,7 +19,7 @@ pub enum LogUpLayer<E: ExtensionField> {
         denominator: Vec<E>,
     },
     /// This is the first layer of the GKR protocol when proving a fractional sumcheck for a table.
-    /// The numerator is the multiplicity polynomial nd the denominator is the merged table polynomial.
+    /// The numerator is the multiplicity polynomial and the denominator is the merged table polynomial.
     InitialTable {
         numerator: Vec<E>,
         denominator: Vec<E>,
@@ -274,7 +274,8 @@ impl<E: ExtensionField> LogUpCircuit<E> {
         self.layers.last().map(|layer| layer.flat_evals()).unwrap()
     }
 
-    /// Works out the total number of variables the [`LogUpCircuit`] has in its larget (aka input) layer.
+    /// Works out the total number of variables the [`LogUpCircuit`] has in its
+    /// largest (aka input) layer.
     pub fn num_vars(&self) -> usize {
         self.layers[0].num_vars()
     }
@@ -288,8 +289,9 @@ impl<E: ExtensionField> LogUpCircuit<E> {
 #[cfg(test)]
 mod tests {
     use crate::testing::random_field_vector;
-    use ff::Field;
-    use goldilocks::{Goldilocks, GoldilocksExt2};
+    use ff_ext::GoldilocksExt2;
+    use p3_field::{Field, FieldAlgebra};
+    use p3_goldilocks::Goldilocks;
 
     use super::*;
 
@@ -311,13 +313,13 @@ mod tests {
         assert_eq!(out.len(), 4);
 
         let value = column.iter().fold(GoldilocksExt2::ZERO, |acc, val| {
-            let inv = val.invert().unwrap();
+            let inv = val.inverse();
             acc - GoldilocksExt2::from(inv)
         });
 
         let out_num = out[0] * out[3] + out[1] * out[2];
         let out_denom = out[2] * out[3];
-        let calculated = out_num * out_denom.invert().unwrap();
+        let calculated = out_num * out_denom.inverse();
 
         assert_eq!(value, calculated);
     }

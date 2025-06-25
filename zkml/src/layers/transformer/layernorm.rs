@@ -169,7 +169,7 @@ impl QuantizeOp for LayerNorm<f32> {
 
 #[cfg(test)]
 mod tests {
-    use goldilocks::GoldilocksExt2;
+    use ff_ext::GoldilocksExt2;
 
     use super::*;
 

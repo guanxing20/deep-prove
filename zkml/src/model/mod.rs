@@ -1,8 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use anyhow::{Result, anyhow, ensure};
-use ff_ext::ExtensionField;
-use goldilocks::GoldilocksExt2;
+use ff_ext::{ExtensionField, GoldilocksExt2};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use trace::Trace;
 use tracing::{debug, info};
@@ -571,8 +570,7 @@ pub(crate) mod test {
     };
     use anyhow::Result;
     use ark_std::rand::{Rng, RngCore, thread_rng};
-    use ff_ext::ExtensionField;
-    use goldilocks::GoldilocksExt2;
+    use ff_ext::{ExtensionField, GoldilocksExt2};
     use itertools::Itertools;
     use multilinear_extensions::{
         mle::{IntoMLE, MultilinearExtension},
@@ -675,7 +673,7 @@ pub(crate) mod test {
 
             // If maxpool input matrix has dimensions w x h then output has width and height
             // out_w = (w - kernel_size) / stride + 1
-            // out_h = (h - kenrel_size) / stride + 1
+            // out_h = (h - kernel_size) / stride + 1
             // Hence to make sure we have a large enough tensor for the last step
             // we need to have that w_first > 2^{num_layers + 1} + 2^{num_layers}
             // and likewise for h_first.
@@ -938,7 +936,7 @@ pub(crate) mod test {
         assert_eq!(final_output.get_data().len(), nrow);
     }
 
-    use ff::Field;
+    use p3_field::FieldAlgebra;
     #[test]
     fn test_model_sequential() {
         let (model, input) = Model::random(1).unwrap();

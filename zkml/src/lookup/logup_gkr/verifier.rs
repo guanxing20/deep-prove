@@ -2,6 +2,7 @@
 
 use ff_ext::ExtensionField;
 use multilinear_extensions::virtual_poly::VPAuxInfo;
+use p3_field::FieldAlgebra;
 use sumcheck::structs::IOPVerifierState;
 use transcript::Transcript;
 
@@ -20,16 +21,16 @@ pub fn verify_logup_proof<E: ExtensionField, T: Transcript<E>>(
     transcript: &mut T,
 ) -> Result<LogUpVerifierClaim<E>, LogUpError> {
     // Append the number of instances along with their output evals to the transcript and then squeeze our first alpha and lambda
-    transcript.append_field_element(&E::BaseField::from(num_instances as u64));
+    transcript.append_field_element(&E::BaseField::from_canonical_u64(num_instances as u64));
     proof.append_to_transcript(transcript);
 
     let (numerators, denominators): (Vec<E>, Vec<E>) = proof.fractional_outputs();
 
     let batching_challenge = transcript
-        .get_and_append_challenge(b"inital_batching")
+        .get_and_append_challenge(b"initial_batching")
         .elements;
     let mut alpha = transcript
-        .get_and_append_challenge(b"inital_alpha")
+        .get_and_append_challenge(b"initial_alpha")
         .elements;
     let mut lambda = transcript
         .get_and_append_challenge(b"initial_lambda")
@@ -74,7 +75,7 @@ pub fn verify_logup_proof<E: ExtensionField, T: Transcript<E>>(
             .get_and_append_challenge(b"logup_lambda")
             .elements;
 
-        // Now we tak the round evals and check their consistency with the sumcheck claim
+        // Now we take the round evals and check their consistency with the sumcheck claim
         let evals_per_instance = round_evaluations.len() / num_instances;
 
         current_claim = if evals_per_instance == 4 {

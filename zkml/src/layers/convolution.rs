@@ -81,7 +81,7 @@ pub struct ConvCtx<E> {
 pub fn to_bits<E: ExtensionField>(mut num: usize, bitlen: usize) -> Vec<E> {
     let mut bits = vec![E::ZERO; bitlen];
     for i in 0..bitlen {
-        bits[i] = E::from((num & 1) as u64);
+        bits[i] = E::from_canonical_u64((num & 1) as u64);
         num >>= 1;
     }
     bits
@@ -92,6 +92,7 @@ pub struct SchoolBookConv<T>(pub(crate) Convolution<T>);
 
 /// Contains proof material related to one step of the inference for a convolution layer
 #[derive(Default, Clone, Serialize, Deserialize)]
+#[serde(bound(serialize = "E: Serialize", deserialize = "E: DeserializeOwned"))]
 pub struct ConvProof<E: ExtensionField> {
     // Sumcheck proof for the FFT layer
     fft_proof: IOPProof<E>,
@@ -406,7 +407,7 @@ impl Convolution<Element> {
             &mut w_red,
             &mut f_middle,
             r1.clone(),
-            E::from(1),
+            E::ONE,
             padded_rows.ilog2() as usize,
             false,
         );
@@ -873,7 +874,7 @@ impl Convolution<Element> {
 
         // After computing w_reduced, observe that y = \sum_{k \in [n_x^2]} sum_{j \in [k_x]} beta2[k]*x[j][k]*w_reduced[j][k]
         // This is a cubic sumcheck where v1 = [x[0][0],...,x[k_x][n_x^2]], v2 = [w_reduced[0][0],...,w_reduced[k_x][n_x^2]]
-        // and v3 = [beta2,..(k_x times)..,beta2]. So, first initialzie v3 and then invoke the cubic sumceck.
+        // and v3 = [beta2,..(k_x times)..,beta2]. So, first initialize v3 and then invoke the cubic sumceck.
         let mut aggregated_filter =
             vec![vec![E::ZERO; self.filter.real_nw() * self.filter.real_nw()]; self.filter.kx()];
         let filter_size = self.filter.real_nw() * self.filter.real_nw();
@@ -945,7 +946,7 @@ impl Convolution<Element> {
         debug_assert!({
             let mut weights_point = fft_proof_weights.point.clone();
             let mut v_weights = weights_point.pop().unwrap();
-            v_weights = (E::ONE - v_weights).invert().unwrap();
+            v_weights = (E::ONE - v_weights).inverse();
 
             let mut r = [
                 weights_rand.clone(),
@@ -1025,7 +1026,7 @@ impl Convolution<Element> {
         );
         let mut input_point = fft_proof.point.clone();
         let mut v = input_point.pop().unwrap();
-        v = (E::ONE - v).invert().unwrap();
+        v = (E::ONE - v).inverse();
         debug_assert!({
             let mut p = [
                 input_point.clone(),
@@ -1125,7 +1126,8 @@ where
         }
         assert_eq!(
             claim,
-            (E::ONE - E::from(2) * proof.hadamard_proof.point[iter]) * prev_r[0] + E::ONE
+            (E::ONE - E::from_canonical_u64(2) * proof.hadamard_proof.point[iter]) * prev_r[0]
+                + E::ONE
                 - prev_r[0],
             "Error in final FFT delegation step"
         );
@@ -1224,7 +1226,7 @@ where
             prev_r = proof.ifft_delegation_proof[i].point.clone();
             claim = proof.ifft_delegation_claims[i][2];
         }
-        let scale = E::from(1 << (iter + 1)).invert().unwrap();
+        let scale = E::from_canonical_u64(1 << (iter + 1)).inverse();
 
         assert_eq!(
             claim,
@@ -1289,7 +1291,7 @@ where
         // using the partial_evals provided by the prover
         let mut weights_point = proof.fft_proof_weights.point.clone();
         let mut v = weights_point.pop().unwrap();
-        v = (E::ONE - v).invert().unwrap();
+        v = (E::ONE - v).inverse();
 
         let y_weights = (0..self.real_nw)
             .flat_map(|i| (0..self.real_nw).map(move |j| (i, j)))
@@ -1345,7 +1347,7 @@ where
 
         let mut input_point = proof.fft_proof.point.clone();
         v = input_point.pop().unwrap();
-        v = (E::ONE - v).invert().unwrap();
+        v = (E::ONE - v).inverse();
         for point in &mut input_point {
             *point = E::ONE - *point;
         }
@@ -1446,7 +1448,7 @@ pub fn pow_two_omegas<E: ExtensionField>(n: usize, is_fft: bool) -> Vec<E> {
     let mut pows = vec![E::ZERO; n - 1];
     let mut rou: E = get_root_of_unity(n);
     if is_fft {
-        rou = rou.invert().unwrap();
+        rou = rou.inverse();
     }
     pows[0] = rou;
     for i in 1..(n - 1) {
@@ -1470,7 +1472,7 @@ pub fn phi_eval<E: ExtensionField>(
     if first_iter {
         eval = (E::ONE - rand2) * (E::ONE - rand1 + rand1 * eval);
     } else {
-        eval = E::ONE - rand1 + (E::ONE - E::from(2) * rand2) * rand1 * eval;
+        eval = E::ONE - rand1 + (E::ONE - E::from_canonical_u64(2) * rand2) * rand1 * eval;
     }
 
     eval
@@ -1592,7 +1594,7 @@ mod test {
     };
 
     use super::*;
-    use goldilocks::GoldilocksExt2;
+    use ff_ext::GoldilocksExt2;
 
     fn split_garbage(
         fft_output: &Tensor<Element>,
@@ -1649,7 +1651,7 @@ mod test {
         assert_eq!(output_shape, vec![7, 21, 21]);
     }
 
-    /// Test that check if just taking shapes from input and conv not padded we can manipualte input
+    /// Test that check if just taking shapes from input and conv not padded we can manipulate input
     /// and filter to run it in padded world with FFT based convolution.
     #[test]
     fn test_conv_unpadded_to_padded() {
@@ -1718,7 +1720,7 @@ mod test {
         let input_shape: Vec<usize> = vec![1, 23, 23];
         let conv_shape_og: Vec<usize> = vec![7, 1, 3, 3];
 
-        // wieght of the filter
+        // weight of the filter
         let w1 = Tensor::random(&conv_shape_og);
         let bias1: Tensor<Element> = Tensor::zeros(vec![conv_shape_og[0]]);
         // creation of the padded and fft'd convolution
@@ -1845,9 +1847,9 @@ mod test {
         // again another conv
         let filter = Tensor::random(&vec![k_w, k_x, n_w, n_w]);
         let bias = Tensor::random(&vec![k_w]);
-        println!("2ND CONV: filter.get_shape() : {:?}", filter.get_shape());
-        println!("2ND CONV: bias.get_shape() : {:?}", bias.get_shape());
-        println!("2ND CONV: input.get_shape() : {:?}", output.get_shape());
+        println!("2AND CONV: filter.get_shape() : {:?}", filter.get_shape());
+        println!("2AND CONV: bias.get_shape() : {:?}", bias.get_shape());
+        println!("2AND CONV: input.get_shape() : {:?}", output.get_shape());
         let output = output.conv2d(&filter, &bias, 1);
         let dims = filter.get_shape();
         let fft_conv =

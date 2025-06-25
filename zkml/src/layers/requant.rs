@@ -24,6 +24,7 @@ use anyhow::{Result, anyhow, ensure};
 
 use ff_ext::ExtensionField;
 use gkr::util::ceil_log2;
+use p3_field::FieldAlgebra;
 
 use mpcs::{PolynomialCommitmentScheme, sum_check::eq_xy_eval};
 use multilinear_extensions::{
@@ -41,11 +42,11 @@ use super::{
     provable::{Evaluate, LayerOut, NodeId, OpInfo, PadOp, ProvableOp, ProveInfo, VerifiableCtx},
 };
 
-/// Constnat used in fixed point multiplication for normalised [`f32`] values
+/// Constant used in fixed point multiplication for normalised [`f32`] values
 const FIXED_POINT_SCALE: usize = 25;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Copy, PartialOrd)]
-/// This struct contains the infomation used in requantisation (i.e. rescaling and clamping)
+/// This struct contains the information used in requantisation (i.e. rescaling and clamping)
 /// The fields are:
 /// - `multiplier`: This is the actual [`f32`] value calculated as `S1 * S2 / S3` and in traditional quantisation is what we would multiply by and then round to requantise
 /// - `right_shift`: This is `multiplier.log2().trunc().abs()`
@@ -62,7 +63,7 @@ pub struct Requant {
     pub fp_scale: usize,
     /// THe actual multiplier, this is mainly used to compare accuracy, it has no purpose in actual proving
     pub multiplier: f32,
-    /// This field represents how many bits the max absoloute value can be
+    /// This field represents how many bits the max absolute value can be
     pub(crate) intermediate_bit_size: usize,
 }
 
@@ -77,6 +78,7 @@ pub struct RequantCtx {
 #[derive(Clone, Serialize, Deserialize)]
 /// Struct holding all the information needed to verify requantisation was performed correctly.
 /// This includes both lookup proofs and an additional sumcheck proof that we use so that all evaluations are at the same point.
+#[serde(bound(serialize = "E: Serialize", deserialize = "E: DeserializeOwned"))]
 pub struct RequantProof<E: ExtensionField, PCS: PolynomialCommitmentScheme<E>>
 where
     E::BaseField: Serialize + DeserializeOwned,
@@ -209,7 +211,7 @@ where
             "Found more than 1 output in inference step of requant layer"
         );
 
-        // We take the input, mutliply by the fixed point multiplier and add the rounding constant. Then we split the resulting values into
+        // We take the input, multiply by the fixed point multiplier and add the rounding constant. Then we split the resulting values into
         // parts that are either shifted away (these get range checked) or passed to the clamping table.
         let shift = self.shift();
         let rounding_constant = 1i128 << (shift - 1);
@@ -338,7 +340,7 @@ where
             ],
         );
         let lookups = gen.new_lookups.get_mut(&TableType::Range).ok_or(anyhow!(
-            "No table of type Range was expected, error occured during requant step"
+            "No table of type Range was expected, error occurred during requant step"
         ))?;
         lookups.extend(merged_shifted);
         let lookups = gen
@@ -495,8 +497,8 @@ impl Requant {
     }
 
     pub fn write_to_transcript<E: ExtensionField, T: Transcript<E>>(&self, t: &mut T) {
-        t.append_field_element(&E::BaseField::from(self.right_shift as u64));
-        t.append_field_element(&E::BaseField::from(self.fixed_point_multiplier as u64));
+        t.append_field_element(&E::BaseField::from_canonical_u64(self.right_shift as u64));
+        t.append_field_element(&E::BaseField::from_canonical_u64(self.fixed_point_multiplier as u64));
     }
 
     /// Function to recombine claims of constituent MLEs into a single value to be used as the initial sumcheck evaluation
@@ -508,23 +510,23 @@ impl Requant {
     ) -> E {
         // First we recombine the clamping claim with the shifted chunks
         // We want `clamping_claim * shift_field + SUM 2^{i}*shifted_claims[i]`
-        let shift_field = E::from(1u64 << self.shift());
+        let shift_field = E::from_canonical_u64(1u64 << self.shift());
         let (full_val, _) = shifted_claims.iter().fold(
             (shift_field * clamping_claim, E::ONE),
             |(acc, pow_two), &val| {
                 (
                     acc + val * pow_two,
-                    pow_two * E::from(1u64 << *quantization::BIT_LEN),
+                    pow_two * E::from_canonical_u64(1u64 << *quantization::BIT_LEN),
                 )
             },
         );
 
         // Now we subtract the rounding constant and then multiply by the inverse of the fixed point multiplier
         // We do this because `input = fpm^{-1}*(full_val - rounding_constant)`
-        let rounding_const_field = E::from(1u64 << (self.shift() - 1));
+        let rounding_const_field = E::from_canonical_u64(1u64 << (self.shift() - 1));
 
         let fpm_field: E = self.fixed_point_multiplier.to_field();
-        let fpm_inverse = fpm_field.invert().unwrap();
+        let fpm_inverse = fpm_field.inverse();
 
         (full_val - rounding_const_field) * fpm_inverse
     }
@@ -638,7 +640,7 @@ impl Requant {
 
         // Run the sumcheck prover for the claims
         // This sumcheck checks that the polynomial `last_claim` relates to is the clamping output while simultaneously providing us with claimns for clamping input and
-        // the shifted chunks at the same point (we need them all evalauted at the same point so we can recombine the evaluations and produce the next claim).
+        // the shifted chunks at the same point (we need them all evaluated at the same point so we can recombine the evaluations and produce the next claim).
         #[allow(deprecated)]
         let (claim_acc_proof, state) = IOPProverState::<E>::prove_parallel(vp, prover.transcript);
 

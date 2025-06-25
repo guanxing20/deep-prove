@@ -474,7 +474,7 @@ mod tests {
         Context, Prover, ScalingFactor, init_test_logging_default, quantization::InferenceObserver,
         testing::Pcs, verify,
     };
-    use goldilocks::GoldilocksExt2;
+    use ff_ext::GoldilocksExt2;
     use tracing::info;
     use transcript::BasicTranscript;
 

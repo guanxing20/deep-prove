@@ -69,14 +69,14 @@ pub struct Node<N> {
     pub(crate) operation: Layer<N>,
 }
 
-pub trait NodeEgdes {
+pub trait NodeEdges {
     // Get input edges for a node
     fn inputs(&self) -> &[Edge];
     // Get output edges of a node
     fn outputs(&self) -> &[OutputWire];
 }
 
-impl<N> NodeEgdes for Node<N> {
+impl<N> NodeEdges for Node<N> {
     fn inputs(&self) -> &[Edge] {
         &self.inputs
     }
@@ -86,7 +86,7 @@ impl<N> NodeEgdes for Node<N> {
     }
 }
 
-impl<E: ExtensionField + DeserializeOwned> NodeEgdes for NodeCtx<E>
+impl<E: ExtensionField + DeserializeOwned> NodeEdges for NodeCtx<E>
 where
     E::BaseField: Serialize + DeserializeOwned,
 {

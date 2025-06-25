@@ -1,9 +1,9 @@
-//! File containg code for lookup witness generation.
+//! File containing code for lookup witness generation.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use ff::Field;
 use ff_ext::ExtensionField;
+use p3_field::FieldAlgebra;
 use mpcs::PolynomialCommitmentScheme;
 use multilinear_extensions::{
     mle::{DenseMultilinearExtension, IntoMLE, MultilinearExtension},
@@ -124,7 +124,7 @@ impl TableType {
                     point
                         .iter()
                         .enumerate()
-                        .fold(E::ZERO, |acc, (index, p)| acc + *p * E::from(1u64 << index)),
+                        .fold(E::ZERO, |acc, (index, p)| acc + *p * E::from_canonical_u64(1u64 << index)),
                 ])
             }
             TableType::Relu => {
@@ -139,15 +139,15 @@ impl TableType {
                 let first_column = point
                     .iter()
                     .enumerate()
-                    .fold(E::ZERO, |acc, (index, p)| acc + *p * E::from(1u64 << index))
-                    - E::from(1u64 << (*quantization::BIT_LEN - 1));
+                    .fold(E::ZERO, |acc, (index, p)| acc + *p * E::from_canonical_u64(1u64 << index))
+                    - E::from_canonical_u64(1u64 << (*quantization::BIT_LEN - 1));
 
                 let second_column = point
                     .iter()
                     .enumerate()
                     .take(point.len() - 1)
                     .fold(E::ZERO, |acc, (index, p)| {
-                        acc + *p * E::from(1u64 << index) * point[point.len() - 1]
+                        acc + *p * E::from_canonical_u64(1u64 << index) * point[point.len() - 1]
                     });
                 Ok(vec![first_column, second_column])
             }
@@ -163,8 +163,8 @@ impl TableType {
                 let first_column = point
                     .iter()
                     .enumerate()
-                    .fold(E::ZERO, |acc, (index, p)| acc + *p * E::from(1u64 << index))
-                    - E::from(1u64 << (size - 1));
+                    .fold(E::ZERO, |acc, (index, p)| acc + *p * E::from_canonical_u64(1u64 << index))
+                    - E::from_canonical_u64(1u64 << (size - 1));
 
                 let max = 1i128 << (size - 1);
                 let min = -max;
@@ -273,7 +273,7 @@ where
     E: ExtensionField + Serialize + DeserializeOwned,
     E::BaseField: Serialize + DeserializeOwned,
 {
-    // If the lookup context is empty then there are no lookup witnesses to generate so we return defaut values
+    // If the lookup context is empty then there are no lookup witnesses to generate so we return default values
     if ctx.lookup.is_empty() {
         warn!("Lookup witness generation: no tables found, returning empty context TEST?");
         return Ok((
@@ -327,7 +327,7 @@ where
                 .iter()
                 .map(|table_val| {
                     if let Some(lookup_count) = table_lookup_data.get(table_val) {
-                        E::BaseField::from(*lookup_count)
+                        E::BaseField::from_canonical_u64(*lookup_count)
                     } else {
                         E::BaseField::ZERO
                     }
@@ -338,7 +338,7 @@ where
                 DenseMultilinearExtension::<E>::from_evaluations_slice(num_vars, &multiplicities);
             let commit = ctx.commitment_ctx.commit(&mle).map_err(|e| {
                 LogUpError::PolynomialError(format!(
-                    "Error while commiting to {} table multiplicity polynomial: {:?}",
+                    "Error while committing to {} table multiplicity polynomial: {:?}",
                     table_type.name(),
                     e
                 ))

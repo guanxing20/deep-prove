@@ -147,6 +147,7 @@ pub struct MatMulCtx<E> {
 
 /// Proof of the layer.
 #[derive(Default, Clone, Serialize, Deserialize)]
+#[serde(bound(serialize = "E: Serialize", deserialize = "E: DeserializeOwned"))]
 pub struct MatMulProof<E: ExtensionField> {
     /// the actual sumcheck proof proving the matmul protocol
     pub(crate) sumcheck: IOPProof<E>,
@@ -1102,14 +1103,14 @@ impl<E: ExtensionField> MatMulProof<E> {
     /// Returns the individual claims f_1(r) f_2(r)  f_3(r) ... at the end of a sumcheck multiplied
     /// together
     pub fn individual_to_virtual_claim(&self) -> E {
-        self.individual_claims.iter().fold(E::ONE, |acc, e| acc * e)
+        self.individual_claims.iter().fold(E::ONE, |acc, e| acc * *e)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use ark_std::rand::{Rng, thread_rng};
-    use goldilocks::GoldilocksExt2;
+    use ff_ext::GoldilocksExt2;
     use itertools::Itertools;
 
     use crate::{
@@ -1127,7 +1128,7 @@ mod tests {
     fn test_matmul_padding(transpose: bool) {
         // Create a Mat mul layer with non-power-of-two dimensions
         let matrix =
-            Tensor::<Element>::matix_from_coeffs(vec![vec![1, 2, 3], vec![4, 5, 6], vec![7, 8, 9]])
+            Tensor::<Element>::matrix_from_coeffs(vec![vec![1, 2, 3], vec![4, 5, 6], vec![7, 8, 9]])
                 .unwrap();
 
         let layer = if transpose {
@@ -1189,7 +1190,7 @@ mod tests {
     #[test]
     fn test_matmul_pad_already_power_of_two() {
         // Create a Dense layer with power-of-two dimensions
-        let matrix = Tensor::<Element>::matix_from_coeffs(vec![
+        let matrix = Tensor::<Element>::matrix_from_coeffs(vec![
             vec![1, 2, 3, 4],
             vec![5, 6, 7, 8],
             vec![9, 10, 11, 12],
@@ -1231,7 +1232,7 @@ mod tests {
     #[test]
     fn test_matmul_pad_mixed_dimensions() {
         // Create a Dense layer with one power-of-two dimension and one non-power-of-two
-        let matrix = Tensor::<Element>::matix_from_coeffs(vec![
+        let matrix = Tensor::<Element>::matrix_from_coeffs(vec![
             vec![1, 2, 3, 4],
             vec![5, 6, 7, 8],
             vec![9, 10, 11, 12],
@@ -1282,7 +1283,7 @@ mod tests {
     fn test_quantization_with_padded_matmul() {
         // Create a matrix multiplication layer
         let matrix =
-            Tensor::<Element>::matix_from_coeffs(vec![vec![1, 2, 3], vec![4, 5, 6], vec![7, 8, 9]])
+            Tensor::<Element>::matrix_from_coeffs(vec![vec![1, 2, 3], vec![4, 5, 6], vec![7, 8, 9]])
                 .unwrap();
 
         let input_shape = vec![matrix.ncols_2d(), 5];

@@ -277,7 +277,7 @@ impl<N: Number> CacheQKV<N> {
 
 #[cfg(test)]
 mod tests {
-    use goldilocks::GoldilocksExt2;
+    use ff_ext::GoldilocksExt2;
 
     use super::*;
 

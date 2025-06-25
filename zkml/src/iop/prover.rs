@@ -134,7 +134,7 @@ where
 
     // Protocol for proving the correct computation of the FFT/iFFT matrix.
     // For more details look at the zkCNN paper.
-    // F_middle : all intermidiate evaluations retrieved by the phiGinit algorithm
+    // F_middle : all intermediate evaluations retrieved by the phiGinit algorithm
     // r1: the initial random point used to reduce the matrix into vector
     // r2: the random point produced by the sumcheck
     pub fn delegate_matrix_evaluation(
@@ -162,7 +162,7 @@ where
                                 * omegas[i << ((f_middle.len() - 1) - l)]);
                 } else {
                     phi[i] = E::ONE - r1[(f_middle.len() - 1) - l]
-                        + (E::ONE - E::from(2) * r2[r2.len() - 1])
+                        + (E::ONE - E::from_canonical_u64(2) * r2[r2.len() - 1])
                             * r1[(f_middle.len() - 1) - l]
                             * omegas[i << ((f_middle.len() - 1) - l)];
                 }
@@ -194,7 +194,7 @@ where
 
         let mut phi = rou;
         if is_fft {
-            phi = phi.invert().unwrap();
+            phi = phi.inverse();
         }
         phi_mul[0] = E::ONE;
         for i in 1..length {
@@ -292,7 +292,7 @@ where
             &mut w_red,
             &mut f_middle,
             r1.clone(),
-            E::from(1),
+            E::ONE,
             x[0].len().ilog2() as usize,
             false,
         );
@@ -333,7 +333,7 @@ where
         Vec<E>,
         (Vec<sumcheck::structs::IOPProof<E>>, Vec<Vec<E>>),
     ) {
-        let scale: E = E::from(prod[0].len() as u64).invert().unwrap();
+        let scale: E = E::from_canonical_u64(prod[0].len() as u64).inverse();
 
         // Partition r in (r1,r2)
         let mut r1 = vec![E::ZERO; prod[0].len().ilog2() as usize];
