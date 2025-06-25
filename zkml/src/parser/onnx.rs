@@ -192,7 +192,10 @@ impl<'a, I: Iterator<Item = &'a usize> + Sized> ParserFactory<'a, I> {
                 }),
             )
         } else {
-            Some(err(format!("Unknown node type: {op_name}: {:?}", curr_node)))
+            Some(err(format!(
+                "Unknown node type: {op_name}: {:?}",
+                curr_node
+            )))
         }
     }
 }

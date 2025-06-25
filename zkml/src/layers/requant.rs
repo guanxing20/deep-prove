@@ -498,7 +498,9 @@ impl Requant {
 
     pub fn write_to_transcript<E: ExtensionField, T: Transcript<E>>(&self, t: &mut T) {
         t.append_field_element(&E::BaseField::from_canonical_u64(self.right_shift as u64));
-        t.append_field_element(&E::BaseField::from_canonical_u64(self.fixed_point_multiplier as u64));
+        t.append_field_element(&E::BaseField::from_canonical_u64(
+            self.fixed_point_multiplier as u64,
+        ));
     }
 
     /// Function to recombine claims of constituent MLEs into a single value to be used as the initial sumcheck evaluation

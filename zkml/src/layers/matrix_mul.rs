@@ -1103,7 +1103,9 @@ impl<E: ExtensionField> MatMulProof<E> {
     /// Returns the individual claims f_1(r) f_2(r)  f_3(r) ... at the end of a sumcheck multiplied
     /// together
     pub fn individual_to_virtual_claim(&self) -> E {
-        self.individual_claims.iter().fold(E::ONE, |acc, e| acc * *e)
+        self.individual_claims
+            .iter()
+            .fold(E::ONE, |acc, e| acc * *e)
     }
 }
 
@@ -1127,9 +1129,12 @@ mod tests {
 
     fn test_matmul_padding(transpose: bool) {
         // Create a Mat mul layer with non-power-of-two dimensions
-        let matrix =
-            Tensor::<Element>::matrix_from_coeffs(vec![vec![1, 2, 3], vec![4, 5, 6], vec![7, 8, 9]])
-                .unwrap();
+        let matrix = Tensor::<Element>::matrix_from_coeffs(vec![
+            vec![1, 2, 3],
+            vec![4, 5, 6],
+            vec![7, 8, 9],
+        ])
+        .unwrap();
 
         let layer = if transpose {
             MatMul::new_with_config(
@@ -1282,9 +1287,12 @@ mod tests {
     #[test]
     fn test_quantization_with_padded_matmul() {
         // Create a matrix multiplication layer
-        let matrix =
-            Tensor::<Element>::matrix_from_coeffs(vec![vec![1, 2, 3], vec![4, 5, 6], vec![7, 8, 9]])
-                .unwrap();
+        let matrix = Tensor::<Element>::matrix_from_coeffs(vec![
+            vec![1, 2, 3],
+            vec![4, 5, 6],
+            vec![7, 8, 9],
+        ])
+        .unwrap();
 
         let input_shape = vec![matrix.ncols_2d(), 5];
 

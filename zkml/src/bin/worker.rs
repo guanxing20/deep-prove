@@ -3,8 +3,8 @@ use std::str::FromStr;
 use alloy::signers::local::LocalSigner;
 use anyhow::{Context as _, Result};
 use clap::Parser;
-use futures::StreamExt;
 use ff_ext::GoldilocksExt2;
+use futures::StreamExt;
 use mpcs::{Basefold, BasefoldRSParams};
 use tonic::{metadata::MetadataValue, transport::ClientTlsConfig};
 

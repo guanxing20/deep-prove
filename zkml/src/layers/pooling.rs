@@ -806,13 +806,13 @@ mod tests {
     use ark_std::rand::{Rng, thread_rng};
     use ff_ext::{FromUniformBytes, GoldilocksExt2};
     use gkr::util::ceil_log2;
-    use p3_field::FieldAlgebra;
-    use p3_goldilocks::Goldilocks;
     use itertools::Itertools;
     use multilinear_extensions::{
         mle::{DenseMultilinearExtension, MultilinearExtension},
         virtual_poly::{ArcMultilinearExtension, VirtualPolynomial},
     };
+    use p3_field::FieldAlgebra;
+    use p3_goldilocks::Goldilocks;
     use sumcheck::structs::{IOPProverState, IOPVerifierState};
 
     type F = GoldilocksExt2;
