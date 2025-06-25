@@ -490,3 +490,4 @@ fn calculate_average_accuracy(accuracies: &[usize]) -> f32 {
     let sum: usize = accuracies.iter().sum();
     sum as f32 / accuracies.len() as f32
 }
+

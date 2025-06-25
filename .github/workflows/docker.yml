@@ -40,7 +40,6 @@ jobs:
               - 'zkml/**'
               - 'docker/deep-prove-worker.dockerfile'
               - '.github/workflows/docker.yml'
-              - '**'
   build:
     name: Build Docker Image
     needs: changes
