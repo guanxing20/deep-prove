@@ -32,6 +32,10 @@ struct Args {
     #[arg(long, default_value = "100")]
     max_message_size: usize,
 
+    /// Timeout for the task in seconds
+    #[arg(long, default_value = "3600")]
+    timeout: u64,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -127,7 +131,7 @@ async fn main() -> anyhow::Result<()> {
                         .as_secs()
                 ),
                 timeout: Some(
-                    prost_wkt_types::Duration::try_from(std::time::Duration::from_secs(60 * 15))
+                    prost_wkt_types::Duration::try_from(std::time::Duration::from_secs(args.timeout))
                         .unwrap(),
                 ),
                 price_requested: 12_u64.to_le_bytes().to_vec(), // TODO:
