@@ -10,6 +10,8 @@
 //! Transpose: There is the option to transpose the output of the matmul. This is useful for proving to avoid
 //! having to prove explicitly the transpose operation with a separate layer, as sumcheck based proving can directly
 //! prove the transpose at the same time as the matmul.
+use std::borrow::Borrow;
+
 use anyhow::ensure;
 use ff_ext::ExtensionField;
 use serde::{Deserialize, Serialize};
@@ -59,24 +61,24 @@ impl ConcatMatMul {
         }
     }
 
-    pub fn ensure_shape_consistency(shapes: &[Shape]) -> anyhow::Result<()> {
+    pub fn ensure_shape_consistency<S: Borrow<Shape>>(shapes: &[S]) -> anyhow::Result<()> {
         assert!(shapes.len() == 2, "ConcatMatMul expects 2 inputs");
         ensure!(
-            shapes[0].rank() == shapes[1].rank(),
+            shapes[0].borrow().rank() == shapes[1].borrow().rank(),
             "ConcatMatMul expects input shapes with same rank: {:?} vs {:?}",
-            shapes[0],
-            shapes[1]
+            shapes[0].borrow(),
+            shapes[1].borrow()
         );
         ensure!(
-            shapes[0].rank() == 3,
+            shapes[0].borrow().rank() == 3,
             "ConcatMatMul expects inputs of rank 3"
         );
         ensure!(
-            shapes[0].dim(0) == shapes[1].dim(0),
+            shapes[0].borrow().dim(0) == shapes[1].borrow().dim(0),
             "ConcatMatMul expects inputs with same highest dimension"
         );
         ensure!(
-            shapes[0].dim(2) == shapes[1].dim(1),
+            shapes[0].borrow().dim(2) == shapes[1].borrow().dim(1),
             "ConcatMatMul expects submatrices dimensions to match"
         );
         Ok(())
@@ -87,28 +89,27 @@ impl<N: Number> Evaluate<N> for ConcatMatMul {
     fn evaluate<E: ExtensionField>(
         &self,
         inputs: &[&Tensor<N>],
-        _unpadded_input_shapes: Vec<Vec<usize>>,
+        _unpadded_input_shapes: Vec<Shape>,
     ) -> anyhow::Result<LayerOut<N, E>> {
         ensure!(inputs.len() == 2, "ConcatMatMul expects 2 inputs");
         let a = inputs[0];
         let b = inputs[1];
         let a_shape = a.get_shape();
         let b_shape = b.get_shape();
-        Self::ensure_shape_consistency(&[Shape::from_it(&a_shape), Shape::from_it(&b_shape)])?;
+        Self::ensure_shape_consistency(&[&a_shape, &b_shape])?;
         let results = (0..a_shape[0])
             .map(|batch| {
-                let batch_a = a
-                    .slice_3d(batch, batch + 1)
-                    .reshape(vec![a_shape[1], a_shape[2]]);
-                let batch_b = b
-                    .slice_3d(batch, batch + 1)
-                    .reshape(vec![b_shape[1], b_shape[2]]);
+                let batch_a = a.slice_3d(batch, batch + 1).reshape(a_shape.slice(1..=2));
+                let batch_b = b.slice_3d(batch, batch + 1).reshape(b_shape.slice(1..=2));
                 batch_a.matmul(&batch_b)
             })
             .collect::<Vec<_>>();
         let mut it = results.into_iter();
         // reshape because concat expects a 3d tensor so he can accumulate in the highest dimension.
-        let concat = it.next().unwrap().reshape(vec![1, a_shape[1], b_shape[2]]);
+        let concat = it
+            .next()
+            .unwrap()
+            .reshape(Shape::new(vec![1, a_shape[1], b_shape[2]]));
         let mut concat = it.fold(concat, |mut acc, x| {
             acc.concat(x);
             acc
@@ -123,13 +124,12 @@ impl<N: Number> Evaluate<N> for ConcatMatMul {
 impl OpInfo for ConcatMatMul {
     fn output_shapes(
         &self,
-        input_shapes: &[Vec<usize>],
+        input_shapes: &[Shape],
         padding_mode: crate::padding::PaddingMode,
-    ) -> Vec<Vec<usize>> {
+    ) -> Vec<Shape> {
         let a_shape = &input_shapes[0];
         let b_shape = &input_shapes[1];
-        Self::ensure_shape_consistency(&[Shape::from_it(a_shape), Shape::from_it(b_shape)])
-            .unwrap();
+        Self::ensure_shape_consistency(&[a_shape, b_shape]).unwrap();
         // inner matrix shapes
         let mut mat_result_shape: Shape = vec![a_shape[0], a_shape[1], b_shape[2]].into();
         if let PaddingMode::Padding = padding_mode {
@@ -142,7 +142,7 @@ impl OpInfo for ConcatMatMul {
             );
             mat_result_shape = mat_result_shape.permute(permute);
         }
-        vec![mat_result_shape.into_vec()]
+        vec![mat_result_shape]
     }
 
     fn num_outputs(&self, _num_inputs: usize) -> usize {
@@ -195,8 +195,14 @@ mod test {
     #[test]
     fn test_concat_matmul() {
         let concat_matmul = ConcatMatMul::new();
-        let a = Tensor::new(vec![2, 2, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]);
-        let b = Tensor::new(vec![2, 2, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]);
+        let a = Tensor::new(
+            vec![2, 2, 2].into(),
+            vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+        );
+        let b = Tensor::new(
+            vec![2, 2, 2].into(),
+            vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+        );
         let result = concat_matmul
             .evaluate::<GoldilocksExt2>(&[&a, &b], vec![])
             .unwrap();
@@ -209,13 +215,19 @@ mod test {
     #[test]
     fn test_concat_matmul_with_transpose() {
         let concat_matmul = ConcatMatMul::new_with_permute(vec![1, 0, 2]);
-        let a = Tensor::new(vec![2, 2, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]);
-        let b = Tensor::new(vec![2, 2, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]);
+        let a = Tensor::new(
+            vec![2, 2, 2].into(),
+            vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+        );
+        let b = Tensor::new(
+            vec![2, 2, 2].into(),
+            vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+        );
         let result = concat_matmul
             .evaluate::<GoldilocksExt2>(&[&a, &b], vec![])
             .unwrap();
         let expected = Tensor::new(
-            vec![2, 2, 2],
+            vec![2, 2, 2].into(),
             vec![7.0, 10.0, 15.0, 22.0, 67.0, 78.0, 91.0, 106.0],
         );
         let expected = expected.permute3d(&vec![1, 0, 2]);
