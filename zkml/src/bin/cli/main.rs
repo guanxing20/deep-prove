@@ -131,8 +131,10 @@ async fn main() -> anyhow::Result<()> {
                         .as_secs()
                 ),
                 timeout: Some(
-                    prost_wkt_types::Duration::try_from(std::time::Duration::from_secs(args.timeout))
-                        .unwrap(),
+                    prost_wkt_types::Duration::try_from(std::time::Duration::from_secs(
+                        args.timeout,
+                    ))
+                    .unwrap(),
                 ),
                 price_requested: 12_u64.to_le_bytes().to_vec(), // TODO:
                 stake_requested: vec![0u8; 32],                 // TODO:
