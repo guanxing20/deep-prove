@@ -45,6 +45,7 @@ poseidon = { version = "0.1.0", path = "../poseidon" }
 rayon.workspace = true
 reqwest = { version = "0.12.19", features = ["blocking"] }
 rmp-serde = { workspace = true }
+rust_tokenizers = "8.1.1"
 serde.workspace = true
 serde_json.workspace = true
 sha2 = "0.10.9"
@@ -86,3 +87,4 @@ ndarray = "0.16.1"
 miette = { version = "7.2", features = ["fancy"] }
 protox = { version = "0.7.1" }
 tonic-build = { version = "0.12.3" }
+tiktoken-rs = "0.7.0"

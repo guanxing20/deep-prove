@@ -1,6 +1,7 @@
 use super::json;
 use candle_core::quantized::{QTensor, gguf_file::Value};
 use std::{
+    collections::HashMap,
     fs::File,
     io::{BufReader, Read, Seek},
     ops::Deref,
@@ -17,7 +18,10 @@ use crate::{
         matrix_mul::MatMul,
         transformer::{embeddings::Embeddings, layernorm::LayerNorm, positional::Positional},
     },
-    parser::llm::{Attention, FeedForward, GPT2Model, LLMConfig, LLMModel, LLMVariant},
+    parser::llm::{
+        Attention, FeedForward, GPT2Model, INTERNAL_BOS, INTERNAL_EOS, LLMConfig, LLMModel,
+        LLMVariant, TokenizerData,
+    },
     tensor::Shape,
 };
 
@@ -174,15 +178,18 @@ impl Attention<f32> {
         let q = crate::Tensor::new(
             vec![embedding_size, hidden_size].into(),
             unfused_weights.remove(0),
-        );
+        )
+        .transpose();
         let k = crate::Tensor::new(
             vec![embedding_size, hidden_size].into(),
             unfused_weights.remove(0),
-        );
+        )
+        .transpose();
         let v = crate::Tensor::new(
             vec![embedding_size, hidden_size].into(),
             unfused_weights.remove(0),
-        );
+        )
+        .transpose();
 
         let qkv_bias_qtensor = loader.get_qtensor("attn_qkv.bias")?;
         let qkv_bias_candle = qkv_bias_qtensor.dequantize(&Device::Cpu)?;
@@ -196,7 +203,10 @@ impl Attention<f32> {
         // Use new LayerNorm::from_loader
         let norm = LayerNorm::from_loader(&attn_norm_loader, &c)?;
 
-        let out = loader.get_tensor("attn_output.weight")?;
+        // attn_output.weight is stored as [out_features, in_features] in GGUF (same as PyTorch)
+        // Our MatMul layer expects the right-hand constant to be in the orientation [in_features, out_features],
+        // so we transpose it once here after loading.
+        let out = loader.get_tensor("attn_output.weight")?.transpose();
         let out_bias = loader.get_tensor("attn_output.bias")?;
         ensure!(
             out.get_shape().as_ref() == &[embedding_size, embedding_size],
@@ -253,6 +263,37 @@ impl Embeddings<f32> {
     pub fn from_loader(loader: &FileTensorLoader) -> anyhow::Result<Self> {
         let emb_tensor = loader.get_tensor("token_embd.weight")?;
         Ok(Embeddings::new(emb_tensor))
+    }
+}
+
+impl TokenizerData {
+    #[allow(dead_code)]
+    pub fn from_loader(loader: &FileTensorLoader) -> anyhow::Result<Self> {
+        let tokens = loader
+            .metadata::<Vec<Value>>("tokenizer.ggml.tokens")
+            .into_iter()
+            .map(|v| {
+                v.to_string()
+                    .and_then(|s| Ok(s.clone()))
+                    .with_context(|| format!("failed to convert Value to String"))
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+
+        let merges = loader
+            .metadata::<Vec<Value>>("tokenizer.ggml.merges")
+            .into_iter()
+            .map(|v| {
+                v.to_string()
+                    .and_then(|s| Ok(s.clone()))
+                    .with_context(|| format!("failed to convert Value merges to String"))
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        let mut special_tokens = HashMap::new();
+        let bos = loader.metadata::<u32>("tokenizer.ggml.bos_token_id");
+        let eos = loader.metadata::<u32>("tokenizer.ggml.eos_token_id");
+        special_tokens.insert(INTERNAL_EOS.to_string(), eos);
+        special_tokens.insert(INTERNAL_BOS.to_string(), bos);
+        Ok(Self::new(tokens, merges, special_tokens))
     }
 }
 
@@ -336,6 +377,28 @@ impl FromValue<f64> for Value {
 impl FromValue<usize> for Value {
     fn from_value(v: &Value) -> usize {
         v.to_u32().expect("failed to convert u32 to u32") as usize
+    }
+}
+
+impl FromValue<Vec<Value>> for Value {
+    fn from_value(v: &Value) -> Vec<Value> {
+        v.to_vec()
+            .expect("failed to convert Value to Vec<Value>")
+            .to_vec()
+    }
+}
+
+impl FromValue<String> for Value {
+    fn from_value(v: &Value) -> String {
+        v.to_string()
+            .expect("failed to convert Value to String")
+            .clone()
+    }
+}
+
+impl FromValue<u32> for Value {
+    fn from_value(v: &Value) -> u32 {
+        v.to_u32().expect("failed to convert Value to u32")
     }
 }
 
@@ -481,7 +544,7 @@ pub mod tests {
         layers::transformer::embeddings::Embeddings,
         parser::{
             file_cache,
-            llm::{Attention, LLMConfig},
+            llm::{Attention, LLMConfig, TokenizerData},
         },
     };
 
@@ -546,15 +609,22 @@ pub mod tests {
         let mut r = File::open(model_path)?;
         let gguf_candle = Content::read(&mut r)?;
         println!("GGUF metadata: {:?}", gguf_candle.metadata.keys());
-        println!("GGUF tensors: {:?}", gguf_candle.tensor_infos);
+        // println!("token length: {:?}", gguf_candle.metadata.get("tokenizer.ggml.tokens"));
+        // println!("token merges: {:?}", gguf_candle.metadata.get("tokenizer.ggml.merges"));
+        println!(
+            "token special: {:?}",
+            gguf_candle.metadata.get("tokenizer.ggml.special_tokens")
+        );
+        // println!("GGUF tensors: {:?}", gguf_candle.tensor_infos);
+        // println!("GGUF tensors: {:?}", model.tensors().iter().map(|t| t.name.clone()).collect::<Vec<_>>());
         for tensor in model.tensors() {
-            println!("Tensor name: {}", tensor.name);
-            println!("Tensor kind: {}", tensor.kind);
-            let num_elements = tensor.shape.iter().product::<u64>();
-            println!(
-                "Tensor shape: {:?} -> total {:?}",
-                tensor.shape, num_elements
-            );
+            // println!("Tensor name: {}", tensor.name);
+            // println!("Tensor kind: {}", tensor.kind);
+            let _num_elements = tensor.shape.iter().product::<u64>();
+            // println!(
+            //    "Tensor shape: {:?} -> total {:?}",
+            //    tensor.shape, num_elements
+            //);
             let qtensor = gguf_candle.tensor(&mut r, &tensor.name, &Device::Cpu)?;
             let tensor = qtensor.dequantize(&Device::Cpu)?;
             let (s, _l) = tensor.storage_and_layout();
@@ -636,6 +706,19 @@ pub mod tests {
             "Expected error for non-existent tensor"
         );
 
+        Ok(())
+    }
+    use crate::model::llm::LLMTokenizer;
+
+    #[test]
+    fn test_gguf_load_tokenizer() -> anyhow::Result<()> {
+        let model_path = file_cache::ensure_downloaded(GPT2_Q8_0_URL)?;
+        let loader = FileTensorLoader::from_path(model_path)?;
+        let tokenizer = TokenizerData::from_loader(&loader)?.into_tokenizer();
+        let s = "do or don't. there is no try.";
+        let tokens = tokenizer.tokenize(s);
+        let s2 = tokenizer.detokenize(&tokens);
+        assert_eq!(s, s2);
         Ok(())
     }
 }
