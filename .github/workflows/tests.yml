@@ -1,4 +1,6 @@
 name: "Test Suite"
+permissions:
+  contents: read
 
 on:
   push:
@@ -33,8 +35,12 @@ jobs:
           echo "DEEPPROVE_ASSET_DIR=${{ github.workspace }}/zkml/assets/scripts/llms/" >> $GITHUB_ENV
 
       - uses: actions-rust-lang/setup-rust-toolchain@v1
+<<<<<<< HEAD
         with:
           toolchain: nightly
+=======
+      - run: cargo test 
+>>>>>>> master
 
       - name: Run cargo test
         run: cargo test
@@ -52,7 +58,23 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           components: rustfmt
+<<<<<<< HEAD
           toolchain: nightly
 
       - name: Check formatting
         run: cargo fmt --all -- --check
+=======
+      - run: cargo fmt --all
+
+  lint:
+    name: cargo lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Ensure rustfmt is installed and setup problem matcher
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: clippy 
+      - run: cargo clippy --all -- -D warnings
+        
+>>>>>>> master

@@ -172,7 +172,7 @@ impl InputJSON {
         );
         Ok(())
     }
-    fn to_elements(self, md: &ModelMetadata) -> (Vec<Vec<Element>>, Vec<Vec<Element>>) {
+    fn into_elements(self, md: &ModelMetadata) -> (Vec<Vec<Element>>, Vec<Vec<Element>>) {
         let input_sf = md.input.first().unwrap();
         let inputs = self
             .input_data
@@ -311,7 +311,7 @@ fn run(args: Args) -> anyhow::Result<()> {
     };
 
     info!("[+] Quantizing inputs with strategy: {}", args.quantization);
-    let (inputs, given_outputs) = run_inputs.to_elements(&md);
+    let (inputs, given_outputs) = run_inputs.into_elements(&md);
 
     let measure = MeasureStage::new(
         "[+] Generating context for proving".into(),

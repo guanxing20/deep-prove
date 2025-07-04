@@ -1,3 +1,5 @@
+#![allow(clippy::needless_range_loop)]
+
 use crate::{
     NextPowerOfTwo, ScalingFactor,
     quantization::{self, MAX_FLOAT, MIN_FLOAT},
@@ -349,7 +351,7 @@ where
             .iter()
             .flat_map(|e| {
                 index_u(e.as_slice(), n_x)
-                    .map(|e| e.into_element())
+                    .map(|e| e.to_element())
                     .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();

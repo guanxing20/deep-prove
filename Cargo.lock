@@ -6607,7 +6607,6 @@ dependencies = [
  "plonky2",
  "rand 0.8.5",
  "serde",
- "unroll",
 ]
 
 [[package]]

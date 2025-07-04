@@ -448,8 +448,7 @@ fn load_gemm<'a, I: Iterator<Item = &'a usize> + Sized>(
     if input_shape.len() != 1 {
         assert!(
             input_shape[0] == 1,
-            "First dimension of Gemm layer input should be 1. Input shape was: {:?}",
-            input_shape
+            "First dimension of Gemm layer input should be 1. Input shape was: {input_shape:?}"
         );
         input_shape.remove(0);
     }

@@ -133,7 +133,7 @@ where
 {
     Dense(DenseProof<E>),
     MatMul(MatMulProof<E>),
-    Convolution(ConvProof<E>),
+    Convolution(Box<ConvProof<E>>),
     Activation(ActivationProof<E, PCS>),
     Requant(RequantProof<E, PCS>),
     Pooling(PoolingProof<E, PCS>),
